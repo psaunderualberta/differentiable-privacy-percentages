@@ -24,10 +24,10 @@ class StepTaker(eqx.Module):
         self,
         input_key: chex.PRNGKey,
         state: DP_RL_State,
-        action: Union[float, chex.Array],
+        action: chex.Array,
         params: DP_RL_Params,
         private: Optional[bool] = True,
-    ) -> Tuple[DP_RL_State, jnp.ndarray, jnp.ndarray, Dict[Any, Any]]:
+    ) -> Tuple[DP_RL_State, jnp.ndarray, Dict[Any, Any]]:
         raise NotImplementedError()
 
     def reset_env(self, key: chex.PRNGKey, params: DP_RL_Params) -> DP_RL_State:
@@ -37,7 +37,7 @@ class StepTaker(eqx.Module):
         self,
         state: DP_RL_State,
         params: DP_RL_Params,
-        action: Union[float, chex.Array] = jnp.inf,
+        action: chex.Array
     ) -> jnp.ndarray:
         raise NotImplementedError()
 
@@ -47,10 +47,10 @@ class PrivateStepTaker(StepTaker):
         self,
         input_key: chex.PRNGKey,
         state: DP_RL_State,
-        action: Union[float, chex.Array],
+        action: chex.Array,
         params: DP_RL_Params,
         private: bool = True,
-    ) -> Tuple[DP_RL_State, jnp.ndarray, jnp.ndarray, Dict[Any, Any]]:
+    ) -> Tuple[DP_RL_State, jnp.ndarray, Dict[Any, Any]]:
         """Perform single timestep state transition."""
         # Use 0 variance if non-private
         # Add action to privacy budget, if private, else keep the same
@@ -67,7 +67,7 @@ class PrivateStepTaker(StepTaker):
         # Add spherical noise to gradients
         input_key, _used_key = jr.split(input_key)
         noised_grads = add_spherical_noise(
-            state.grads, action, _used_key, params.C, params.batch_size.shape[0]
+            state.grads, action, _used_key, params.C, params.dummy_batch.shape[0]
         )
 
         # Add noisy gradients, update model and optimizer
@@ -79,7 +79,7 @@ class PrivateStepTaker(StepTaker):
         # Subsample each with probability p
         input_key, _used_key = jr.split(input_key)
         new_loss, grads, average_grads = dp_cce_loss_poisson(
-            new_model, params.X, params.y, _used_key, params.batch_size, params.C
+            new_model, params.X, params.y, _used_key, params.dummy_batch, params.C
         )
         input_key, _used_key = jr.split(input_key)
         accuracy = subset_classification_accuracy(
@@ -94,7 +94,6 @@ class PrivateStepTaker(StepTaker):
             loss=new_loss,
             initial_accuracy=state.initial_accuracy,
             accuracy=accuracy,
-            reward=None,
             privacy_accountant_state=new_pas,
             time=state.time + 1,
             action=action.squeeze(),
@@ -102,16 +101,11 @@ class PrivateStepTaker(StepTaker):
         )
 
         # Determine if complete
-        done = self.is_terminal(new_state, params)
-
-        # Get reward
-        reward = params.reward_fn(state, action, new_state, done, params)
-        new_state = new_state.replace(reward=reward)
+        done = self.is_terminal(new_state, params, action)
 
         # Return observation, state, reward, done, and additional information
         return (
             lax.stop_gradient(new_state),
-            reward,
             done,
             {},
         )
@@ -120,7 +114,6 @@ class PrivateStepTaker(StepTaker):
         self,
         key: chex.PRNGKey,
         params: DP_RL_Params,
-        state_class: type[DP_RL_State],
     ) -> DP_RL_State:
         """Reset environment state by sampling initial position."""
 
@@ -133,7 +126,7 @@ class PrivateStepTaker(StepTaker):
         # Create grads
         key, _key = jr.split(key)
         loss, grads, average_grads = dp_cce_loss_poisson(
-            network, params.X, params.y, _key, params.batch_size, params.C
+            network, params.X, params.y, _key, params.dummy_batch, params.C
         )
         reward = jnp.zeros_like(loss)
 
@@ -143,14 +136,13 @@ class PrivateStepTaker(StepTaker):
         )
 
         # Create state
-        state = state_class(
+        state = DP_RL_State(
             grads=grads,
             average_grads=average_grads,
             model=network,
             loss=loss,
             initial_accuracy=accuracy,
             accuracy=accuracy,
-            reward=reward,
             privacy_accountant_state=params.privacy_accountant.reset_state(),
             time=0,
             action=params.action.squeeze(),
@@ -163,7 +155,7 @@ class PrivateStepTaker(StepTaker):
         self,
         state: DP_RL_State,
         params: DP_RL_Params,
-        action: Union[float, chex.Array] = jnp.inf,
+        action: chex.Array
     ) -> jnp.ndarray:
         """Check whether state is terminal."""
         return jnp.logical_or(
@@ -178,11 +170,10 @@ class NonPrivateStepTaker(StepTaker):
         self,
         input_key: chex.PRNGKey,
         state: DP_RL_State,
-        action: Union[float, chex.Array],
+        action: chex.Array,
         params: DP_RL_Params,
-        private: Optional[bool] = True,
-        state_class: type[DP_RL_State] = None,
-    ) -> Tuple[DP_RL_State, jnp.ndarray, jnp.ndarray, Dict[Any, Any]]:
+        private: bool = True,
+    ) -> Tuple[DP_RL_State, jnp.ndarray, Dict[Any, Any]]:
         """Perform single timestep state transition."""
         # Update privacy accountant w/ action
         new_pas = state.privacy_accountant_state
@@ -190,7 +181,7 @@ class NonPrivateStepTaker(StepTaker):
         # Add spherical noise to gradients
         input_key, _used_key = jr.split(input_key)
         noised_grads = add_spherical_noise(
-            state.grads, action, _used_key, params.C, params.batch_size.shape[0]
+            state.grads, action, _used_key, params.C, params.dummy_batch.shape[0]
         )
 
         # Add noisy gradients, update model and optimizer
@@ -202,7 +193,7 @@ class NonPrivateStepTaker(StepTaker):
         # Subsample each with probability p
         input_key, _used_key = jr.split(input_key)
         new_loss, grads, average_grads = dp_cce_loss_poisson(
-            new_model, params.X, params.y, _used_key, params.batch_size, params.C
+            new_model, params.X, params.y, _used_key, params.dummy_batch, params.C
         )
         input_key, _used_key = jr.split(input_key)
         accuracy = subset_classification_accuracy(
@@ -210,14 +201,13 @@ class NonPrivateStepTaker(StepTaker):
         )
 
         # Create new state
-        new_state = state_class(
+        new_state = DP_RL_State(
             grads=grads,
             average_grads=average_grads,
             model=new_model,
             loss=new_loss,
             initial_accuracy=state.initial_accuracy,
             accuracy=accuracy,
-            reward=None,
             privacy_accountant_state=new_pas,
             time=state.time + 1,
             action=action.squeeze(),
@@ -225,16 +215,11 @@ class NonPrivateStepTaker(StepTaker):
         )
 
         # Determine if complete
-        done = self.is_terminal(new_state, params)
-
-        # Get reward
-        reward = params.reward_fn(state, action, new_state, done, params)
-        new_state = new_state.replace(reward=reward)
+        done = self.is_terminal(new_state, params, action)
 
         # Return observation, state, reward, done, and additional information
         return (
             lax.stop_gradient(new_state),
-            reward,
             done,
             {},
         )
@@ -243,7 +228,6 @@ class NonPrivateStepTaker(StepTaker):
         self,
         key: chex.PRNGKey,
         params: DP_RL_Params,
-        state_class: type[DP_RL_State],
     ) -> DP_RL_State:
         """Reset environment state by sampling initial position."""
 
@@ -256,9 +240,8 @@ class NonPrivateStepTaker(StepTaker):
         # Create grads
         key, _key = jr.split(key)
         loss, grads, average_grads = dp_cce_loss_poisson(
-            network, params.X, params.y, _key, params.batch_size, params.C
+            network, params.X, params.y, _key, params.dummy_batch, params.C
         )
-        reward = jnp.zeros_like(loss)
 
         key, _key = jr.split(key)
         accuracy = subset_classification_accuracy(
@@ -266,14 +249,13 @@ class NonPrivateStepTaker(StepTaker):
         )
 
         # Create state
-        state = state_class(
+        state = DP_RL_State(
             grads=grads,
             average_grads=average_grads,
             model=network,
             loss=loss,
             initial_accuracy=accuracy,
             accuracy=accuracy,
-            reward=reward,
             privacy_accountant_state=params.privacy_accountant.reset_state(),
             time=0,
             action=params.action.squeeze(),
@@ -286,7 +268,7 @@ class NonPrivateStepTaker(StepTaker):
         self,
         state: DP_RL_State,
         params: DP_RL_Params,
-        action: Union[float, chex.Array] = jnp.inf,
+        action: chex.Array
     ) -> jnp.ndarray:
         """Check whether state is terminal."""
         return state.time >= params.max_steps_in_episode
@@ -297,23 +279,22 @@ class AveragedRewardStepTaker(PrivateStepTaker):
         self,
         key: chex.PRNGKey,
         orig_state: DP_RL_State,
-        action: Union[float, chex.Array],
+        action: chex.Array,
         params: DP_RL_Params,
-        private: Optional[bool] = True,
-        state_class: type[DP_RL_State] = None,
-    ) -> Tuple[DP_RL_State, jnp.ndarray, jnp.ndarray, Dict[Any, Any]]:
+        private: bool = True,
+    ) -> Tuple[DP_RL_State, jnp.ndarray, Dict[Any, Any]]:
 
         num_iters = 10
         key, vmap_keys = jr.split(key)
         keys = jr.split(vmap_keys, num_iters)
         vmapped_step = vmap(super().step_env, in_axes=(0, None, None, None, None, None))
 
-        _, vm_reward, _, _ = vmapped_step(
-            keys, orig_state, action, params, private, state_class
+        _, _, _ = vmapped_step(
+            keys, orig_state, action, params, private
         )
 
-        state, _, done, info = super().step_env(key, orig_state, action, params, private, state_class)
-        return state, jnp.mean(vm_reward), done, info
+        state, done, info = super().step_env(key, orig_state, action, params, private)
+        return state, done, info
 
 
 class Sticky_Loop_Carry(eqx.Module):
@@ -328,17 +309,16 @@ class StickyActionStepTaker(PrivateStepTaker):
         self,
         key: chex.PRNGKey,
         orig_state: DP_RL_State,
-        action: Union[float, chex.Array],
+        action: chex.Array,
         params: DP_RL_Params,
-        private: Optional[bool] = True,
-        state_class: type[DP_RL_State] = None,
-    ) -> Tuple[DP_RL_State, jnp.ndarray, jnp.ndarray, Dict[Any, Any]]:
+        private: bool = True,
+    ) -> Tuple[DP_RL_State, jnp.ndarray, Dict[Any, Any]]:
         """Perform single timestep state transition."""
 
         def body_fn(carry: Sticky_Loop_Carry):
             new_key, key_ = jr.split(carry.key)
-            obs, state, reward, done, info = super().step_env(
-                key_, carry.state, action, params, private, state_class
+            state, done, info = super(StickyActionStepTaker, self).step_env(
+                key_, carry.state, action, params, private,
             )
             return Sticky_Loop_Carry(
                 state=state, key=new_key, done=done, num_steps=carry.num_steps + 1
@@ -360,9 +340,7 @@ class StickyActionStepTaker(PrivateStepTaker):
         )
 
         return (
-            lax.stop_gradient(self.get_obs(result.state, params)),
             lax.stop_gradient(result.state),
-            params.reward_fn(orig_state, action, result.state, result.done, params),
             result.done,
             {},
         )
@@ -379,11 +357,10 @@ class PrivacyPercentageStepTaker(PrivateStepTaker):
         self,
         input_key: chex.PRNGKey,
         state: DP_RL_State,
-        action: Union[float, chex.Array],
+        action: chex.Array,
         params: DP_RL_Params,
-        private: Optional[bool] = True,
-        state_class: type[DP_RL_State] = None,
-    ) -> Tuple[DP_RL_State, jnp.ndarray, jnp.ndarray, Dict[Any, Any]]:
+        private: bool = True,
+    ) -> Tuple[DP_RL_State, jnp.ndarray, Dict[Any, Any]]:
         def scan_body(carry, eps):
             state, key, done, info = carry
             # get privacy for this step
@@ -395,13 +372,13 @@ class PrivacyPercentageStepTaker(PrivateStepTaker):
 
             # step the environment with this amount of noise
             key, _key = jr.split(key)
-            state, reward, done, info = super(PrivacyPercentageStepTaker, self).step_env(
-                _key, state, noise_action, params, private, state_class
+            state, done, info = super(PrivacyPercentageStepTaker, self).step_env(
+                _key, state, noise_action, params, private
             )
 
-            return (state, key, done, info), reward
+            return (state, key, done, info), state.loss
     
-        (final_state, _, done, info), rewards = lax.scan(
+        (final_state, _, done, info), _ = lax.scan(
             scan_body,
             init=(state, input_key, False, {}),
             xs=action,
@@ -410,7 +387,6 @@ class PrivacyPercentageStepTaker(PrivateStepTaker):
 
         return (
             final_state,
-            rewards.sum(axis=-1),
             done,
             info,
         )

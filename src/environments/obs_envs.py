@@ -1,19 +1,21 @@
 import chex
 import equinox as eqx
 import jax.numpy as jnp
-from gymnax.environments import EnvParams, EnvState, spaces
+from gymnax.environments import spaces
+from environments.dp_params import DP_RL_Params
+from environments.dp_state import DP_RL_State
 
 
 class ObservationMaker(eqx.Module):
     def __init__(self, *args, **kwargs):
         pass
 
-    def observation_space(self, params: EnvParams) -> spaces.Box | spaces.Discrete:
+    def observation_space(self, params: DP_RL_Params) -> spaces.Box | spaces.Discrete:
         """Number of actions possible in environment."""
         raise NotImplementedError()
 
     def get_obs(
-        self, state: EnvState, params: EnvParams = None, key: chex.PRNGKey = None
+        self, state: DP_RL_State, params: DP_RL_Params, key: chex.PRNGKey
     ) -> chex.Array:
         """Creates a continuous action space of the environment."""
         raise NotImplementedError()
@@ -23,12 +25,12 @@ class _IterationObs(ObservationMaker):
     """A DP_RL environment where the observation is only the training step of the neural network."""
 
     def get_obs(
-        self, state: EnvState, params: EnvParams = None, key: chex.PRNGKey = None
+        self, state: DP_RL_State, params: DP_RL_Params, key: chex.PRNGKey
     ) -> chex.Array:
         """Return observation from raw state class."""
         return state.time.reshape(-1)
 
-    def observation_space(self, params: EnvParams) -> spaces.Box | spaces.Discrete:
+    def observation_space(self, params: DP_RL_Params) -> spaces.Box | spaces.Discrete:
         """Observation space of the environment."""
 
         return spaces.Box(
@@ -41,7 +43,7 @@ class _IterationObs(ObservationMaker):
 
 class _AccuracyObs(ObservationMaker):
     def get_obs(
-        self, state: EnvState, params: EnvParams = None, key: chex.PRNGKey = None
+        self, state: DP_RL_State, params: DP_RL_Params, key: chex.PRNGKey
     ) -> chex.Array:
         """Return observation from raw state class."""
         eps, _ = params.privacy_accountant.get_privacy_expenditure(
@@ -58,7 +60,7 @@ class _AccuracyObs(ObservationMaker):
             ]
         )
 
-    def observation_space(self, params: EnvParams) -> spaces.Box:
+    def observation_space(self, params: DP_RL_Params) -> spaces.Box:
         """Observation space of the environment."""
         return spaces.Box(
             low=0,
@@ -69,12 +71,12 @@ class _AccuracyObs(ObservationMaker):
 
 
 class _HiddenNodeGradObs(ObservationMaker):
-    def get_obs(self, state: EnvState, params=None, key=None) -> chex.Array:
+    def get_obs(self, state: DP_RL_State, params=None, key=None) -> chex.Array:
         """Return observation from raw state class."""
 
         return state.average_grads  # bias of last layer
 
-    def observation_space(self, params: EnvParams) -> spaces.Box:
+    def observation_space(self, params: DP_RL_Params) -> spaces.Box:
         """Observation space of the environment."""
 
         return spaces.Box(

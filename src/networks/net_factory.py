@@ -6,7 +6,7 @@ from networks.nets import MLP
 
 
 def net_factory(
-    input_shape: Tuple[int], output_shape: Tuple[int], conf: MLPConfig | CNNConfig
+    input_shape: Tuple[int, ...], output_shape: Tuple[int, ...], conf: MLPConfig | CNNConfig
 ):
     assert len(input_shape) >= 2, "Input shape must have at least 2 dimensions"
     assert len(output_shape) >= 2, "Output shape must have at least 2 dimensions"

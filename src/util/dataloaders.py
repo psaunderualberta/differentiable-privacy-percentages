@@ -34,10 +34,10 @@ def _dataloader_mnist(_=None) -> Tuple[chex.Array, chex.Array]:
         dds = ds.with_format("jax")
         images = dds["image"]
         labels = dds["label"]
-        print(labels)
-        labels = jnp.asarray(pd.get_dummies(labels).values).astype(jnp.int32)
+        pd_labels = pd.Series(labels).astype(int) # type: ignore
+        labels = jnp.asarray(pd.get_dummies(pd_labels).values).astype(jnp.int32)
 
-        jnp.save(image_file, images)
+        jnp.save(image_file, images)  # type: ignore
         jnp.save(label_file, labels)
 
     images = jnp.load(image_file)

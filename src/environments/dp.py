@@ -6,13 +6,13 @@ github.com/openai/gym/blob/master/gym/envs/classic_control/continuous_mountain_c
 """
 
 from typing import Any, Dict, Optional, Tuple, Union
+from functools import partial
 
 import chex
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import optax
-from gymnax.environments import environment, spaces
+from gymnax.environments import spaces
 
 from environments.action_envs import ActionTaker, ActionTakers
 from environments.obs_envs import ObservationMaker, ObservationMakers
@@ -21,7 +21,7 @@ from environments.dp_params import DP_RL_Params
 from environments.dp_state import DP_RL_State
 
 
-class DP_RL(environment.Environment[DP_RL_State, DP_RL_Params]):
+class DP_RL(eqx.Module):
     action_obj: ActionTaker
     obs_obj: ObservationMaker
     step_obj: StepTaker
@@ -39,6 +39,7 @@ class DP_RL(environment.Environment[DP_RL_State, DP_RL_Params]):
         self.action_obj = ActionTakers[action_taker](params=params)
         self.obs_obj = ObservationMakers[obs_maker](params=params)
 
+    @partial(jax.jit, static_argnames=("return_action"))
     def step_env(
         self,
         key: chex.PRNGKey,
@@ -46,13 +47,18 @@ class DP_RL(environment.Environment[DP_RL_State, DP_RL_Params]):
         action: chex.Array,
         params: DP_RL_Params,
         private: Optional[bool] = True,
-    ) -> Tuple[chex.Array, DP_RL_State, jnp.ndarray, jnp.ndarray, Dict[Any, Any]]:
+        return_action: bool = True,
+    ) -> Tuple[chex.Array, DP_RL_State, jnp.ndarray, Dict[Any, Any]] \
+        | Tuple[chex.Array, DP_RL_State, jnp.ndarray, Dict[Any, Any], chex.Array]:
         key, _key = jax.random.split(key)
         action = self.action_obj(state, action, key=key, params=params)
-        state, reward, done, info = self.step_obj.step_env(
+        state, done, info = self.step_obj.step_env(
             _key, state, action, params, private
         )
-        return self.obs_obj.get_obs(state, params, key), state, reward, done, info
+        if not return_action:
+            return self.obs_obj.get_obs(state, params, key), state, done, info
+        
+        return self.obs_obj.get_obs(state, params, key), state, done, info, action
 
     def reset_env(
         self, key: chex.PRNGKey, params: DP_RL_Params
@@ -65,7 +71,7 @@ class DP_RL(environment.Environment[DP_RL_State, DP_RL_Params]):
         self,
         state: DP_RL_State,
         params: DP_RL_Params,
-        action: Union[float, chex.Array] = jnp.inf,
+        action: chex.Array,
     ) -> jnp.ndarray:
         """Check whether state is terminal."""
         return self.step_obj.is_terminal(state, params, action)

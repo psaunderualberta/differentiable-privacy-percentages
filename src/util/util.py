@@ -16,7 +16,7 @@ from optax import (global_norm, per_example_global_norm_clip,
 
 @eqx.filter_jit
 @eqx.filter_value_and_grad
-def mse_loss(model: Callable[...], x: chex.Array, y: chex.Array):
+def mse_loss(model: Callable[[chex.Array], jnp.ndarray], x: chex.Array, y: chex.Array):
     pred_y = jax.vmap(model)(x).squeeze()
 
     return jnp.mean((pred_y - y) ** 2)
@@ -24,7 +24,7 @@ def mse_loss(model: Callable[...], x: chex.Array, y: chex.Array):
 
 @eqx.filter_jit
 @eqx.filter_value_and_grad
-def cce_loss(model: Callable[...], x: chex.Array, y: chex.Array):
+def cce_loss(model: Callable[[chex.Array], jnp.ndarray], x: chex.Array, y: chex.Array):
     pred_y = jax.vmap(model)(x).squeeze()
 
     return softmax_cross_entropy(pred_y, y).mean()
@@ -32,7 +32,7 @@ def cce_loss(model: Callable[...], x: chex.Array, y: chex.Array):
 
 @eqx.filter_jit
 @eqx.filter_value_and_grad
-def non_vmap_mse_loss(model: Callable[...], x: chex.Array, y: chex.Array):
+def non_vmap_mse_loss(model: Callable[[chex.Array], jnp.ndarray], x: chex.Array, y: chex.Array):
     pred_y = model(x).squeeze()
 
     return jnp.mean((pred_y - y) ** 2)
@@ -40,7 +40,7 @@ def non_vmap_mse_loss(model: Callable[...], x: chex.Array, y: chex.Array):
 
 @eqx.filter_jit
 @eqx.filter_value_and_grad
-def non_vmap_cce_loss(model: Callable[...], x: chex.Array, y: chex.Array):
+def non_vmap_cce_loss(model: Callable[[chex.Array], jnp.ndarray], x: chex.Array, y: chex.Array):
     pred_y = model(x).squeeze()
 
     return softmax_cross_entropy(pred_y, y).mean()
@@ -239,7 +239,7 @@ def reinit_model(model, key):
 
 @eqx.filter_jit
 def add_spherical_noise(
-    grads: jax.Array, action: float, key: chex.PRNGKey, C: float, batch_size: int
+    grads: jax.Array, action: chex.Array, key: chex.PRNGKey, C: float, batch_size: int
 ):
     grads_flat, grads_treedef = jax.tree.flatten(grads)
 

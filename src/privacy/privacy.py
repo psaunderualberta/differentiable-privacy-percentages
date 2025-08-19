@@ -191,9 +191,9 @@ class PrivacyAccountant(eqx.Module):
 
         self.original_moments = jnp.zeros_like(moments).astype(jnp.float32)
         self.lambdas = jnp.arange(2, moments.shape[0] + 2).reshape(1, -1)
-        self.delta_bound = delta_bound.squeeze()
-        self.eps_bound = eps_bound.squeeze()
-        self.sample_prob = sample_prob.squeeze()
+        self.delta_bound = jnp.asarray(delta_bound).squeeze()
+        self.eps_bound = jnp.asarray(eps_bound).squeeze()
+        self.sample_prob = jnp.asarray(sample_prob).squeeze()
         self.const_ncr = get_all_nCr(self.lambdas)
         
     def replace(self, **kwargs) -> 'PrivacyAccountant':

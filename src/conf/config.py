@@ -74,134 +74,35 @@ class CNNConfig:
         ]
         return {"parameters": {attr: {"value": getattr(self, attr)} for attr in attrs}}
 
-
 # ---
-# Configs for different RL algorithms
+# Config for the policy
 # ---
-@dataclass
-class StreamQConfig:
-    """Configuration for the 'Stream-Q' RL algorithm"""
-
-    lambda_: DistributionConfig = dist_config_helper(
-        min=0.8, max=1.0, distribution="uniform"
-    )
-    alpha: DistributionConfig = dist_config_helper(
-        min=1.0, max=1.0, distribution="uniform"
-    )
-    kappa: DistributionConfig = dist_config_helper(
-        min=2.0, max=2.0, distribution="uniform"
-    )
-    start_e: DistributionConfig = dist_config_helper(
-        min=1.0, max=1.0, distribution="uniform"
-    )
-    end_e: DistributionConfig = dist_config_helper(
-        min=0.01, max=0.1, distribution="uniform"
-    )
-    stop_exploring_fraction: DistributionConfig = dist_config_helper(
-        min=0.5, max=0.7, distribution="uniform"
-    )
-
-    def to_wandb(self) -> Dict:
-        attrs = [
-            "lambda_",
-            "alpha",
-            "kappa",
-            "start_e",
-            "end_e",
-            "stop_exploring_fraction",
-        ]
-        return {
-            "parameters": {
-                attr: {
-                    "min": getattr(self, attr).min,
-                    "max": getattr(self, attr).max,
-                    "distribution": getattr(self, attr).distribution,
-                }
-                for attr in attrs
-            }
-        }
-
 
 @dataclass
-class StreamACConfig:
-    """Configuration for the 'Stream-AC' RL algorithm"""
+class PolicyConfig:
+    mlp: MLPConfig  # Configuration for the MLP policy
+    cnn: CNNConfig  # Configuration for the CNN policy
+    network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to use as policy
+    lr: DistributionConfig = dist_config_helper(
+        min=0.01, max=0.01, distribution="log_uniform_values"
+    )  # Learning rate of policy network
 
-    lambda_: DistributionConfig = dist_config_helper(
-        min=0.8, max=1.0, distribution="uniform"
-    )
-    alpha: DistributionConfig = dist_config_helper(
-        min=1.0, max=1.0, distribution="uniform"
-    )
-    policy_kappa: DistributionConfig = dist_config_helper(
-        min=3.0, max=3.0, distribution="uniform"
-    )
-    value_kappa: DistributionConfig = dist_config_helper(
-        min=2.0, max=2.0, distribution="uniform"
-    )
-    tau: DistributionConfig = dist_config_helper(
-        min=1e-3, max=1e-1, distribution="log_uniform_values"
-    )
 
+    @property
+    def network(self) -> MLPConfig | CNNConfig:
+        """Get the actual network configuration."""
+        return getattr(self, self.network_type)
+    
     def to_wandb(self) -> Dict:
-        attrs = [
-            "lambda_",
-            "alpha",
-            "policy_kappa",
-            "value_kappa",
-            "tau",
-        ]
         return {
             "parameters": {
-                attr: {
-                    "min": getattr(self, attr).min,
-                    "max": getattr(self, attr).max,
-                    "distribution": getattr(self, attr).distribution,
-                }
-                for attr in attrs
-            }
-        }
-
-
-@dataclass
-class StreamSarsaConfig:
-    """Configuration for the 'Stream-Sarsa' RL algorithm"""
-
-    lambda_: DistributionConfig = dist_config_helper(
-        min=0.8, max=1.0, distribution="uniform"
-    )
-    alpha: DistributionConfig = dist_config_helper(
-        min=1.0, max=1.0, distribution="uniform"
-    )
-    kappa: DistributionConfig = dist_config_helper(
-        min=2.0, max=2.0, distribution="uniform"
-    )
-    start_e: DistributionConfig = dist_config_helper(
-        min=1.0, max=1.0, distribution="uniform"
-    )
-    end_e: DistributionConfig = dist_config_helper(
-        min=0.01, max=0.1, distribution="uniform"
-    )
-    stop_exploring_fraction: DistributionConfig = dist_config_helper(
-        min=0.5, max=0.7, distribution="uniform"
-    )
-
-    def to_wandb(self) -> Dict:
-        attrs = [
-            "lambda_",
-            "alpha",
-            "kappa",
-            "start_e",
-            "end_e",
-            "stop_exploring_fraction",
-        ]
-        return {
-            "parameters": {
-                attr: {
-                    "min": getattr(self, attr).min,
-                    "max": getattr(self, attr).max,
-                    "distribution": getattr(self, attr).distribution,
-                }
-                for attr in attrs
+                "network_type": {"value": self.network_type},
+                "network": self.network.to_wandb(),
+                "lr": {
+                    "min": self.lr.min,
+                    "max": self.lr.max,
+                    "distribution": self.lr.distribution,
+                },
             }
         }
 
@@ -228,8 +129,8 @@ class EnvConfig:
     eps: float = 0.5 # Epsilon privacy parameter
     delta: float = 1e-7  # Delta privacy parameter
     batch_size: int = 512  # Batch size for NN training
-    moments: int = 50  # The # of moments to use within the moments accountant
-    max_steps_in_episode: int = 500 # Maximum # of steps within an episode
+    moments: tuple[int] = (50,)  # The # of moments to use within the moments accountant
+    max_steps_in_episode: int = 30 # Maximum # of steps within an episode
     C: float = 1.0  # Ignored
     action: float = (
         0.0  # Initial action, ignored for algorithms which don't use past actions as input
@@ -237,10 +138,10 @@ class EnvConfig:
     network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to privatize.
 
     # The type of steps to take.
-    step_taker: Literal["private", "non-private", "averaged-reward", "sticky-actions", "privacy-percentage"] = "private"
+    step_taker: Literal["private", "non-private", "averaged-reward", "sticky-actions", "privacy-percentage"] = "privacy-percentage"
 
     # The type of actions produced by the RL algorithm
-    action_taker: Literal["continuous", "discrete", "squashed", "change", "privacy-percentage"] = "continuous"
+    action_taker: Literal["continuous", "discrete", "squashed", "change", "privacy-percentage"] = "privacy-percentage"
 
     # The type of observation provided to the RL algorithm.
     obs_maker: Literal["accuracy", "iteration", "hidden-node-grads"] = "accuracy"
@@ -279,24 +180,13 @@ class EnvConfig:
 @dataclass
 class SweepConfig:
     env: EnvConfig
-    stream_sarsa: StreamSarsaConfig
-    stream_q: StreamQConfig
-    stream_ac: StreamACConfig
+    policy: PolicyConfig
     method: str = "random"  # The wandb search method
     metric_name: str = "Mean Accuracy"  # The metric for wandb to optimize
     metric_goal: str = "maximize"  # The wandb optimization goal
     name: str | None = None  # The (optional) name of the wandb sweep
     description: str | None = None  # The (optional) description of the wandb sweep
-    algorithm: Literal["stream_sarsa", "stream_q", "stream_ac", "ppo"] = (
-        "stream_q"  # The type of RL algorithm to run.
-    )
     with_baselines: bool = False  # Flag to compute plots comparing against baseline (Expensive, default is False)
-    eval_freq: int = 2_500  # Frequency in # training steps with which to call the evaluation function
-
-    # Derived object, getting the actual RL algorithm's config
-    @property
-    def algorithm_config(self) -> StreamSarsaConfig | StreamQConfig | StreamACConfig:
-        return getattr(self, self.algorithm)
 
     def to_wandb(self) -> Dict:
         config = {
@@ -307,9 +197,8 @@ class SweepConfig:
             },
             "name": self.name,
             "parameters": {
-                "algorithm": {"value": self.algorithm},
                 "env": self.env.to_wandb(),
-                "agent": self.algorithm_config.to_wandb(),
+                "policy": self.policy.to_wandb(),
             },
         }
 

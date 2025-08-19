@@ -1,5 +1,5 @@
 import tyro
-from conf.config import Config, EnvConfig, StreamACConfig, StreamQConfig, StreamSarsaConfig, SweepConfig, ExperimentConfig, WandbConfig
+from conf.config import Config, EnvConfig, SweepConfig, ExperimentConfig, WandbConfig
 from pprint import pprint
 from dataclasses import asdict
 
@@ -29,11 +29,6 @@ class SingletonConfig:
         return cls.get_sweep_config_instance().env
 
     @classmethod
-    def get_algorithm_config_instance(cls) -> StreamSarsaConfig | StreamQConfig | StreamACConfig:
-        sweep_instance = cls.get_sweep_config_instance()
-        return getattr(sweep_instance, sweep_instance.algorithm)
-
-    @classmethod
     def get_wandb_config_instance(cls) -> WandbConfig:
         return cls.get_instance().wandb_conf
     
@@ -48,7 +43,6 @@ if __name__ == "__main__":
     pprint(SingletonConfig.get_experiment_config_instance())
     pprint(SingletonConfig.get_sweep_config_instance())
     pprint(SingletonConfig.get_environment_config_instance())
-    pprint(SingletonConfig.get_algorithm_config_instance())
     pprint(SingletonConfig.get_wandb_config_instance())
 
     sweep_config = SingletonConfig.get_object(SingletonConfig.get_sweep_config_instance())

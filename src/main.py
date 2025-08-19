@@ -1,5 +1,5 @@
 from conf.singleton_conf import SingletonConfig
-from jax import random as jr, vmap, numpy as jnp, jit, value_and_grad
+from jax import random as jr, vmap, numpy as jnp, jit, value_and_grad, debug
 from functools import partial
 from util.dataloaders import DATALOADERS
 from networks.net_factory import net_factory
@@ -13,6 +13,7 @@ from typing import Tuple, Dict, Any
 
 def main():
     experiment_config = SingletonConfig.get_experiment_config_instance()
+    sweep_config = SingletonConfig.get_sweep_config_instance()
     environment_config = SingletonConfig.get_environment_config_instance()
     wandb_config = SingletonConfig.get_wandb_config_instance()
 
@@ -28,18 +29,23 @@ def main():
     print(f"Dataset shape: {X.shape}, {y.shape}")
 
     # Initialize Policy model
-    policy_model = MLP.from_config(experiment_config.policy_model_config)
+    policy_input = jnp.zeros((1, 1))
+    policy_model = net_factory(
+        input_shape=policy_input.shape,
+        output_shape=(1, environment_config.max_steps_in_episode),
+        conf=sweep_config.policy.network,
+    )
 
-    network_arch = net_factory(
+    private_network_arch = net_factory(
         input_shape=X.shape,
         output_shape=y.shape,
-        conf=experiment_config.private_model_config,
+        conf=sweep_config.env.network,
     )
 
     # Initialize private environment
     env_params = DP_RL_Params.create(
         environment_config,
-        network_arch=network_arch,
+        network_arch=private_network_arch,
         X=X,
         y=y,
     )
@@ -51,18 +57,16 @@ def main():
         params=env_params,
     )
 
-    policy_input = jnp.zeros((1, env_params.input_dim))
-
     @partial(value_and_grad, has_aux=True)
-    def get_policy_loss(policy, state, key) -> Tuple[chex.Array, Tuple[chex.Array, DP_RL_State, jnp.ndarray, Dict[Any, Any]]]:
+    def get_policy_loss(policy, policy_input, state, key) -> Tuple[chex.Array, Tuple[DP_RL_State, chex.Array]]:
         """Calculate the policy loss."""
         policy_output = vmap(policy)(policy_input)
-        
-        obs, state, reward, done, info = env.step_env(
-            key, state, policy_output, env_params
+
+        _, final_state, _, _, actions = env.step_env(
+            key, state, policy_output, env_params, return_action=True
         )
 
-        return reward, (obs, state, done, info)
+        return final_state.loss, (final_state, actions)
 
 
     for timestep in range(total_timesteps):
@@ -70,14 +74,21 @@ def main():
         key = jr.PRNGKey(env_prng_seed + timestep)
 
         # Reset environment
-        obs, state = env.reset_env(key, env_params)
+        _, state = env.reset_env(key, env_params)
 
         # Get policy loss
-        policy_grads, loss, (final_obs, state, done, info) = get_policy_loss(policy_model, state, key) # type: ignore
+        (loss, (final_state, actions)), grads = get_policy_loss(policy_model, policy_input, state, key) # type: ignore
+
+        print(loss)
+        print(grads)
+        print(policy_model)
+        print(actions)  # type: ignore
+        # print(final_state)
 
         exit()
 
         # update policy
+        
         
     
 
