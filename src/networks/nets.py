@@ -21,28 +21,30 @@ class MLP(eqx.Module, Network):
     def from_config(cls, conf: MLPConfig) -> "MLP":
         key = jr.PRNGKey(conf.key)
         key, _key = jr.split(key)
+        layer_out = conf.dhidden if conf.nhidden > 0 else conf.nclasses
         layers: list[list[ReLU | eqx.nn.Linear]] = [
             [
-                eqx.nn.Linear(conf.din, conf.dhidden, key=_key),
+                eqx.nn.Linear(conf.din, layer_out, key=_key),
             ]
         ]
 
-        for _ in range(conf.nhidden - 1):
+        if conf.nhidden > 0:
+            for _ in range(conf.nhidden - 1):
+                key, _key = jr.split(key)
+                layers.append(
+                    [
+                        ReLU(),
+                        eqx.nn.Linear(conf.dhidden, conf.dhidden, key=_key),
+                    ]
+                )
+
             key, _key = jr.split(key)
             layers.append(
                 [
                     ReLU(),
-                    eqx.nn.Linear(conf.dhidden, conf.dhidden, key=_key),
+                    eqx.nn.Linear(conf.dhidden, conf.nclasses, key=_key),
                 ]
             )
-
-        key, _key = jr.split(key)
-        layers.append(
-            [
-                ReLU(),
-                eqx.nn.Linear(conf.dhidden, conf.nclasses, key=_key),
-            ]
-        )
 
         return MLP(layers)
 

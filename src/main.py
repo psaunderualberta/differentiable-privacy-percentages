@@ -9,6 +9,8 @@ from environments.dp_params import DP_RL_Params
 from environments.dp_state import DP_RL_State
 import chex
 from typing import Tuple, Dict, Any
+import optax
+import tqdm
 
 
 def main():
@@ -18,8 +20,6 @@ def main():
     wandb_config = SingletonConfig.get_wandb_config_instance()
 
     total_timesteps = experiment_config.total_timesteps
-    num_configs = experiment_config.num_configs
-    cfg_prng_seed = experiment_config.cfg_prng_seed
     env_prng_seed = experiment_config.env_prng_seed
 
     print("Starting...")
@@ -69,7 +69,17 @@ def main():
         return final_state.loss, (final_state, actions)
 
 
-    for timestep in range(total_timesteps):
+    # Initialize optimizer
+    optimizer = optax.sgd(learning_rate=experiment_config.sweep.policy.lr.min)
+    opt_state = optimizer.init(policy_model) # type: ignore
+
+    iterator = tqdm.tqdm(
+        range(total_timesteps),
+        desc="Training Progress",
+        total=total_timesteps
+    )
+
+    for timestep in iterator:
         # Generate random key for the current timestep
         key = jr.PRNGKey(env_prng_seed + timestep)
 
@@ -79,18 +89,18 @@ def main():
         # Get policy loss
         (loss, (final_state, actions)), grads = get_policy_loss(policy_model, policy_input, state, key) # type: ignore
 
-        print(loss)
-        print(grads)
-        print(policy_model)
-        print(actions)  # type: ignore
-        # print(final_state)
+        print(grads.layers[0][0].weight)
+
+        # Update policy model
+        updates, opt_state = optimizer.update(grads, opt_state, policy_model)  # type: ignore
+        policy_model = optax.apply_updates(policy_model, updates) # type: ignore
+
+        iterator.set_description(
+            f"Training Progress - Loss: {loss:.4f}"
+        )
 
         exit()
 
-        # update policy
-        
-        
-    
 
 
 if __name__ == "__main__":

@@ -80,11 +80,11 @@ class CNNConfig:
 
 @dataclass
 class PolicyConfig:
-    mlp: MLPConfig  # Configuration for the MLP policy
     cnn: CNNConfig  # Configuration for the CNN policy
+    mlp: MLPConfig  # Configuration for the MLP policy
     network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to use as policy
     lr: DistributionConfig = dist_config_helper(
-        min=0.01, max=0.01, distribution="log_uniform_values"
+        min=1e-3, max=1e-3, distribution="log_uniform_values"
     )  # Learning rate of policy network
 
 
