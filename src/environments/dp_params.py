@@ -3,6 +3,7 @@ from gymnax.environments import environment
 from networks.util import Network
 from privacy.privacy import PrivacyAccountant
 import equinox as eqx
+from conf.config import EnvConfig
 
 
 class DP_RL_Params(eqx.Module, environment.EnvParams):
@@ -21,7 +22,7 @@ class DP_RL_Params(eqx.Module, environment.EnvParams):
 
     @classmethod
     def create(
-        cls, conf: dict[str, Any], network_arch: Network, X=None, y=None
+        cls, conf: EnvConfig, network_arch: Network, X=None, y=None
     ) -> "DP_RL_Params":
         # Set dataset, w/ default values if using default params
         defaults = DP_RL_Params()
