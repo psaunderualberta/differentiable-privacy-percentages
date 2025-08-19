@@ -85,10 +85,7 @@ class PrivacyPercentageAction(ActionTaker):
 
     def __call__(self, state: DP_RL_State, action: chex.Array, key: chex.PRNGKey, params: DP_RL_Params) -> chex.Array:
         # convert action to cumulative sum of epsilons
-        sum_to_1 = jnn.softmax(action)
-        epsilons = jnp.cumsum(sum_to_1, axis=-1) * params.privacy_accountant.eps_bound
-
-        return epsilons
+        return jnp.where(action >= 20, action, jnn.softplus(action))
 
 
 ActionTakers = {

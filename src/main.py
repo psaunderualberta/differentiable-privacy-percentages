@@ -60,7 +60,7 @@ def main():
     @partial(value_and_grad, has_aux=True)
     def get_policy_loss(policy, policy_input, state, key) -> Tuple[chex.Array, Tuple[DP_RL_State, chex.Array]]:
         """Calculate the policy loss."""
-        policy_output = vmap(policy)(policy_input)
+        policy_output = policy(policy_input[0])
 
         _, final_state, _, _, actions = env.step_env(
             key, state, policy_output, env_params, return_action=True
@@ -90,6 +90,7 @@ def main():
         (loss, (final_state, actions)), grads = get_policy_loss(policy_model, policy_input, state, key) # type: ignore
 
         print(grads.layers[0][0].weight)
+        print(actions)
 
         # Update policy model
         updates, opt_state = optimizer.update(grads, opt_state, policy_model)  # type: ignore

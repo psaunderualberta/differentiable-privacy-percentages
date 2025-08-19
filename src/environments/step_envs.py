@@ -59,7 +59,7 @@ class PrivateStepTaker(StepTaker):
         # # Update privacy accountant w/ action
         pa = params.privacy_accountant
         pas = state.privacy_accountant_state
-        action, new_state = pa.get_correct_noise(pas, action, return_new_state=True)
+        new_state = pa.add_sigma(pas, action)
         new_pas = PrivacyAccountantState(
             lax.select(private, new_state.moments, pas.moments)
         )
@@ -361,19 +361,19 @@ class PrivacyPercentageStepTaker(PrivateStepTaker):
         params: DP_RL_Params,
         private: bool = True,
     ) -> Tuple[DP_RL_State, jnp.ndarray, Dict[Any, Any]]:
-        def scan_body(carry, eps):
+        def scan_body(carry, noise_value):
             state, key, done, info = carry
             # get privacy for this step
-            pas = state.privacy_accountant_state
-            pa = params.privacy_accountant.replace(eps_bound=eps)
+            # pas = state.privacy_accountant_state
+            # pa = params.privacy_accountant.replace(eps_bound=eps)
 
             # get according noise parameter for the privacy setting
-            noise_action = pa.get_correct_noise(pas, 1e-10, return_new_state=False)
+            # noise_action = pa.get_correct_noise(pas, 1e-10 return_new_state=False)
 
             # step the environment with this amount of noise
             key, _key = jr.split(key)
             state, done, info = super(PrivacyPercentageStepTaker, self).step_env(
-                _key, state, noise_action, params, private
+                _key, state, noise_value, params, private
             )
 
             return (state, key, done, info), state.loss
