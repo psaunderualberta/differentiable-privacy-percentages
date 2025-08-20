@@ -20,8 +20,15 @@ def main():
     print("Starting...")
 
     # Initialize Policy model
-    policy_input = jnp.zeros((1, 1))
-    noises = jnp.asarray(1.0)
+    policy_input = jnp.ones((1, 1))
+    policy_model = net_factory(
+        input_shape=policy_input.shape,
+        output_shape=(1, environment_config.max_steps_in_episode),
+        conf=sweep_config.policy.network,
+    )
+
+    print(policy_model.layers[0][0].weight)
+    print(policy_model.layers[0][0].bias)
 
     @value_and_grad
     def mb_standin(x):
@@ -30,25 +37,25 @@ def main():
         return x**2
 
     @value_and_grad
-    def get_policy_loss(actions, key) -> Tuple[chex.Array, chex.Array]:
+    def get_policy_loss(policy, policy_input, key) -> Tuple[chex.Array, chex.Array]:
         """Calculate the policy loss."""
-
-        actions = jnn.softplus(actions)  # Ensure actions are positive
+        # actions = 
+        actions = jnn.softplus(policy(policy_input[0]))  # Ensure positive actions
 
         key, _key = jr.split(key)
         x = jr.uniform(_key, minval=-1, maxval=1, shape=())
 
         key, _key = jr.split(key)
         y, x_grad = mb_standin(x)
-        x_grad = x_grad + jr.normal(key, x_grad.shape) * actions
+        x_grad = x_grad + jr.normal(key, x_grad.shape) * actions[0]
         x = x - 0.1 * x_grad
         
         return mb_standin(x)[0]
 
 
     # Initialize optimizer
-    # optimizer = optax.sgd(learning_rate=experiment_config.sweep.policy.lr.min)
-    # opt_state = optimizer.init(noises) # type: ignore
+    optimizer = optax.sgd(learning_rate=experiment_config.sweep.policy.lr.min)
+    opt_state = optimizer.init(policy_model) # type: ignore
 
     iterator = tqdm.tqdm(
         range(total_timesteps),
@@ -61,16 +68,15 @@ def main():
         key = jr.PRNGKey(env_prng_seed + timestep)
 
         # Get policy loss
-        final_value, grads = get_policy_loss(noises, key) # type: ignore
-
-        noises = noises - 0.1 * grads
+        final_value, grads = get_policy_loss(policy_model, policy_input, key) # type: ignore
 
         # Update policy model
-        # updates, opt_state = optimizer.update(grads, opt_state, policy_model)  # type: ignore
-        # policy_model = optax.apply_updates(policy_model, updates) # type: ignore
+        updates, opt_state = optimizer.update(grads, opt_state, policy_model)  # type: ignore
+        policy_model = optax.apply_updates(policy_model, updates) # type: ignore
 
+        new_noise = jnn.softplus(policy_model(policy_input[0])).item() # type: ignore
         iterator.set_description(
-            f"Training Progress - Loss: {final_value:.4f}. Noises: {noises:.4f}"
+            f"Training Progress - Loss: {final_value:.4f}. Noises: {new_noise:.4f}"
         )
 
 
