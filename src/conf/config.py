@@ -29,7 +29,7 @@ class MLPConfig:
 
     din: int = -1  # Value is derived from data
     dhidden: int = 32  # Size of hidden layers
-    nhidden: int = 1  # Number of hidden layers
+    nhidden: int = 0  # Number of hidden layers
     nclasses: int = -1  # Value is derived from data
     key: int = 0  # Overridden as derivative from experiment.env_prng_key
 
@@ -130,7 +130,7 @@ class EnvConfig:
     delta: float = 1e-7  # Delta privacy parameter
     batch_size: int = 512  # Batch size for NN training
     moments: tuple[int] = (50,)  # The # of moments to use within the moments accountant
-    max_steps_in_episode: int = 30 # Maximum # of steps within an episode
+    max_steps_in_episode: int = 1 # Maximum # of steps within an episode
     C: float = 1.0  # Ignored
     action: float = (
         0.0  # Initial action, ignored for algorithms which don't use past actions as input
@@ -217,7 +217,7 @@ class ExperimentConfig:
     num_configs: int = 1  # Number of random agent configurations to run
     dataset: Literal["mnist", "california"] = "mnist"  # Dataset on which to privatise
     dataset_poly_d: int | None = None  # Degree of polynomial features to be generated
-    total_timesteps: int = 2_000_000  # Training steps of RL algorithm
+    total_timesteps: int = 1_000  # Training steps of RL algorithm
     cfg_prng_seed: int = 42  # RL Agent configuration seed
     env_prng_seed: int = 42  # Environment configuration seed
     log_dir: str = "logs"  # Relative directory in which to log results
