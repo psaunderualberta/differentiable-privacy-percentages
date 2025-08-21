@@ -20,7 +20,7 @@ def main():
     print("Starting...")
 
     # Initialize Policy model
-    policy_input = jnp.ones((1, 1))
+    policy_input = jnp.ones((10, 1))
     policy_model = net_factory(
         input_shape=policy_input.shape,
         output_shape=(1, environment_config.max_steps_in_episode),
@@ -36,21 +36,29 @@ def main():
         """Stand-in for mini-batch optimization"""
         return x**2
 
+
+    def apply_actions(actions, x, key):
+        """Applies a sequence of GD updates"""
+        for action in actions:
+            key, _key = jr.split(key)
+            y, x_grad = mb_standin(x)
+            x_grad = x_grad + jr.normal(key, x_grad.shape) * action
+            x = x - 0.1 * x_grad
+        
+        return mb_standin(x)[0]
+
     @value_and_grad
     def get_policy_loss(policy, policy_input, key) -> Tuple[chex.Array, chex.Array]:
         """Calculate the policy loss."""
         # actions = 
-        actions = jnn.softplus(policy(policy_input[0]))  # Ensure positive actions
+        actions = jnn.softplus(vmap(policy)(policy_input))  # Ensure positive actions
 
         key, _key = jr.split(key)
-        x = jr.uniform(_key, minval=-1, maxval=1, shape=())
+        keys = jr.split(key, policy_input.shape[0])
+        initial_x = jr.uniform(_key, minval=-1, maxval=1, shape=(keys.shape[0],))
 
-        key, _key = jr.split(key)
-        y, x_grad = mb_standin(x)
-        x_grad = x_grad + jr.normal(key, x_grad.shape) * actions[0]
-        x = x - 0.1 * x_grad
-        
-        return mb_standin(x)[0]
+        return vmap(apply_actions)(actions, initial_x, keys).mean()
+
 
 
     # Initialize optimizer

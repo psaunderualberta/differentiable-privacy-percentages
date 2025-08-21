@@ -29,7 +29,7 @@ def main():
     print(f"Dataset shape: {X.shape}, {y.shape}")
 
     # Initialize Policy model
-    policy_input = jnp.zeros((1, 1))
+    policy_input = jnp.ones((1, 1))
     policy_model = net_factory(
         input_shape=policy_input.shape,
         output_shape=(1, environment_config.max_steps_in_episode),
@@ -90,6 +90,7 @@ def main():
         (loss, (final_state, actions)), grads = get_policy_loss(policy_model, policy_input, state, key) # type: ignore
 
         print(grads.layers[0][0].weight)
+        print(grads.layers[0][0].bias)
         print(actions)
 
         # Update policy model
