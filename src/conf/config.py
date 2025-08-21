@@ -130,7 +130,7 @@ class EnvConfig:
     delta: float = 1e-7  # Delta privacy parameter
     batch_size: int = 512  # Batch size for NN training
     moments: tuple[int] = (50,)  # The # of moments to use within the moments accountant
-    max_steps_in_episode: int = 1 # Maximum # of steps within an episode
+    max_steps_in_episode: int = 10 # Maximum # of steps within an episode
     C: float = 1.0  # Ignored
     action: float = (
         0.0  # Initial action, ignored for algorithms which don't use past actions as input
