@@ -27,9 +27,6 @@ def main():
         conf=sweep_config.policy.network,
     )
 
-    print(policy_model.layers[0][0].weight)
-    print(policy_model.layers[0][0].bias)
-
     @value_and_grad
     def mb_standin(x):
         """Return a noisy approximation of 'x^2'"""
@@ -62,7 +59,7 @@ def main():
 
 
     # Initialize optimizer
-    optimizer = optax.sgd(learning_rate=experiment_config.sweep.policy.lr.min)
+    optimizer = optax.adam(learning_rate=experiment_config.sweep.policy.lr.min)
     opt_state = optimizer.init(policy_model) # type: ignore
 
     iterator = tqdm.tqdm(
