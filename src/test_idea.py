@@ -6,6 +6,8 @@ import chex
 from typing import Tuple
 import optax
 import tqdm
+import os
+from util.logger import ExperimentLogger
 
 
 def main():
@@ -27,12 +29,28 @@ def main():
         conf=sweep_config.policy.network,
     )
 
+    directories = [os.path.join(".", "logs", "0")]
+    columns = ["iteration", "loss", "action"]
+    large_columns = ["action"]
+    logger = ExperimentLogger(directories, columns, large_columns)
+
+
+    def normalize_actions(x, order=None, axis=1):
+        return x / jnp.linalg.norm(x, ord=order, axis=axis).reshape(1, -1)
+
+    def positive_actions(x):
+        return jnn.softplus(x)
+
+    def pipeline(x):
+        x = positive_actions(x)
+        x = normalize_actions(x)
+        return x
+
     @value_and_grad
     def mb_standin(x):
         """Return a noisy approximation of 'x^2'"""
         """Stand-in for mini-batch optimization"""
         return x**2
-
 
     def apply_actions(actions, x, key):
         """Applies a sequence of GD updates"""
@@ -47,16 +65,14 @@ def main():
     @value_and_grad
     def get_policy_loss(policy, policy_input, key) -> Tuple[chex.Array, chex.Array]:
         """Calculate the policy loss."""
-        # actions = 
-        actions = jnn.softplus(vmap(policy)(policy_input))  # Ensure positive actions
+        # Ensure positive actions
+        actions = pipeline(vmap(policy)(policy_input))
 
         key, _key = jr.split(key)
         keys = jr.split(key, policy_input.shape[0])
         initial_x = jr.uniform(_key, minval=-1, maxval=1, shape=(keys.shape[0],))
 
         return vmap(apply_actions)(actions, initial_x, keys).mean()
-
-
 
     # Initialize optimizer
     optimizer = optax.adam(learning_rate=experiment_config.sweep.policy.lr.min)
@@ -79,7 +95,9 @@ def main():
         updates, opt_state = optimizer.update(grads, opt_state, policy_model)  # type: ignore
         policy_model = optax.apply_updates(policy_model, updates) # type: ignore
 
-        # new_noise = jnn.softplus(policy_model(policy_input[0]))[0].item() # type: ignore
+        new_noise = pipeline(vmap(policy_model)(policy_input))[0] # type: ignore
+        logger.log(0, {"iteration": timestep, "loss": loss, "action": new_noise})
+
         iterator.set_description(
             f"Training Progress - Loss: {loss:.4f}."
         )

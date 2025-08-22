@@ -11,6 +11,8 @@ import chex
 from typing import Tuple, Dict, Any
 import optax
 import tqdm
+import logging
+logger = logging.getLogger(__name__)
 
 
 def main():
@@ -22,11 +24,11 @@ def main():
     total_timesteps = experiment_config.total_timesteps
     env_prng_seed = experiment_config.env_prng_seed
 
-    print("Starting...")
+    logger.info("Starting...")
 
     # Initialize dataset
     X, y = DATALOADERS[experiment_config.dataset](experiment_config.dataset_poly_d)
-    print(f"Dataset shape: {X.shape}, {y.shape}")
+    logger.info(f"Dataset shape: {X.shape}, {y.shape}")
 
     # Initialize Policy model
     policy_input = jnp.ones((1, 1))
@@ -89,9 +91,9 @@ def main():
         # Get policy loss
         (loss, (final_state, actions)), grads = get_policy_loss(policy_model, policy_input, state, key) # type: ignore
 
-        print(grads.layers[0][0].weight)
-        print(grads.layers[0][0].bias)
-        print(actions)
+        logger.info(grads.layers[0][0].weight)
+        logger.info(grads.layers[0][0].bias)
+        logger.info(actions)
 
         # Update policy model
         updates, opt_state = optimizer.update(grads, opt_state, policy_model)  # type: ignore
