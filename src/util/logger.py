@@ -8,11 +8,24 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
+from util.aggregators import (
+    max_accuracy_aggregator,
+    mean_accuracy_aggregator,
+    min_accuracy_aggregator,
+    std_accuracy_aggregator,
+    max_loss_aggregator,
+    mean_loss_aggregator,
+    min_loss_aggregator,
+    std_loss_aggregator,
+    actions_plotter,
+)
+
 import wandb
 
 class ExperimentLogger(eqx.Module):
     directories: List[str]
     columns: List[str]
+    large_columns: List[str]
     aggregators: List[Callable[[pd.DataFrame], Tuple[pd.Series, pd.Series, str]]]
     plotters: List[Callable[[pd.DataFrame], go.Figure]]
     # baseline_plotters: List[Callable[[RewardAnalyzer, pd.DataFrame], go.Figure]]
@@ -27,9 +40,10 @@ class ExperimentLogger(eqx.Module):
     ):
         self.directories = directories
         self.columns = columns
-        self.aggregators = aggregators or []
+        self.large_columns = large_columns
+        self.aggregators = [mean_loss_aggregator]
 
-        self.plotters = []
+        self.plotters = [actions_plotter]
 
         # self.baseline_plotters = []
 
@@ -44,7 +58,7 @@ class ExperimentLogger(eqx.Module):
                 with open(fname, "w") as f:
                     f.write(",".join(columns) + "\n")
 
-    def get_data_file(self, pos: int) -> List[str]:
+    def get_data_file(self, pos: int) -> str:
         return os.path.join(self.directories[pos], "data.csv")
 
     def write_object(self, pos: int, fname: str, data: Any) -> None:
@@ -97,7 +111,6 @@ class ExperimentLogger(eqx.Module):
             plotters = self.plotters
 
         fname = self.get_data_file(pos)
-        env_config = self.read_object(pos, 'env-config.pkl')
         df = pd.read_csv(fname)
         aggregates = {}
         max_len = 0

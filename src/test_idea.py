@@ -8,6 +8,7 @@ import tqdm
 import os
 from util.logger import ExperimentLogger
 from privacy.gdp_privacy import approx_to_gdp, gdp_to_sigma, mu_to_poisson_subsampling_shedule
+import wandb
 
 
 def main():
@@ -22,7 +23,8 @@ def main():
     print("Starting...")
 
     # Initialize Policy model
-    policy_input = jnp.ones((1, 1))
+    policy_input = jnp.ones((1,1))
+    policy_batch_size = sweep_config.policy.batch_size
     policy_model = net_factory(
         input_shape=policy_input.shape,
         output_shape=(1, environment_config.max_steps_in_episode),
@@ -30,8 +32,8 @@ def main():
     )
 
     directories = [os.path.join(".", "logs", "0")]
-    columns = ["iteration", "loss", "action"]
-    large_columns = ["action"]
+    columns = ["step", "loss", "actions"]
+    large_columns = ["actions"]
     logger = ExperimentLogger(directories, columns, large_columns)
 
 
@@ -48,7 +50,7 @@ def main():
 
 
     def vec_to_simplex(x: chex.Array, order=None, axis=1) -> chex.Array:
-        return x / jnp.linalg.norm(x, ord=1, axis=axis, keepdims=True)
+        return x / jnp.linalg.norm(x, ord=1, keepdims=True)
 
     def positive_actions(x: chex.Array) -> chex.Array:
         return jnn.softplus(x)
@@ -90,11 +92,12 @@ def main():
     def get_policy_loss(policy, policy_input, key) -> Tuple[chex.Array, chex.Array]:
         """Calculate the policy loss."""
         # Ensure positive actions
-        actions = pipeline(vmap(policy)(policy_input)).squeeze()
+        policy_output = vmap(policy)(policy_input)
+        actions = vmap(pipeline)(policy_output).squeeze()
 
         key, _key = jr.split(key)
-        keys = jr.split(key, policy_input.shape[0])
-        initial_x = jr.uniform(_key, minval=-1, maxval=-1+1e-5, shape=(keys.shape[0],))
+        keys = jr.split(key, policy_batch_size)
+        initial_x = jr.uniform(_key, minval=-1, maxval=-1+1e-5, shape=(policy_batch_size,))
 
         return vmap(apply_actions, in_axes=(None, 0, 0))(actions, initial_x, keys).mean()
 
@@ -120,12 +123,37 @@ def main():
         policy_model = optax.apply_updates(policy_model, updates) # type: ignore
 
         new_noise = pipeline(vmap(policy_model)(policy_input))[0] # type: ignore
-        logger.log(0, {"iteration": timestep, "loss": loss, "action": new_noise})
+        logger.log(0, {"step": timestep, "loss": loss, "actions": new_noise})
 
         iterator.set_description(
             f"Training Progress - Loss: {loss:.4f}"
         )
 
+    # Log to wandb, if enabled
+    if wandb_config.mode != "disabled":
+        run_ids = []
+        log_to_wandb = (wandb_config.mode != "disabled")
+        with wandb.init(
+            project=wandb_config.project,
+            entity=wandb_config.entity,
+            config={
+                "policy": sweep_config.policy.to_wandb(),
+                "env": sweep_config.env.to_wandb(),
+            },
+            mode=wandb_config.mode,
+        ) as run:
+            run_ids.append(run.id)
+            logger.create_plots(0, log_to_wandb=log_to_wandb, with_baselines=sweep_config.with_baselines)
+            logger.get_csv(0, log_to_wandb=log_to_wandb)
+
+        # sweep
+        # print(run_ids)
+        # wandb.sweep(
+        #     sweep_config.to_wandb(),
+        #     project=wandb_config.project,
+        #     entity=wandb_config.entity,
+        #     prior_runs=run_ids
+        # )
 
 
 if __name__ == "__main__":

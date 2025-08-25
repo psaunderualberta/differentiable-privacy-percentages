@@ -83,6 +83,7 @@ class PolicyConfig:
     cnn: CNNConfig  # Configuration for the CNN policy
     mlp: MLPConfig  # Configuration for the MLP policy
     network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to use as policy
+    batch_size: int = 50  # Batch size for policy training
     lr: DistributionConfig = dist_config_helper(
         min=1e-2, max=1e-2, distribution="log_uniform_values"
     )  # Learning rate of policy network
@@ -217,7 +218,7 @@ class ExperimentConfig:
     num_configs: int = 1  # Number of random agent configurations to run
     dataset: Literal["mnist", "california"] = "mnist"  # Dataset on which to privatise
     dataset_poly_d: int | None = None  # Degree of polynomial features to be generated
-    total_timesteps: int = 1_000  # Training steps of RL algorithm
+    total_timesteps: int = 1000  # Training steps of RL algorithm
     cfg_prng_seed: int = 42  # RL Agent configuration seed
     env_prng_seed: int = 42  # Environment configuration seed
     log_dir: str = "logs"  # Relative directory in which to log results

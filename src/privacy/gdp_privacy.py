@@ -37,24 +37,14 @@ def mu_to_poisson_subsampling_shedule(mu: float, schedule: chex.Array, p: float,
     """Convert a GDP mu parameter to a Poisson subsampling schedule.
 
     Args:
-        mu: The mu parameter of GDP.
-        schedule: A 1D array representing the initial schedule (e.g., learning rates).
-        p: The subsampling probability.
-        T: The total number of steps.
+        mu: The mu parameter of GDP. Assumed to be a non-negative scalar.
+        schedule: A 1D array representing the initial schedule (e.g., learning rates). Assumed to be non-negative and sum to 1.
+        p: The subsampling probability. Assumed to be in (0, 1).
+        T: The total number of steps. Assumed to be a positive integer.
 
     Returns:
         A 1D array representing the adjusted schedule.
     """
-    if mu <= 0:
-        raise ValueError("mu must be positive")
-    if p <= 0 or p > 1:
-        raise ValueError("p must be in (0, 1]")
-    if T <= 0:
-        raise ValueError("T must be positive")
-    if len(schedule.squeeze().shape) != 1 or schedule.size != T:
-        raise ValueError(f"schedule must be a 1D array of length T, got shape {schedule.shape}")
-    if not jnp.isclose(jnp.sum(schedule), 1.0, atol=1e-6):
-        raise ValueError("schedule must sum to 1")
     
     return jnp.sqrt(jnp.log(schedule * mu ** 2 / (p ** 2 * T) + 1))
 
@@ -63,13 +53,11 @@ def gdp_to_sigma(mu: chex.Array) -> chex.Array:
     """Convert GDP mu parameter to Gaussian noise scale sigma.
 
     Args:
-        mu: The mu parameter of GDP.
+        mu: The mu parameter of GDP. Assumed to be a non-negative array.
 
     Returns:
         The Gaussian noise scale sigma.
     """
-    if jnp.any(mu <= 0):
-        raise ValueError("mu must be positive")
     
     return 1 / mu
 
