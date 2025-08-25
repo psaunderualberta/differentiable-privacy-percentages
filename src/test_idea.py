@@ -1,6 +1,5 @@
 from conf.singleton_conf import SingletonConfig
 from jax import random as jr, vmap, numpy as jnp, jit, value_and_grad, grad, debug, nn as jnn, lax
-from functools import partial
 from networks.net_factory import net_factory
 import chex
 from typing import Tuple
@@ -22,7 +21,7 @@ def main():
     print("Starting...")
 
     # Initialize Policy model
-    policy_input = jnp.ones((10, 1))
+    policy_input = jnp.ones((1, 1))
     policy_model = net_factory(
         input_shape=policy_input.shape,
         output_shape=(1, environment_config.max_steps_in_episode),
@@ -54,11 +53,17 @@ def main():
 
     def apply_actions(actions, x, key):
         """Applies a sequence of GD updates"""
-        for action in actions:
+
+        def loop_scan(carry, action):
+            x, key = carry
             key, _key = jr.split(key)
             y, x_grad = mb_standin(x)
             x_grad = x_grad + jr.normal(_key, x_grad.shape) * action
             x = x - 0.1 * x_grad
+
+            return (x, key), y
+        
+        (x, _), _ = lax.scan(loop_scan, (x, key), actions)
         
         return mb_standin(x)[0]
 
@@ -66,13 +71,13 @@ def main():
     def get_policy_loss(policy, policy_input, key) -> Tuple[chex.Array, chex.Array]:
         """Calculate the policy loss."""
         # Ensure positive actions
-        actions = pipeline(vmap(policy)(policy_input))
+        actions = pipeline(vmap(policy)(policy_input)).squeeze()
 
         key, _key = jr.split(key)
         keys = jr.split(key, policy_input.shape[0])
-        initial_x = jr.uniform(_key, minval=-1, maxval=1, shape=(keys.shape[0],))
+        initial_x = jr.uniform(_key, minval=-1, maxval=-1+1e-5, shape=(keys.shape[0],))
 
-        return vmap(apply_actions)(actions, initial_x, keys).mean()
+        return vmap(apply_actions, in_axes=(None, 0, 0))(actions, initial_x, keys).mean()
 
     # Initialize optimizer
     optimizer = optax.adam(learning_rate=experiment_config.sweep.policy.lr.min)
@@ -99,7 +104,7 @@ def main():
         logger.log(0, {"iteration": timestep, "loss": loss, "action": new_noise})
 
         iterator.set_description(
-            f"Training Progress - Loss: {loss:.4f}."
+            f"Training Progress - Loss: {loss:.4f}"
         )
 
 
