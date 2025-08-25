@@ -7,6 +7,7 @@ import optax
 import tqdm
 import os
 from util.logger import ExperimentLogger
+from privacy.gdp_privacy import approx_to_gdp, gdp_to_sigma, mu_to_poisson_subsampling_shedule
 
 
 def main():
@@ -34,15 +35,33 @@ def main():
     logger = ExperimentLogger(directories, columns, large_columns)
 
 
-    def normalize_actions(x, order=None, axis=1):
-        return x / jnp.linalg.norm(x, ord=order, axis=axis).reshape(1, -1)
+    epsilon = experiment_config.sweep.env.eps
+    delta = experiment_config.sweep.env.delta
 
-    def positive_actions(x):
+    mu = approx_to_gdp(epsilon, delta)
+    p = experiment_config.sweep.env.batch_size / 60000  # Assuming MNIST dataset size
+    T = environment_config.max_steps_in_episode
+
+    print("Privacy parameters:")
+    print(f"\t(epsilon, delta)-DP: ({epsilon}, {delta})")
+    print(f"\tmu-GDP: {mu}")
+
+
+    def vec_to_simplex(x: chex.Array, order=None, axis=1) -> chex.Array:
+        return x / jnp.linalg.norm(x, ord=1, axis=axis, keepdims=True)
+
+    def positive_actions(x: chex.Array) -> chex.Array:
         return jnn.softplus(x)
 
-    def pipeline(x):
+    def simplex_to_noise_schedule(x: chex.Array) -> chex.Array:
+        """Convert a simplex vector to a noise schedule."""
+        mu_schedule = mu_to_poisson_subsampling_shedule(mu, x, p, T)
+        return gdp_to_sigma(mu_schedule)
+
+    def pipeline(x: chex.Array) -> chex.Array:
         x = positive_actions(x)
-        x = normalize_actions(x)
+        x = vec_to_simplex(x)
+        x = simplex_to_noise_schedule(x)
         return x
 
     @value_and_grad
