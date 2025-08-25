@@ -12,7 +12,10 @@ import chex
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import jax.random as jr
 from gymnax.environments import spaces
+import optax
+from util.util import reinit_model, dp_cce_loss_poisson, add_spherical_noise, subset_classification_accuracy
 
 from environments.action_envs import ActionTaker, ActionTakers
 from environments.obs_envs import ObservationMaker, ObservationMakers
@@ -97,3 +100,57 @@ class DP_RL(eqx.Module):
     def observation_space(self, params: DP_RL_Params) -> spaces.Box | spaces.Discrete:
         """Observation space of the environment."""
         return self.obs_obj.observation_space(params)
+
+
+def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex.PRNGKey) -> Tuple[
+    eqx.Module, chex.Array, chex.Array
+]:
+    # Create key
+    key, _key = jr.split(key)
+
+    # Create network
+    network = reinit_model(params.network, _key)
+
+    # Create grads
+    key, _key = jr.split(key)
+    loss, grads, average_grads = dp_cce_loss_poisson(
+        network, params.X, params.y, _key, params.dummy_batch, params.C
+    )
+
+    optimizer = optax.adam(params.lr)
+
+    def training_step(carry, noise) -> Tuple[
+        Tuple[eqx.Module, eqx.Module, optax.OptState, chex.PRNGKey],
+    Tuple[chex.Array, chex.Array]]:
+        model, grads, opt_state, loop_key = carry
+
+        # Add spherical noise to gradients
+        loop_key, _used_key = jr.split(loop_key)
+        noised_grads = add_spherical_noise(grads, noise, _used_key)
+
+        # Add noisy gradients, update model and optimizer
+        updates, new_opt_state = optimizer.update(
+            noised_grads, opt_state, eqx.filter(model, eqx.is_array)
+        )
+        new_model = eqx.apply_updates(model, updates)
+
+        # Subsample each with probability p
+        loop_key, _used_key = jr.split(loop_key)
+        new_loss, new_grads, average_grads = dp_cce_loss_poisson(
+            new_model, params.X, params.y, _used_key, params.dummy_batch, params.C
+        )
+        loop_key, _used_key = jr.split(loop_key)
+        accuracy = subset_classification_accuracy(
+            new_model, params.X, params.y, 0.01, _used_key
+        )
+
+        return (new_model, new_grads, new_opt_state, loop_key), (new_loss, accuracy)
+
+    initial_carry = (network, grads, optimizer.init(eqx.filter(network, eqx.is_array)), key)
+    (network, grads, _, _), (losses, accuracies) = jax.lax.scan(
+        training_step,
+        initial_carry,
+        xs=noise_schedule,
+    )
+
+    return network, losses, accuracies

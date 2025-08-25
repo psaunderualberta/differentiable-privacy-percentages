@@ -18,6 +18,8 @@ from util.aggregators import (
     min_loss_aggregator,
     std_loss_aggregator,
     actions_plotter,
+    losses_plotter,
+    accuracy_plotter
 )
 
 import wandb
@@ -43,7 +45,11 @@ class ExperimentLogger(eqx.Module):
         self.large_columns = large_columns
         self.aggregators = [mean_loss_aggregator]
 
-        self.plotters = [actions_plotter]
+        self.plotters = [
+            actions_plotter,
+            losses_plotter,
+            accuracy_plotter,
+        ]
 
         # self.baseline_plotters = []
 

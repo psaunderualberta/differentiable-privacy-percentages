@@ -11,7 +11,6 @@ from environments.dp_params import DP_RL_Params
 from environments.dp_state import DP_RL_State
 from jax import vmap
 
-from privacy.privacy import PrivacyAccountantState
 from util.util import (add_spherical_noise, dp_cce_loss_poisson, reinit_model,
                        subset_classification_accuracy)
 
@@ -128,7 +127,6 @@ class PrivateStepTaker(StepTaker):
         loss, grads, average_grads = dp_cce_loss_poisson(
             network, params.X, params.y, _key, params.dummy_batch, params.C
         )
-        reward = jnp.zeros_like(loss)
 
         key, _key = jr.split(key)
         accuracy = subset_classification_accuracy(

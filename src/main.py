@@ -1,18 +1,20 @@
 from conf.singleton_conf import SingletonConfig
-from jax import random as jr, vmap, numpy as jnp, jit, value_and_grad, debug
+from jax import random as jr, vmap, pmap, numpy as jnp, jit, value_and_grad, debug, devices
 from functools import partial
 from util.dataloaders import DATALOADERS
 from networks.net_factory import net_factory
-from networks.nets import MLP
-from environments.dp import DP_RL
 from environments.dp_params import DP_RL_Params
-from environments.dp_state import DP_RL_State
 import chex
-from typing import Tuple, Dict, Any
 import optax
 import tqdm
-import logging
-logger = logging.getLogger(__name__)
+import wandb
+import os
+from util.logger import ExperimentLogger
+from privacy.gdp_privacy import approx_to_gdp, gdp_to_sigma, mu_to_poisson_subsampling_shedule
+from util.util import determine_optimal_num_devices
+from typing import Tuple
+from jax import nn as jnn
+from environments.dp import train_with_noise
 
 
 def main():
@@ -24,14 +26,15 @@ def main():
     total_timesteps = experiment_config.total_timesteps
     env_prng_seed = experiment_config.env_prng_seed
 
-    logger.info("Starting...")
+    print("Starting...")
 
     # Initialize dataset
     X, y = DATALOADERS[experiment_config.dataset](experiment_config.dataset_poly_d)
-    logger.info(f"Dataset shape: {X.shape}, {y.shape}")
+    print(f"Dataset shape: {X.shape}, {y.shape}")
 
     # Initialize Policy model
-    policy_input = jnp.ones((1, 1))
+    policy_input = jnp.ones((1,1))
+    policy_batch_size = sweep_config.policy.batch_size
     policy_model = net_factory(
         input_shape=policy_input.shape,
         output_shape=(1, environment_config.max_steps_in_episode),
@@ -52,27 +55,60 @@ def main():
         y=y,
     )
 
-    env = DP_RL(
-        step_taker=environment_config.step_taker,
-        action_taker=environment_config.action_taker,
-        obs_maker=environment_config.obs_maker,
-        params=env_params,
-    )
+    directories = [os.path.join(".", "logs", "0")]
+    columns = ["step", "loss", "actions", "losses", "accuracies"]
+    large_columns = ["actions", "losses", "accuracies"]
+    logger = ExperimentLogger(directories, columns, large_columns)
+
+
+    epsilon = experiment_config.sweep.env.eps
+    delta = experiment_config.sweep.env.delta
+
+    mu = approx_to_gdp(epsilon, delta)
+    p = experiment_config.sweep.env.batch_size / X.shape[0]  # Assuming MNIST dataset size
+    T = environment_config.max_steps_in_episode
+
+    print("Privacy parameters:")
+    print(f"\t(epsilon, delta)-DP: ({epsilon}, {delta})")
+    print(f"\tmu-GDP: {mu}")
+
+    gpus = devices('gpu')[:policy_batch_size]
+
+    def vec_to_simplex(x: chex.Array, order=None, axis=1) -> chex.Array:
+        return x / jnp.linalg.norm(x, ord=1, keepdims=True)
+
+    def positive_actions(x: chex.Array) -> chex.Array:
+        return jnn.softplus(x)
+
+    def simplex_to_noise_schedule(x: chex.Array) -> chex.Array:
+        """Convert a simplex vector to a noise schedule."""
+        mu_schedule = mu_to_poisson_subsampling_shedule(mu, x, p, T)
+        return gdp_to_sigma(mu_schedule)
+
+    @vmap
+    def pipeline(x: chex.Array) -> chex.Array:
+        x = positive_actions(x)
+        x = vec_to_simplex(x)
+        x = simplex_to_noise_schedule(x)
+        return x
+
 
     @partial(value_and_grad, has_aux=True)
-    def get_policy_loss(policy, policy_input, state, key) -> Tuple[chex.Array, Tuple[DP_RL_State, chex.Array]]:
+    def get_policy_loss(policy, policy_input, key) -> Tuple[chex.Array, Tuple[chex.Array, chex.Array]]:
         """Calculate the policy loss."""
-        policy_output = policy(policy_input[0])
+        # Ensure positive actions
+        policy_output = vmap(policy)(policy_input)
+        actions = pipeline(policy_output).squeeze()
 
-        _, final_state, _, _, actions = env.step_env(
-            key, state, policy_output, env_params, return_action=True
-        )
+        keys = jr.split(key, policy_batch_size)
+        vmapped_twn = pmap(train_with_noise, in_axes=(None, None, 0), devices=gpus)
+        _, losses, accuracies = vmapped_twn(actions, env_params, keys)
+        return jnp.mean(losses[:, -1]), (losses[0, :], accuracies[0, :])
 
-        return final_state.loss, (final_state, actions)
 
+    # Initialize optimizer    @partial(value_and_grad, has_aux=True)
 
-    # Initialize optimizer
-    optimizer = optax.sgd(learning_rate=experiment_config.sweep.policy.lr.min)
+    optimizer = optax.adam(learning_rate=experiment_config.sweep.policy.lr.min)
     opt_state = optimizer.init(policy_model) # type: ignore
 
     iterator = tqdm.tqdm(
@@ -81,30 +117,50 @@ def main():
         total=total_timesteps
     )
 
+    key = jr.PRNGKey(env_prng_seed)
     for timestep in iterator:
         # Generate random key for the current timestep
-        key = jr.PRNGKey(env_prng_seed + timestep)
-
-        # Reset environment
-        _, state = env.reset_env(key, env_params)
+        key, _ = jr.split(key)
 
         # Get policy loss
-        (loss, (final_state, actions)), grads = get_policy_loss(policy_model, policy_input, state, key) # type: ignore
-
-        logger.info(grads.layers[0][0].weight)
-        logger.info(grads.layers[0][0].bias)
-        logger.info(actions)
+        (loss, (losses, accuracies)), grads = get_policy_loss(policy_model, policy_input, key) # type: ignore
 
         # Update policy model
         updates, opt_state = optimizer.update(grads, opt_state, policy_model)  # type: ignore
         policy_model = optax.apply_updates(policy_model, updates) # type: ignore
 
+        new_noise = pipeline(vmap(policy_model)(policy_input))[0] # type: ignore
+        logger.log(0, {"step": timestep, "loss": loss, "actions": new_noise, "losses": losses, "accuracies": accuracies})
+
         iterator.set_description(
             f"Training Progress - Loss: {loss:.4f}"
         )
 
-        exit()
+    # Log to wandb, if enabled
+    if wandb_config.mode != "disabled":
+        run_ids = []
+        log_to_wandb = (wandb_config.mode != "disabled")
+        with wandb.init(
+            project=wandb_config.project,
+            entity=wandb_config.entity,
+            config={
+                "policy": sweep_config.policy.to_wandb(),
+                "env": sweep_config.env.to_wandb(),
+            },
+            mode=wandb_config.mode,
+        ) as run:
+            run_ids.append(run.id)
+            logger.create_plots(0, log_to_wandb=log_to_wandb, with_baselines=sweep_config.with_baselines)
+            logger.get_csv(0, log_to_wandb=log_to_wandb)
 
+        # sweep
+        # print(run_ids)
+        # wandb.sweep(
+        #     sweep_config.to_wandb(),
+        #     project=wandb_config.project,
+        #     entity=wandb_config.entity,
+        #     prior_runs=run_ids
+        # )
 
 
 if __name__ == "__main__":

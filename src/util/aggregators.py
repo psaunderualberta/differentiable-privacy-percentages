@@ -65,25 +65,25 @@ def std_accuracy_aggregator(df: pd.DataFrame) -> Tuple[pd.Series, pd.Series, str
 ### ---
 
 
-def actions_plotter(df: pd.DataFrame) -> go.Figure:
-    return _actions_plotter(df, "actions")
+def actions_plotter(df: pd.DataFrame, timesteps: Optional[list[int]] = None) -> go.Figure:
+    return _actions_plotter(df, "actions", timesteps)
 
 
-def lr_plotter(df: pd.DataFrame) -> go.Figure:
-    return _actions_plotter(df, "lrs")
+def lr_plotter(df: pd.DataFrame, timesteps: Optional[list[int]] = None) -> go.Figure:
+    return _actions_plotter(df, "lrs", timesteps)
 
 
-def losses_plotter(df: pd.DataFrame) -> go.Figure:
-    return _actions_plotter(df, "losses")
+def losses_plotter(df: pd.DataFrame, timesteps: Optional[list[int]] = None) -> go.Figure:
+    return _actions_plotter(df, "losses", timesteps)
 
 
-def accuracy_plotter(df: pd.DataFrame) -> go.Figure:
-    return _actions_plotter(df, "accuracies")
+def accuracy_plotter(df: pd.DataFrame, timesteps: Optional[list[int]] = None) -> go.Figure:
+    return _actions_plotter(df, "accuracies", timesteps)
 
 
 def _actions_plotter(df: pd.DataFrame, col_name: str, timesteps: Optional[list[int]] = None) -> go.Figure:
     if timesteps is None:
-        timesteps = df["step"] == df["step"].max()
+        idxs = df["step"] == df["step"].max()
     else:
         idxs = df["step"].isin(timesteps)
     final_df = df[idxs][["step", col_name]]

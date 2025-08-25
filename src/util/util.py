@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Tuple
 
 import chex
 import equinox as eqx
@@ -95,7 +95,7 @@ def dp_mse_loss(model: eqx.Module, x: chex.Array, y: chex.Array, C: float):
     # https://proceedings.neurips.cc/paper_files/paper/2023/file/8249b30d877c91611fd8c7aa6ac2b5fe-Paper-Conference.pdf
     global_grad_norms = jax.vmap(global_norm)(grads)
     gamma = 0.01
-    multipliers = 1 / (global_grad_norms + gamma)
+    multipliers = j1 / (global_grad_norms + gamma)
     sum_clipped = jax.tree.map(
         lambda g: jnp.tensordot(multipliers, g, axes=1), grads_flat
     )
@@ -117,8 +117,7 @@ def dp_cce_loss(model: eqx.Module, x: chex.Array, y: chex.Array, C: float):
 
     # DP optimization as described in https://proceedings.neurips.cc/paper_files/paper/2023/file/8249b30d877c91611fd8c7aa6ac2b5fe-Paper-Conference.pdf
     global_grad_norms = jax.vmap(global_norm)(grads)
-    gamma = 0.01
-    multipliers = 1 / (global_grad_norms + gamma)
+    multipliers = jnp.minimum(1 / global_grad_norms, 1.0)
     sum_clipped = jax.tree.map(
         lambda g: jnp.tensordot(multipliers, g, axes=1), grads_flat
     )
@@ -239,7 +238,7 @@ def reinit_model(model, key):
 
 @eqx.filter_jit
 def add_spherical_noise(
-    grads: jax.Array, action: chex.Array, key: chex.PRNGKey, C: float, batch_size: int
+    grads: jax.Array, action: chex.Array, key: chex.PRNGKey
 ):
     grads_flat, grads_treedef = jax.tree.flatten(grads)
 
@@ -307,7 +306,7 @@ def str_to_jnp_array(s: str, sep: str = ", ", with_brackets: bool = True) -> che
     return jnp.asarray(np.fromstring(s, dtype=float, sep=sep))
 
 
-def determine_optimal_num_devices(devices, num_training_runs, printing=True):
+def determine_optimal_num_devices(devices, num_training_runs, printing=True) -> Tuple[NamedSharding, int]:
     """
     Maximize # of devices s.t. |runs| % |devices| = 0
     (otherwise JAX will throw an error when trying to distribute runs)
@@ -320,4 +319,4 @@ def determine_optimal_num_devices(devices, num_training_runs, printing=True):
     if printing:
         print("Using devices: ", trimmed_devices_)
     mesh = Mesh(trimmed_devices_, ("i",))
-    return NamedSharding(mesh, P("i"))
+    return NamedSharding(mesh, P("i")), len(trimmed_devices_)
