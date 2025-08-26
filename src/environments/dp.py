@@ -117,7 +117,7 @@ def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex
         network, params.X, params.y, _key, params.dummy_batch, params.C
     )
 
-    optimizer = optax.adam(params.lr)
+    optimizer = optax.sgd(params.lr)
 
     def training_step(carry, noise) -> Tuple[
         Tuple[eqx.Module, eqx.Module, optax.OptState, chex.PRNGKey],

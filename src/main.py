@@ -92,7 +92,6 @@ def main():
         x = simplex_to_noise_schedule(x)
         return x
 
-
     @partial(value_and_grad, has_aux=True)
     def get_policy_loss(policy, policy_input, key) -> Tuple[chex.Array, Tuple[chex.Array, chex.Array]]:
         """Calculate the policy loss."""
@@ -104,9 +103,6 @@ def main():
         vmapped_twn = pmap(train_with_noise, in_axes=(None, None, 0), devices=gpus)
         _, losses, accuracies = vmapped_twn(actions, env_params, keys)
         return jnp.mean(losses[:, -1]), (losses[0, :], accuracies[0, :])
-
-
-    # Initialize optimizer    @partial(value_and_grad, has_aux=True)
 
     optimizer = optax.adam(learning_rate=experiment_config.sweep.policy.lr.min)
     opt_state = optimizer.init(policy_model) # type: ignore
