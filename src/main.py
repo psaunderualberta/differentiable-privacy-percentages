@@ -60,7 +60,6 @@ def main():
     large_columns = ["actions", "losses", "accuracies"]
     logger = ExperimentLogger(directories, columns, large_columns)
 
-
     epsilon = experiment_config.sweep.env.eps
     delta = experiment_config.sweep.env.delta
 
@@ -101,8 +100,8 @@ def main():
 
         keys = jr.split(key, policy_batch_size)
         vmapped_twn = pmap(train_with_noise, in_axes=(None, None, 0), devices=gpus)
-        _, losses, accuracies = vmapped_twn(actions, env_params, keys)
-        return jnp.mean(losses[:, -1]), (losses[0, :], accuracies[0, :])
+        _, final_losses, losses, accuracies = vmapped_twn(actions, env_params, keys)
+        return jnp.mean(final_losses), (losses[0, :], accuracies[0, :])
 
     optimizer = optax.adam(learning_rate=experiment_config.sweep.policy.lr.min)
     opt_state = optimizer.init(policy_model) # type: ignore

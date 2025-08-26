@@ -103,26 +103,24 @@ class DP_RL(eqx.Module):
 
 
 def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex.PRNGKey) -> Tuple[
-    eqx.Module, chex.Array, chex.Array
+    eqx.Module, chex.Array, chex.Array, chex.Array
 ]:
     # Create key
     key, _key = jr.split(key)
 
     # Create network
     network = reinit_model(params.network, _key)
-
-    # Create grads
-    key, _key = jr.split(key)
-    loss, grads, average_grads = dp_cce_loss_poisson(
-        network, params.X, params.y, _key, params.dummy_batch, params.C
-    )
-
     optimizer = optax.sgd(params.lr)
 
     def training_step(carry, noise) -> Tuple[
-        Tuple[eqx.Module, eqx.Module, optax.OptState, chex.PRNGKey],
+        Tuple[eqx.Module, optax.OptState, chex.PRNGKey],
     Tuple[chex.Array, chex.Array]]:
-        model, grads, opt_state, loop_key = carry
+        model, opt_state, loop_key = carry
+
+        loop_key, _key = jr.split(loop_key)
+        new_loss, grads, average_grads = dp_cce_loss_poisson(
+            model, params.X, params.y, _key, params.dummy_batch, params.C
+        )
 
         # Add spherical noise to gradients
         loop_key, _used_key = jr.split(loop_key)
@@ -136,21 +134,22 @@ def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex
 
         # Subsample each with probability p
         loop_key, _used_key = jr.split(loop_key)
-        new_loss, new_grads, average_grads = dp_cce_loss_poisson(
-            new_model, params.X, params.y, _used_key, params.dummy_batch, params.C
-        )
         loop_key, _used_key = jr.split(loop_key)
         accuracy = subset_classification_accuracy(
             new_model, params.X, params.y, 0.01, _used_key
         )
 
-        return (new_model, new_grads, new_opt_state, loop_key), (new_loss, accuracy)
+        return (new_model, new_opt_state, loop_key), (new_loss, accuracy)
 
-    initial_carry = (network, grads, optimizer.init(eqx.filter(network, eqx.is_array)), key)
-    (network, grads, _, _), (losses, accuracies) = jax.lax.scan(
+    initial_carry = (network, optimizer.init(eqx.filter(network, eqx.is_array)), key)
+    (network, _, loop_key), (losses, accuracies) = jax.lax.scan(
         training_step,
         initial_carry,
         xs=noise_schedule,
     )
 
-    return network, losses, accuracies
+    final_loss, _, _ = dp_cce_loss_poisson(
+        network, params.X, params.y, loop_key, params.dummy_batch, params.C
+    )
+
+    return network, final_loss, losses, accuracies
