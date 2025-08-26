@@ -1,3 +1,4 @@
+import os
 from conf.singleton_conf import SingletonConfig
 from jax import random as jr, vmap, pmap, numpy as jnp, jit, value_and_grad, debug, devices
 from functools import partial
@@ -71,10 +72,11 @@ def main():
     print(f"\t(epsilon, delta)-DP: ({epsilon}, {delta})")
     print(f"\tmu-GDP: {mu}")
 
-    gpus = devices('gpu')[:policy_batch_size]
+    _, num_gpus = determine_optimal_num_devices(devices('gpu'), policy_batch_size)
+    gpus = devices('gpu')[:num_gpus]
 
-    def vec_to_simplex(x: chex.Array, order=None, axis=1) -> chex.Array:
-        return x / jnp.linalg.norm(x, ord=1, keepdims=True)
+    def vec_to_simplex(x: chex.Array, order=1) -> chex.Array:
+        return x / jnp.linalg.norm(x, ord=order, keepdims=True)
 
     def positive_actions(x: chex.Array) -> chex.Array:
         return jnn.softplus(x)
@@ -86,10 +88,9 @@ def main():
 
     @vmap
     def pipeline(x: chex.Array) -> chex.Array:
-        x = positive_actions(x)
-        x = vec_to_simplex(x)
-        x = simplex_to_noise_schedule(x)
-        return x
+        pax = positive_actions(x)
+        vsx = vec_to_simplex(pax)
+        return simplex_to_noise_schedule(vsx)
 
     @partial(value_and_grad, has_aux=True)
     def get_policy_loss(policy, policy_input, key) -> Tuple[chex.Array, Tuple[chex.Array, chex.Array]]:
@@ -99,9 +100,17 @@ def main():
         actions = pipeline(policy_output).squeeze()
 
         keys = jr.split(key, policy_batch_size)
+        
+        keys = keys.reshape(policy_batch_size // num_gpus, num_gpus, 2)
         vmapped_twn = pmap(train_with_noise, in_axes=(None, None, 0), devices=gpus)
-        _, final_losses, losses, accuracies = vmapped_twn(actions, env_params, keys)
-        return jnp.mean(final_losses), (losses[0, :], accuracies[0, :])
+
+        @partial(vmap, in_axes=(None, None, 0))
+        def pmap_fn(actions, env_params, keys):
+            return vmapped_twn(actions, env_params, keys)
+
+        _, final_losses, losses, accuracies = pmap_fn(actions, env_params, keys)
+
+        return jnp.mean(final_losses), (losses[0, 0, :], accuracies[0, 0, :])
 
     optimizer = optax.adam(learning_rate=experiment_config.sweep.policy.lr.min)
     opt_state = optimizer.init(policy_model) # type: ignore

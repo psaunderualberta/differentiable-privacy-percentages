@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 from pprint import pprint
+import chex
+import numpy as np
 from typing import Dict, Literal
 
 import tyro
@@ -10,6 +12,15 @@ class DistributionConfig:
     min: float  # minimum of distribiution
     max: float  # maximum of distribution
     distribution: str  # type of distribution, in wandb-format (i.e. uniform, log_uniform_values, etc.)
+
+    def sample(self) -> float:
+        if self.distribution == "log_uniform_values":
+            return np.exp(
+                np.random.uniform(low=np.log(self.min), high=np.log(self.max))
+            )
+        
+        return np.random.uniform(low=self.min, high=self.min)
+
 
 
 # wandb cannot create sweeps if any distribution has min >= max
@@ -29,7 +40,7 @@ class MLPConfig:
 
     din: int = -1  # Value is derived from data
     dhidden: int = 32  # Size of hidden layers
-    nhidden: int = 0  # Number of hidden layers
+    nhidden: int = 1  # Number of hidden layers
     nclasses: int = -1  # Value is derived from data
     key: int = 0  # Overridden as derivative from experiment.env_prng_key
 
@@ -83,7 +94,7 @@ class PolicyConfig:
     cnn: CNNConfig  # Configuration for the CNN policy
     mlp: MLPConfig  # Configuration for the MLP policy
     network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to use as policy
-    batch_size: int = 4  # Batch size for policy training
+    batch_size: int = 20  # Batch size for policy training
     lr: DistributionConfig = dist_config_helper(
         min=1e-2, max=1e-2, distribution="log_uniform_values"
     )  # Learning rate of policy network
@@ -123,29 +134,13 @@ class EnvConfig:
         min=0.01, max=0.01, distribution="log_uniform_values"
     )  # Learning rate of private network
 
-    var_low: float = 0.0  # Lower bound of variance
-    var_high: float = 20.0  # Upper bound of variance
-
     # Privacy Parameters
     eps: float = 0.5 # Epsilon privacy parameter
     delta: float = 1e-7  # Delta privacy parameter
     batch_size: int = 512  # Batch size for NN training
-    moments: tuple[int] = (50,)  # The # of moments to use within the moments accountant
-    max_steps_in_episode: int = 100 # Maximum # of steps within an episode
+    max_steps_in_episode: int = 30 # Maximum # of steps within an episode
     C: float = 1.0  # Ignored
-    action: float = (
-        0.0  # Initial action, ignored for algorithms which don't use past actions as input
-    )
     network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to privatize.
-
-    # The type of steps to take.
-    step_taker: Literal["private", "non-private", "averaged-reward", "sticky-actions", "privacy-percentage"] = "privacy-percentage"
-
-    # The type of actions produced by the RL algorithm
-    action_taker: Literal["continuous", "discrete", "squashed", "change", "privacy-percentage"] = "privacy-percentage"
-
-    # The type of observation provided to the RL algorithm.
-    obs_maker: Literal["accuracy", "iteration", "hidden-node-grads"] = "accuracy"
 
     # Derived object, getting the actual network config
     @property
@@ -160,20 +155,13 @@ class EnvConfig:
                     "max": self.lr.max,
                     "distribution": self.lr.distribution,
                 },
-                "var_low": {"value": self.var_low},
-                "var_high": {"value": self.var_high},
                 "eps": {"value": self.eps},
                 "delta": {"value": self.delta},
                 "batch_size": {"value": self.batch_size},
-                "moments": {"value": self.moments},
                 "max_steps_in_episode": {"value": self.max_steps_in_episode},
                 "C": {"value": self.C},
-                "action": {"value": self.action},
                 "network_type": {"value": self.network_type},
                 "network": self.network.to_wandb(),
-                "step_taker": {"value": self.step_taker},
-                "obs_maker": {"value": self.obs_maker},
-                "action_taker": {"value": self.action_taker},
             }
         }
 
@@ -214,7 +202,6 @@ class SweepConfig:
 @dataclass
 class ExperimentConfig:
     sweep: SweepConfig
-    num_envs_per_eval: int = 8  # Number of environment initializations per evaluation
     num_configs: int = 1  # Number of random agent configurations to run
     dataset: Literal["mnist", "california"] = "mnist"  # Dataset on which to privatise
     dataset_poly_d: int | None = None  # Degree of polynomial features to be generated

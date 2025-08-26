@@ -102,6 +102,7 @@ class DP_RL(eqx.Module):
         return self.obs_obj.observation_space(params)
 
 
+@jax.jit
 def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex.PRNGKey) -> Tuple[
     eqx.Module, chex.Array, chex.Array, chex.Array
 ]:
