@@ -104,7 +104,7 @@ class DP_RL(eqx.Module):
 
 @jax.jit
 def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex.PRNGKey) -> Tuple[
-    eqx.Module, chex.Array, chex.Array, chex.Array
+    eqx.Module, chex.Array, chex.Array
 ]:
     # Create key
     key, _key = jr.split(key)
@@ -140,7 +140,7 @@ def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex
             new_model, params.X, params.y, 0.01, _used_key
         )
 
-        return (new_model, new_opt_state, loop_key), (new_loss, accuracy)
+        return (new_model, jax.lax.stop_gradient(new_opt_state), loop_key), (new_loss, accuracy)
 
     initial_carry = (network, optimizer.init(eqx.filter(network, eqx.is_array)), key)
     (network, _, loop_key), (losses, accuracies) = jax.lax.scan(
@@ -153,4 +153,6 @@ def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex
         network, params.X, params.y, loop_key, params.dummy_batch, params.C
     )
 
-    return network, final_loss, losses, accuracies
+    losses = jnp.concat([losses, jnp.asarray([final_loss])])
+
+    return network, losses, accuracies

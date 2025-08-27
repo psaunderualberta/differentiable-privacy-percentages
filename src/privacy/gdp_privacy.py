@@ -1,7 +1,9 @@
 import jax.scipy.stats as jstats
 import chex
-from typing import Union
 import jax.numpy as jnp
+import jax.nn as jnn
+from jax import vmap
+from functools import partial
 
 def approx_to_gdp(eps: float, delta: float, tol: float = 1e-6) -> float:
     """Convert (eps, delta)-DP to GDP.
@@ -60,6 +62,21 @@ def gdp_to_sigma(mu: chex.Array) -> chex.Array:
     """
     
     return 1 / mu
+
+
+@partial(vmap, in_axes=(0, None, None, None))
+def vec_to_mu_schedule(vec: chex.Array, mu, p, T):
+    """Convert a vector of arbitrary reals into a noise schedule for use in NoisySGD
+
+    Args:
+        mu: The mu parameter of GDP. Assumed to be a non-negative array.
+
+    Returns:
+        The Gaussian noise scale sigma.
+    """
+    vec = jnn.softmax(vec)
+    mu_schedule = mu_to_poisson_subsampling_shedule(mu, vec, p, T)
+    return gdp_to_sigma(mu_schedule)
 
 
 def test_approx_to_gdp():

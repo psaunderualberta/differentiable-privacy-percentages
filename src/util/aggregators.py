@@ -72,7 +72,6 @@ def actions_plotter(df: pd.DataFrame, timesteps: Optional[list[int]] = None) -> 
 def lr_plotter(df: pd.DataFrame, timesteps: Optional[list[int]] = None) -> go.Figure:
     return _actions_plotter(df, "lrs", timesteps)
 
-
 def losses_plotter(df: pd.DataFrame, timesteps: Optional[list[int]] = None) -> go.Figure:
     return _actions_plotter(df, "losses", timesteps)
 
@@ -86,22 +85,26 @@ def _actions_plotter(df: pd.DataFrame, col_name: str, timesteps: Optional[list[i
         idxs = df["step"] == df["step"].max()
     else:
         idxs = df["step"].isin(timesteps)
-    final_df = df[idxs][["step", col_name]]
+    final_df = df[idxs][["step", "batch_idx", col_name]]
     final_df[col_name] = final_df[col_name].apply(str_to_jnp_array)
-    final_df[col_name] = final_df[col_name].apply(lambda arr: arr[~jnp.isnan(arr)])
+
+    final_df["step"] = [
+        list(range(final_df[col_name].iloc[-1].size))
+        for _ in range(len(final_df))
+    ]
 
     # Flatten actions into a single list
     final_df = (
         final_df
-        .explode(col_name)
+        .explode(['step', col_name])
         .reset_index(drop=True)
-        .pivot(columns="step", values=col_name)
     )
 
     fig = px.line(
         final_df,
-        x=final_df.index,
-        y=final_df.columns,
+        x="step",
+        y=col_name,
+        color="batch_idx",
     )
 
     fig.update_layout(

@@ -7,6 +7,8 @@ import equinox as eqx
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from typing import Optional
+from util.baselines import Baseline
 
 from util.aggregators import (
     max_accuracy_aggregator,
@@ -30,7 +32,7 @@ class ExperimentLogger(eqx.Module):
     large_columns: List[str]
     aggregators: List[Callable[[pd.DataFrame], Tuple[pd.Series, pd.Series, str]]]
     plotters: List[Callable[[pd.DataFrame], go.Figure]]
-    # baseline_plotters: List[Callable[[RewardAnalyzer, pd.DataFrame], go.Figure]]
+    baseline_plotters: List[Callable[[Baseline, pd.DataFrame], go.Figure]]
 
     def __init__(
         self,
@@ -51,7 +53,10 @@ class ExperimentLogger(eqx.Module):
             accuracy_plotter,
         ]
 
-        # self.baseline_plotters = []
+        self.baseline_plotters = [
+            Baseline.baseline_comparison_accuracy_plotter,
+            Baseline.baseline_comparison_final_loss_plotter,
+        ]
 
         for pos, directory in enumerate(directories):
             # create folder if it doesn't exist
@@ -106,7 +111,7 @@ class ExperimentLogger(eqx.Module):
         plotters: List[Callable[[pd.DataFrame], go.Figure]] = [],
         log_to_wandb: bool = False,
         return_aggregates=False,
-        with_baselines: bool = False,
+        baseline: Optional[Baseline] = None,
         show: bool = False,
     ) -> Dict[str, go.Figure]:
 
@@ -151,15 +156,13 @@ class ExperimentLogger(eqx.Module):
             if log_to_wandb:
                 wandb.log({plotter_name: fig})
 
-        # Expensive computations, only do if instructed
-        if with_baselines:
-            reward_analyzer = RewardAnalyzer(env_config['lr'])
+        if baseline is not None:
             for plotter in self.baseline_plotters:
                 # Only change, creating a reward_analyzer w/ this specific config
                 plotter_name = " ".join(
                     [str.capitalize(s) for s in plotter.__name__.split("_")][:-1]
                 )
-                fig = plotter(reward_analyzer, df)
+                fig = plotter(baseline, df)
 
                 if log_to_wandb:
                     wandb.log({plotter_name: fig}) 
