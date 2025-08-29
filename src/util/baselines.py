@@ -85,7 +85,9 @@ class Baseline:
     def generate_baseline_data(self):
         T = self.env_params.max_steps_in_episode
         weights = jnp.ones((1, T,)) / T
+        assert jnp.isclose(jnp.sum(weights), 1.0, 1e-5), f"{jnp.sum(weights)}, {T}"
         sigmas = vec_to_mu_schedule(weights, self.mu, self.p, T).squeeze()
+        self.sigma = float(sigmas[0])  # type: ignore
 
         df = pd.DataFrame(columns=self.columns)
 
@@ -94,7 +96,7 @@ class Baseline:
             key, _key = jr.split(key)
             _, losses, accuracies = train_with_noise(sigmas, self.env_params, _key)
             df.loc[len(df)] = {  # type: ignore
-                "type": "Constant Noise",
+                "type": f"Constant Noise ({round(self.sigma, 2)})",
                 "step": 0,  # only recording one step for these
                 "loss": losses[-1],
                 "accuracy": accuracies[-1],

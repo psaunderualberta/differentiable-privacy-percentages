@@ -94,9 +94,9 @@ class PolicyConfig:
     cnn: CNNConfig  # Configuration for the CNN policy
     mlp: MLPConfig  # Configuration for the MLP policy
     network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to use as policy
-    batch_size: int = 1  # Batch size for policy training
+    batch_size: int = 4  # Batch size for policy training
     lr: DistributionConfig = dist_config_helper(
-        min=1e-3, max=1e-3, distribution="log_uniform_values"
+        min=2 * 1e-3, max=2 * 1e-3, distribution="log_uniform_values"
     )  # Learning rate of policy network
 
 
@@ -137,8 +137,8 @@ class EnvConfig:
     # Privacy Parameters
     eps: float = 0.5 # Epsilon privacy parameter
     delta: float = 1e-7  # Delta privacy parameter
-    batch_size: int = 512  # Batch size for NN training
-    max_steps_in_episode: int = 30 # Maximum # of steps within an episode
+    batch_size: int = 250  # Batch size for NN training
+    max_steps_in_episode: int = 100 # Maximum # of steps within an episode
     C: float = 1.0  # Ignored
     network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to privatize.
 
@@ -173,6 +173,7 @@ class SweepConfig:
     method: str = "random"  # The wandb search method
     metric_name: str = "Mean Accuracy"  # The metric for wandb to optimize
     metric_goal: str = "maximize"  # The wandb optimization goal
+    plotting_steps: int = 10
     name: str | None = None  # The (optional) name of the wandb sweep
     description: str | None = None  # The (optional) description of the wandb sweep
     with_baselines: bool = False  # Flag to compute plots comparing against baseline (Expensive, default is False)

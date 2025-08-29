@@ -9,6 +9,7 @@ from networks.nets import MLP
 import chex
 import optax
 import tqdm
+import numpy as np
 import wandb
 from util.logger import ExperimentLogger
 from privacy.gdp_privacy import approx_to_gdp, vec_to_mu_schedule
@@ -93,13 +94,12 @@ def main():
             return vmapped_twn(actions, env_params, keys)
 
         _, losses, accuracies = pmap_fn(actions, env_params, keys)
-        final_losses = losses[:, :, -1]
         losses = losses.reshape(-1, T + 1)
         accuracies = accuracies.reshape(-1, T)
 
-        return jnp.mean(final_losses), (losses, accuracies)
+        return jnp.mean(losses[:, -1]), (losses, accuracies)
 
-    optimizer = optax.adam(learning_rate=experiment_config.sweep.policy.lr.min)
+    optimizer = optax.adamw(learning_rate=experiment_config.sweep.policy.lr.min)
     opt_state = optimizer.init(policy_model) # type: ignore
 
     iterator = tqdm.tqdm(
@@ -114,10 +114,10 @@ def main():
         key, _ = jr.split(key)
 
         # Get policy loss
-        (loss, (losses, accuracies)), grads = get_policy_loss(policy_model, policy_input, key) # type: ignore
-
+        (loss, (losses, accuracies)), grads = get_policy_loss(policy_model, policy_input, key)
+        
         # Update policy model
-        updates, opt_state = optimizer.update(grads, opt_state, policy_model)  # type: ignore
+        updates, opt_state = optimizer.update(grads, opt_state, policy_model)
         policy_model: MLP = optax.apply_updates(policy_model, updates) # type: ignore
 
         policy_out = vmap(policy_model)(policy_input)
@@ -138,9 +138,32 @@ def main():
             f"Training Progress - Loss: {loss:.4f}"
         )
 
+        if np.isnan(loss):
+            print("NaN loss encountered. Stopping early")
+            break
+
+
+    # Generate final results iwth lots of iterations
+    policy_out = vmap(policy_model)(policy_input)
+    actions = vec_to_mu_schedule(policy_out, mu, p, T).squeeze() # type: ignore
+    num_iterations = 100
+    for i in tqdm.tqdm(range(num_iterations), total=num_iterations, desc="Evaluating Policy"):
+        key, _key = jr.split(key)
+        _, losses, accuracies = train_with_noise(actions, env_params, _key)
+        loss = losses[-1]
+        accuracy = accuracies[-1]
+        logger.log(0, {"step": total_timesteps,
+                "batch_idx": i,
+                "loss": loss,
+                "accuracy" : accuracy,
+                "actions": actions,
+                "losses": losses,
+                "accuracies": accuracies,
+        })
+
     # Generate baseline if directed
     if experiment_config.sweep.with_baselines:
-        baseline = Baseline(env_params, mu, 8)
+        baseline = Baseline(env_params, mu, num_iterations)
         baseline.generate_baseline_data()
     else:
         baseline = None

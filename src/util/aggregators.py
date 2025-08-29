@@ -6,6 +6,8 @@ import plotly.express as px
 from pprint import pprint
 import plotly.graph_objects as go
 from typing import Optional
+import numpy as np
+from conf.singleton_conf import SingletonConfig
 
 from util.util import str_to_jnp_array
 
@@ -66,45 +68,60 @@ def std_accuracy_aggregator(df: pd.DataFrame) -> Tuple[pd.Series, pd.Series, str
 
 
 def actions_plotter(df: pd.DataFrame, timesteps: Optional[list[int]] = None) -> go.Figure:
-    return _actions_plotter(df, "actions", timesteps)
+    batches = [df["batch_idx"].max()]
+    num_training_steps = df["step"].max()
+    plotting_freq = num_training_steps // SingletonConfig.get_experiment_config_instance().sweep.plotting_steps
+    steps_to_log = [i for i in range(0, num_training_steps, plotting_freq)] + [num_training_steps]
+    return _actions_plotter(df, "actions", timesteps=steps_to_log, batches=batches)
 
 
 def lr_plotter(df: pd.DataFrame, timesteps: Optional[list[int]] = None) -> go.Figure:
     return _actions_plotter(df, "lrs", timesteps)
 
 def losses_plotter(df: pd.DataFrame, timesteps: Optional[list[int]] = None) -> go.Figure:
-    return _actions_plotter(df, "losses", timesteps)
+    timesteps = [df["step"].max()]
+    batches = df["batch_idx"].unique()
+    return _actions_plotter(df, "losses", timesteps=timesteps, batches=batches)
 
 
 def accuracy_plotter(df: pd.DataFrame, timesteps: Optional[list[int]] = None) -> go.Figure:
     return _actions_plotter(df, "accuracies", timesteps)
 
 
-def _actions_plotter(df: pd.DataFrame, col_name: str, timesteps: Optional[list[int]] = None) -> go.Figure:
+def _actions_plotter(df: pd.DataFrame, col_name: str, timesteps: Optional[list[int]] = None, batches: Optional[list[int] | np.ndarray] = None) -> go.Figure:
     if timesteps is None:
-        idxs = df["step"] == df["step"].max()
-    else:
-        idxs = df["step"].isin(timesteps)
+        timesteps = [df["step"].max()]
+    if batches is None:
+        batches = df['batch_idx'].unique()
+
+    assert timesteps is not None
+    assert batches is not None
+    assert (len(timesteps) == 1) or (len(batches) == 1), f"len(timesteps) = {len(timesteps)},len(batches) = {len(batches)}"
+    idxs = df["step"].isin(timesteps) & df["batch_idx"].isin(batches)
+
     final_df = df[idxs][["step", "batch_idx", col_name]]
     final_df[col_name] = final_df[col_name].apply(str_to_jnp_array)
 
-    final_df["step"] = [
-        list(range(final_df[col_name].iloc[-1].size))
-        for _ in range(len(final_df))
-    ]
+    final_df["iter"] = final_df.apply(lambda row: list(range(len(row[col_name]))), axis=1)
 
     # Flatten actions into a single list
     final_df = (
         final_df
-        .explode(['step', col_name])
+        .explode(['iter', col_name])
         .reset_index(drop=True)
     )
 
+    color_indicator = None
+    if len(timesteps) > 1:
+        color_indicator = 'step'
+    else:
+        color_indicator = 'batch_idx'
+
     fig = px.line(
         final_df,
-        x="step",
+        x="iter",
         y=col_name,
-        color="batch_idx",
+        color=color_indicator,
     )
 
     fig.update_layout(
