@@ -82,7 +82,7 @@ class Baseline:
         pdf_directory = os.path.join(".", "plots", name + ".pdf")
         fig.write_image(pdf_directory)
 
-    def generate_baseline_data(self):
+    def generate_baseline_data(self, with_progress_bar = True):
         T = self.env_params.max_steps_in_episode
         weights = jnp.ones((1, T,)) / T
         assert jnp.isclose(jnp.sum(weights), 1.0, 1e-5), f"{jnp.sum(weights)}, {T}"
@@ -91,8 +91,16 @@ class Baseline:
 
         df = pd.DataFrame(columns=self.columns)
 
+        iterator = range(self.num_repetitions)
+        if with_progress_bar:
+            iterator = tqdm.tqdm(
+                iterator,
+                desc="Evaluating Baselines",
+                total=self.num_repetitions
+            )
+
         key = jr.PRNGKey(0)
-        for _ in range(self.num_repetitions):
+        for _ in iterator:
             key, _key = jr.split(key)
             _, losses, accuracies = train_with_noise(sigmas, self.env_params, _key)
             df.loc[len(df)] = {  # type: ignore

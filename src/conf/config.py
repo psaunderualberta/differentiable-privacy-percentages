@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from pprint import pprint
-import chex
 import numpy as np
 from typing import Dict, Literal
 
@@ -9,26 +8,43 @@ import tyro
 
 @dataclass(frozen=True)
 class DistributionConfig:
-    min: float  # minimum of distribiution
+    min: float # minimum of distribiution
     max: float  # maximum of distribution
+    value: float  # constant value if distribution == 'constant'
     distribution: str  # type of distribution, in wandb-format (i.e. uniform, log_uniform_values, etc.)
 
     def sample(self) -> float:
-        if self.distribution == "log_uniform_values":
+        if self.distribution == "constant":
+            return self.value
+    
+        elif self.distribution == "log_uniform_values":
             return np.exp(
                 np.random.uniform(low=np.log(self.min), high=np.log(self.max))
             )
         
         return np.random.uniform(low=self.min, high=self.min)
+    
+    def to_wandb(self):
+        if self.distribution == "constant":
+            return {
+                "distribution": self.distribution,
+                "value": self.value
+            }
+
+        return {
+            "min": self.min,
+            "max": self.max,
+            "distribution": self.distribution,
+        },
 
 
 
 # wandb cannot create sweeps if any distribution has min >= max
 # >:(
-def dist_config_helper(min: float, max: float, distribution: str) -> DistributionConfig:
+def dist_config_helper(min: float = 0.0, max: float = 0.0, value: float = 0.0, distribution: str = "constant") -> DistributionConfig:
     if min >= max:
         max += 1e-10
-    return DistributionConfig(min=min, max=max, distribution=distribution)
+    return DistributionConfig(min=min, max=max, value=value, distribution=distribution)
 
 
 # ---
@@ -42,6 +58,7 @@ class MLPConfig:
     dhidden: int = 32  # Size of hidden layers
     nhidden: int = 1  # Number of hidden layers
     nclasses: int = -1  # Value is derived from data
+    initialization: Literal["glorot", "zeros"] = "glorot"
     key: int = 0  # Overridden as derivative from experiment.env_prng_key
 
     def to_wandb(self) -> Dict:
@@ -94,9 +111,9 @@ class PolicyConfig:
     cnn: CNNConfig  # Configuration for the CNN policy
     mlp: MLPConfig  # Configuration for the MLP policy
     network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to use as policy
-    batch_size: int = 4  # Batch size for policy training
+    batch_size: int = 1  # Batch size for policy training
     lr: DistributionConfig = dist_config_helper(
-        min=2 * 1e-3, max=2 * 1e-3, distribution="log_uniform_values"
+        value=1e-2, distribution="constant",
     )  # Learning rate of policy network
 
 
@@ -110,11 +127,7 @@ class PolicyConfig:
             "parameters": {
                 "network_type": {"value": self.network_type},
                 "network": self.network.to_wandb(),
-                "lr": {
-                    "min": self.lr.min,
-                    "max": self.lr.max,
-                    "distribution": self.lr.distribution,
-                },
+                "lr": self.lr.to_wandb(),
             }
         }
 
@@ -131,7 +144,7 @@ class EnvConfig:
     cnn: CNNConfig  # Configuration for the CNN to privatize. Ignored if 'network_type' = mlp
 
     lr: DistributionConfig = dist_config_helper(
-        min=0.01, max=0.01, distribution="log_uniform_values"
+        value=0.01, distribution="constant",
     )  # Learning rate of private network
 
     # Privacy Parameters
@@ -150,11 +163,7 @@ class EnvConfig:
     def to_wandb(self) -> Dict:
         return {
             "parameters": {
-                "lr": {
-                    "min": self.lr.min,
-                    "max": self.lr.max,
-                    "distribution": self.lr.distribution,
-                },
+                "lr": self.lr.to_wandb(),
                 "eps": {"value": self.eps},
                 "delta": {"value": self.delta},
                 "batch_size": {"value": self.batch_size},

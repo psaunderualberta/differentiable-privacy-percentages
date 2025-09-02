@@ -99,7 +99,7 @@ def main():
 
         return jnp.mean(losses[:, -1]), (losses, accuracies)
 
-    optimizer = optax.adamw(learning_rate=experiment_config.sweep.policy.lr.min)
+    optimizer = optax.adamw(learning_rate=experiment_config.sweep.policy.lr.sample())
     opt_state = optimizer.init(policy_model) # type: ignore
 
     iterator = tqdm.tqdm(
@@ -146,8 +146,8 @@ def main():
     # Generate final results iwth lots of iterations
     policy_out = vmap(policy_model)(policy_input)
     actions = vec_to_mu_schedule(policy_out, mu, p, T).squeeze() # type: ignore
-    num_iterations = 100
-    for i in tqdm.tqdm(range(num_iterations), total=num_iterations, desc="Evaluating Policy"):
+    eval_num_iterations = 100
+    for i in tqdm.tqdm(range(eval_num_iterations), total=eval_num_iterations, desc="Evaluating Policy"):
         key, _key = jr.split(key)
         _, losses, accuracies = train_with_noise(actions, env_params, _key)
         loss = losses[-1]
@@ -163,7 +163,7 @@ def main():
 
     # Generate baseline if directed
     if experiment_config.sweep.with_baselines:
-        baseline = Baseline(env_params, mu, num_iterations)
+        baseline = Baseline(env_params, mu, eval_num_iterations)
         baseline.generate_baseline_data()
     else:
         baseline = None

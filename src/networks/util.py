@@ -21,6 +21,26 @@ class Flatten(eqx.Module):
         return jnp.ravel(x)
 
 
+class Linear(eqx.Module):
+    weight: chex.Array
+    bias: chex.Array
+
+    def __init__(self, din, dout, key: chex.PRNGKey, initialization: str = "glorot"):
+        if initialization == "glorot":
+            layer = eqx.nn.Linear(din, dout, key=key)
+            assert layer.bias is not None
+            self.weight = layer.weight
+            self.bias = layer.bias
+        elif initialization == "zeros":
+            self.weight = jnp.zeros((dout, din))
+            self.bias = jnp.zeros((dout,))
+        else:
+            raise ValueError(f"Initialization for Linear Layer '{initialization}' not known")
+
+    def __call__(self, x):
+        return self.weight @ x + self.bias
+
+
 class MaxPool2d(eqx.Module):
     kernel_size: int
     stride: int

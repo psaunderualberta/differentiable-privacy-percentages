@@ -8,7 +8,7 @@ import jax.random as jr
 import optax
 
 from conf.config import MLPConfig
-from networks.util import Network, ReLU
+from networks.util import Network, ReLU, Linear
 
 
 class MLP(eqx.Module, Network):
@@ -22,9 +22,9 @@ class MLP(eqx.Module, Network):
         key = jr.PRNGKey(conf.key)
         key, _key = jr.split(key)
         layer_out = conf.dhidden if conf.nhidden > 0 else conf.nclasses
-        layers: list[list[ReLU | eqx.nn.Linear]] = [
+        layers: list[list[ReLU | Linear]] = [
             [
-                eqx.nn.Linear(conf.din, layer_out, key=_key),
+                Linear(conf.din, layer_out, key=_key, initialization=conf.initialization),
             ]
         ]
 
@@ -34,7 +34,7 @@ class MLP(eqx.Module, Network):
                 layers.append(
                     [
                         ReLU(),
-                        eqx.nn.Linear(conf.dhidden, conf.dhidden, key=_key),
+                        Linear(conf.dhidden, conf.dhidden, key=_key, initialization=conf.initialization),
                     ]
                 )
 
@@ -42,7 +42,7 @@ class MLP(eqx.Module, Network):
             layers.append(
                 [
                     ReLU(),
-                    eqx.nn.Linear(conf.dhidden, conf.nclasses, key=_key),
+                    Linear(conf.dhidden, conf.nclasses, key=_key, initialization=conf.initialization),
                 ]
             )
 
@@ -56,7 +56,7 @@ class MLP(eqx.Module, Network):
         # Using an existing network means that the linear layer sizes are statically known
         new_net_flat = [
             (
-                eqx.nn.Linear(layer.weight.shape[0], layer.weight.shape[1], key=rng)
+                Linear(layer.weight.shape[0], layer.weight.shape[1], key=rng)
                 if hasattr(layer, "weight")
                 else layer
             )

@@ -68,7 +68,7 @@ def std_accuracy_aggregator(df: pd.DataFrame) -> Tuple[pd.Series, pd.Series, str
 
 
 def actions_plotter(df: pd.DataFrame, timesteps: Optional[list[int]] = None) -> go.Figure:
-    batches = [df["batch_idx"].max()]
+    batches = [df["batch_idx"].min()]
     num_training_steps = df["step"].max()
     plotting_freq = num_training_steps // SingletonConfig.get_experiment_config_instance().sweep.plotting_steps
     steps_to_log = [i for i in range(0, num_training_steps, plotting_freq)] + [num_training_steps]
