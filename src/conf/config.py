@@ -113,7 +113,7 @@ class PolicyConfig:
     network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to use as policy
     batch_size: int = 1  # Batch size for policy training
     lr: DistributionConfig = dist_config_helper(
-        value=1e-2, distribution="constant",
+        value=2 * 1e-3, distribution="constant",
     )  # Learning rate of policy network
 
 

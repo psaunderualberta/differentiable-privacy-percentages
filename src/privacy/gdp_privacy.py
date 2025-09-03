@@ -4,6 +4,8 @@ import jax.numpy as jnp
 import jax.nn as jnn
 from jax import vmap
 from functools import partial
+from conf.singleton_conf import SingletonConfig
+from scipy import optimize
 
 def approx_to_gdp(eps: float, delta: float, tol: float = 1e-6) -> float:
     """Convert (eps, delta)-DP to GDP.
@@ -21,18 +23,13 @@ def approx_to_gdp(eps: float, delta: float, tol: float = 1e-6) -> float:
     if eps < 0:
         raise ValueError("epsilon must be non-negative")
 
-    low = 0.0
-    high = 100.0  # Arbitrary upper bound for mu
-
-    while high - low > tol:
-        mid = (low + high) / 2
-        computed_delta = jstats.norm.cdf(-eps/mid + mid/2) - jnp.exp(eps) * jstats.norm.cdf(-eps/mid - mid/2)
-        if computed_delta < delta:
-            low = mid
-        else:
-            high = mid
-    
-    return mid
+    def f(current_mu):
+        current_delta = (
+            jstats.norm.cdf(-eps/current_mu + current_mu/2)
+            - jnp.exp(eps) * jstats.norm.cdf(-eps/current_mu - current_mu/2)
+        )
+        return current_delta-delta    
+    return optimize.root_scalar(f, bracket=[0.01, 100], method='brentq').root
 
 
 def mu_to_poisson_subsampling_shedule(mu: float, schedule: chex.Array, p: float, T: int) -> chex.Array:
@@ -60,8 +57,9 @@ def gdp_to_sigma(mu: chex.Array) -> chex.Array:
     Returns:
         The Gaussian noise scale sigma.
     """
-    
-    return 1 / mu
+
+    C = SingletonConfig.get_environment_config_instance().C
+    return C / mu
 
 
 @partial(vmap, in_axes=(0, None, None, None))
