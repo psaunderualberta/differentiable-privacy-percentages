@@ -1,5 +1,6 @@
 from conf.singleton_conf import SingletonConfig
-from jax import random as jr, vmap, numpy as jnp, jit, value_and_grad, grad, debug, nn as jnn, lax
+from jax import random as jr, vmap, numpy as jnp, jit, value_and_grad, grad, debug, nn as jnn, lax, jvp
+import jax
 from networks.net_factory import net_factory
 import chex
 from typing import Tuple
@@ -88,12 +89,10 @@ def main():
         
         return mb_standin(x)[0]
 
-    @value_and_grad
-    def get_policy_loss(policy, policy_input, key) -> Tuple[chex.Array, chex.Array]:
+    def get_policy_loss(policy, key) -> Tuple[chex.Array, chex.Array]:
         """Calculate the policy loss."""
         # Ensure positive actions
-        policy_output = vmap(policy)(policy_input)
-        actions = vmap(pipeline)(policy_output).squeeze()
+        actions = pipeline(policy).squeeze()
 
         key, _key = jr.split(key)
         keys = jr.split(key, policy_batch_size)
@@ -102,8 +101,9 @@ def main():
         return vmap(apply_actions, in_axes=(None, 0, 0))(actions, initial_x, keys).mean()
 
     # Initialize optimizer
-    optimizer = optax.adam(learning_rate=experiment_config.sweep.policy.lr.min)
-    opt_state = optimizer.init(policy_model) # type: ignore
+    weights = policy_model.layers[0][0].weight.squeeze()
+    optimizer = optax.sgd(learning_rate=experiment_config.sweep.policy.lr.sample())
+    opt_state = optimizer.init(weights) # type: ignore
 
     iterator = tqdm.tqdm(
         range(total_timesteps),
@@ -111,18 +111,24 @@ def main():
         total=total_timesteps
     )
 
+    vggpl = value_and_grad(get_policy_loss)
+    key = jr.PRNGKey(env_prng_seed)
+    tangents = (jnp.eye(weights.size), jnp.zeros_like(key, dtype=jax.dtypes.float0))
+    vmapped_jvp = jit(vmap(jvp, in_axes=(None, (None, None), (1, None))), static_argnums=(0,))
     for timestep in iterator:
         # Generate random key for the current timestep
-        key = jr.PRNGKey(env_prng_seed + timestep)
+        key, _key = jr.split(key)
 
         # Get policy loss
-        loss, grads = get_policy_loss(policy_model, policy_input, key) # type: ignore
+        # loss, grads = vggpl(weights, key) # type: ignore
+        losses, grads = vmapped_jvp(get_policy_loss, (weights, key), tangents)
+        loss = losses[0]
 
         # Update policy model
         updates, opt_state = optimizer.update(grads, opt_state, policy_model)  # type: ignore
-        policy_model = optax.apply_updates(policy_model, updates) # type: ignore
+        weights = optax.apply_updates(weights, updates) # type: ignore
 
-        new_noise = pipeline(vmap(policy_model)(policy_input))[0] # type: ignore
+        new_noise = pipeline(weights).squeeze()
         logger.log(0, {"step": timestep, "loss": loss, "actions": new_noise})
 
         iterator.set_description(
