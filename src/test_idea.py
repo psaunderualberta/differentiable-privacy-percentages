@@ -114,7 +114,7 @@ def main():
     vggpl = value_and_grad(get_policy_loss)
     key = jr.PRNGKey(env_prng_seed)
     tangents = (jnp.eye(weights.size), jnp.zeros_like(key, dtype=jax.dtypes.float0))
-    vmapped_jvp = jit(vmap(jvp, in_axes=(None, (None, None), (1, None))), static_argnums=(0,))
+    vmapped_jvp = jit(vmap(jvp, in_axes=(None, (None, None), (0, None))), static_argnums=(0,))
     for timestep in iterator:
         # Generate random key for the current timestep
         key, _key = jr.split(key)

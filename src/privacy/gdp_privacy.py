@@ -62,7 +62,6 @@ def gdp_to_sigma(mu: chex.Array) -> chex.Array:
     return C / mu
 
 
-@partial(vmap, in_axes=(0, None, None, None))
 def vec_to_mu_schedule(vec: chex.Array, mu, p, T):
     """Convert a vector of arbitrary reals into a noise schedule for use in NoisySGD
 
@@ -72,7 +71,8 @@ def vec_to_mu_schedule(vec: chex.Array, mu, p, T):
     Returns:
         The Gaussian noise scale sigma.
     """
-    vec = jnn.softmax(vec)
+    vec = jnn.softplus(vec)
+    vec = vec / jnp.linalg.norm(vec, ord=1, keepdims=True)
     mu_schedule = mu_to_poisson_subsampling_shedule(mu, vec, p, T)
     return gdp_to_sigma(mu_schedule)
 
