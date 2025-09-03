@@ -1,7 +1,6 @@
 import os
 from conf.singleton_conf import SingletonConfig
-from jax import random as jr, vmap, pmap, numpy as jnp, jit, value_and_grad, debug, devices, jvp
-from jax.dtypes import float0
+from jax import random as jr, vmap, pmap, numpy as jnp, jit, value_and_grad, debug, devices
 from functools import partial
 from util.dataloaders import DATALOADERS
 from networks.net_factory import net_factory
@@ -36,7 +35,7 @@ def main():
     print(f"Dataset shape: {X.shape}, {y.shape}")
 
     # Initialize Policy model
-    policy = jnp.ones((environment_config.max_steps_in_episode,)).squeeze()
+    policy = jnp.ones((environment_config.max_steps_in_episode,))
     policy_batch_size = sweep_config.policy.batch_size
 
     private_network_arch = net_factory(
@@ -73,25 +72,26 @@ def main():
     gpus = devices('gpu')[:num_gpus]
 
 
-    def get_policy_loss(policy, key) -> chex.Array:
+    @partial(value_and_grad, has_aux=True)
+    def get_policy_loss(policy, key) -> Tuple[chex.Array, Tuple[chex.Array, chex.Array]]:
         """Calculate the policy loss."""
         # Ensure positive actions
         actions = vec_to_mu_schedule(policy, mu, p, T).squeeze()
+
+        keys = jr.split(key, policy_batch_size)
         
-        # keys = jr.split(key, policy_batch_size)
-        # keys = keys.reshape(policy_batch_size // num_gpus, num_gpus, 2)
-        # vmapped_twn = pmap(train_with_noise, in_axes=(None, None, 0), devices=gpus)
+        keys = keys.reshape(policy_batch_size // num_gpus, num_gpus, 2)
+        vmapped_twn = pmap(train_with_noise, in_axes=(None, None, 0), devices=gpus)
 
-        # @partial(vmap, in_axes=(None, None, 0))
-        # def pmap_fn(actions, env_params, keys):
-        #     return vmapped_twn(actions, env_params, keys)
+        @partial(vmap, in_axes=(None, None, 0))
+        def pmap_fn(actions, env_params, keys):
+            return vmapped_twn(actions, env_params, keys)
 
-        # _, losses, accuracies = pmap_fn(actions, env_params, keys)
-        _, losses, accuracies = train_with_noise(actions, env_params, key)
+        _, losses, accuracies = pmap_fn(actions, env_params, keys)
         losses = losses.reshape(-1, T + 1)
         accuracies = accuracies.reshape(-1, T)
 
-        return jnp.mean(losses[:, -1])
+        return jnp.mean(losses[:, -1]), (losses, accuracies)
 
     optimizer = optax.adamw(learning_rate=experiment_config.sweep.policy.lr.sample())
     opt_state = optimizer.init(policy) # type: ignore
@@ -103,32 +103,28 @@ def main():
     )
 
     key = jr.PRNGKey(env_prng_seed)
-    tangents = (jnp.eye(policy.size), jnp.zeros_like(key, dtype=float0))
-    vmapped_jvp = jit(vmap(jvp, in_axes=(None, (None, None), (0, None))), static_argnums=(0,))
     for timestep in iterator:
         # Generate random key for the current timestep
         key, _ = jr.split(key)
 
         # Get policy loss
-        # (loss), grads = get_policy_loss(policy, key)
-        losses, grads = vmapped_jvp(get_policy_loss, (policy, key), tangents)
-        loss = losses[0]
-
+        (loss, (losses, accuracies)), grads = get_policy_loss(policy, key)
+        
         # Update policy model
         updates, opt_state = optimizer.update(grads, opt_state, policy)
         policy = optax.apply_updates(policy, updates) # type: ignore
 
         new_noise = vec_to_mu_schedule(policy, mu, p, T)[0] # type: ignore
         for i in range(losses.shape[0]):
-            loss = losses[-1]
-            # accuracy = accuracies[i, -1]
+            loss = losses[i, -1]
+            accuracy = accuracies[i, -1]
             logger.log(0, {"step": timestep,
                             "batch_idx": i,
                             "loss": loss,
-                            "accuracy" : loss,
+                            "accuracy" : accuracy,
                             "actions": new_noise,
-                            "losses": losses,
-                            "accuracies": losses,
+                            "losses": losses[i, :],
+                            "accuracies": accuracies[i, :],
                     })
 
         iterator.set_description(
