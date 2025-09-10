@@ -124,8 +124,7 @@ def dp_cce_loss(model: eqx.Module, x: chex.Array, y: chex.Array, C: float):
 
     return (
         losses.mean(),
-        jax.tree.unflatten(grads_treedef, sum_clipped),
-        global_grad_norms.mean(),
+        jax.tree.unflatten(grads_treedef, sum_clipped)
     )
 
 
@@ -240,17 +239,12 @@ def reinit_model(model, key):
 def add_spherical_noise(
     grads: jax.Array, action: chex.Array, key: chex.PRNGKey
 ):
-    grads_flat, grads_treedef = jax.tree.flatten(grads)
-
-    rngs = jax.random.split(key, len(grads_flat))
-
-    # Add standard normal noise, scaled by 'action' to each gradient
-    noised = [
-        (g + action * jax.random.normal(r, g.shape, g.dtype))
-        for g, r in zip(grads_flat, rngs)
-    ]
-
-    return jax.tree.unflatten(grads_treedef, noised)
+    def add_the_noise(g, k):
+        if g is None:
+            return g
+        normal_noise = jax.random.normal(k, g.shape, g.dtype)
+        return g + action * normal_noise
+    return jt.map(add_the_noise, grads, pytree_keys(grads, key))
 
 
 # @jax.jit

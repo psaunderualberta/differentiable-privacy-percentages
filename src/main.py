@@ -34,8 +34,19 @@ def main():
     X, y = DATALOADERS[experiment_config.dataset](experiment_config.dataset_poly_d)
     print(f"Dataset shape: {X.shape}, {y.shape}")
 
+    epsilon = experiment_config.sweep.env.eps
+    delta = experiment_config.sweep.env.delta
+    mu = approx_to_gdp(epsilon, delta)
+    p = experiment_config.sweep.env.batch_size / X.shape[0]  # Assuming MNIST dataset size
+    T = environment_config.max_steps_in_episode
+    print("Privacy parameters:")
+    print(f"\t(epsilon, delta)-DP: ({epsilon}, {delta})")
+    print(f"\tmu-GDP: {mu}")
+
     # Initialize Policy model
-    policy = jnp.ones((environment_config.max_steps_in_episode,))
+    policy = jnp.ones((T,))
+    policy = optax.projections.projection_simplex(policy, scale=T)
+    actions = vec_to_mu_schedule(policy, mu, p, T).squeeze()
     policy_batch_size = sweep_config.policy.batch_size
 
     private_network_arch = net_factory(
@@ -57,20 +68,8 @@ def main():
     large_columns = ["actions", "losses", "accuracies"]
     logger = ExperimentLogger(directories, columns, large_columns)
 
-    epsilon = experiment_config.sweep.env.eps
-    delta = experiment_config.sweep.env.delta
-
-    mu = approx_to_gdp(epsilon, delta)
-    p = experiment_config.sweep.env.batch_size / X.shape[0]  # Assuming MNIST dataset size
-    T = environment_config.max_steps_in_episode
-
-    print("Privacy parameters:")
-    print(f"\t(epsilon, delta)-DP: ({epsilon}, {delta})")
-    print(f"\tmu-GDP: {mu}")
-
     _, num_gpus = determine_optimal_num_devices(devices('gpu'), policy_batch_size)
     gpus = devices('gpu')[:num_gpus]
-
 
     @partial(value_and_grad, has_aux=True)
     def get_policy_loss(policy, key) -> Tuple[chex.Array, Tuple[chex.Array, chex.Array]]:
@@ -88,10 +87,11 @@ def main():
             return vmapped_twn(actions, env_params, keys)
 
         _, losses, accuracies = pmap_fn(actions, env_params, keys)
+        result = jnp.mean(losses[:, :, -1])
         losses = losses.reshape(-1, T + 1)
         accuracies = accuracies.reshape(-1, T)
 
-        return jnp.mean(losses[:, -1]), (losses, accuracies)
+        return result, (losses, accuracies)
 
     optimizer = optax.adamw(learning_rate=experiment_config.sweep.policy.lr.sample())
     opt_state = optimizer.init(policy) # type: ignore
@@ -112,9 +112,11 @@ def main():
         
         # Update policy model
         updates, opt_state = optimizer.update(grads, opt_state, policy)
+        print(jnp.isnan(grads).sum(), grads.size)
         policy = optax.apply_updates(policy, updates) # type: ignore
+        policy = optax.projections.projection_simplex(policy, scale=T)
 
-        new_noise = vec_to_mu_schedule(policy, mu, p, T)[0] # type: ignore
+        new_noise = vec_to_mu_schedule(policy, mu, p, T).squeeze() # type: ignore
         for i in range(losses.shape[0]):
             loss = losses[i, -1]
             accuracy = accuracies[i, -1]
@@ -133,6 +135,7 @@ def main():
 
         if np.isnan(loss):
             print("NaN loss encountered. Stopping early")
+            exit()
             break
 
 

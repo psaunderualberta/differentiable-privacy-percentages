@@ -35,7 +35,7 @@ def _dataloader_mnist(_=None) -> Tuple[chex.Array, chex.Array]:
         images = dds["image"]
         labels = dds["label"]
         pd_labels = pd.Series(labels).astype(int) # type: ignore
-        labels = jnp.asarray(pd.get_dummies(pd_labels).values).astype(jnp.int32)
+        labels = jnp.asarray(pd.get_dummies(pd_labels).values).astype(jnp.float32)
 
         jnp.save(image_file, images)  # type: ignore
         jnp.save(label_file, labels)

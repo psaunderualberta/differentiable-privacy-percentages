@@ -24,13 +24,8 @@ def main():
     print("Starting...")
 
     # Initialize Policy model
-    policy_input = jnp.ones((1,1))
+    weights = jnp.ones((environment_config.max_steps_in_episode,))
     policy_batch_size = sweep_config.policy.batch_size
-    policy_model = net_factory(
-        input_shape=policy_input.shape,
-        output_shape=(1, environment_config.max_steps_in_episode),
-        conf=sweep_config.policy.network,
-    )
 
     directories = [os.path.join(".", "logs", "0")]
     columns = ["step", "loss", "actions"]
@@ -76,6 +71,7 @@ def main():
     def apply_actions(actions, x, key):
         """Applies a sequence of GD updates"""
 
+        # @jax.checkpoint
         def loop_scan(carry, action):
             x, key = carry
             key, _key = jr.split(key)
@@ -89,10 +85,13 @@ def main():
         
         return mb_standin(x)[0]
 
+    @jit
+    @value_and_grad
     def get_policy_loss(policy, key) -> Tuple[chex.Array, chex.Array]:
         """Calculate the policy loss."""
         # Ensure positive actions
         actions = pipeline(policy).squeeze()
+        actions = policy
 
         key, _key = jr.split(key)
         keys = jr.split(key, policy_batch_size)
@@ -101,7 +100,6 @@ def main():
         return vmap(apply_actions, in_axes=(None, 0, 0))(actions, initial_x, keys).mean()
 
     # Initialize optimizer
-    weights = policy_model.layers[0][0].weight.squeeze()
     optimizer = optax.sgd(learning_rate=experiment_config.sweep.policy.lr.sample())
     opt_state = optimizer.init(weights) # type: ignore
 
@@ -111,24 +109,22 @@ def main():
         total=total_timesteps
     )
 
-    vggpl = value_and_grad(get_policy_loss)
     key = jr.PRNGKey(env_prng_seed)
-    tangents = (jnp.eye(weights.size), jnp.zeros_like(key, dtype=jax.dtypes.float0))
-    vmapped_jvp = jit(vmap(jvp, in_axes=(None, (None, None), (0, None))), static_argnums=(0,))
     for timestep in iterator:
         # Generate random key for the current timestep
         key, _key = jr.split(key)
 
         # Get policy loss
-        # loss, grads = vggpl(weights, key) # type: ignore
-        losses, grads = vmapped_jvp(get_policy_loss, (weights, key), tangents)
-        loss = losses[0]
+        loss, grads = get_policy_loss(weights, key) # type: ignore
+        print((grads == 0.0).sum(), grads.size)
+        print(grads)
+        exit()
 
         # Update policy model
-        updates, opt_state = optimizer.update(grads, opt_state, policy_model)  # type: ignore
+        updates, opt_state = optimizer.update(grads, opt_state, weights)  # type: ignore
         weights = optax.apply_updates(weights, updates) # type: ignore
 
-        new_noise = pipeline(weights).squeeze()
+        new_noise = pipeline(weights).squeeze()  # type: ignore
         logger.log(0, {"step": timestep, "loss": loss, "actions": new_noise})
 
         iterator.set_description(

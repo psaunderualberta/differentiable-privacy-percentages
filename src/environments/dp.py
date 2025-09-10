@@ -113,13 +113,14 @@ def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex
     network = reinit_model(params.network, _key)
     optimizer = optax.sgd(params.lr)
 
+    @jax.checkpoint  # type: ignore
     def training_step(carry, noise) -> Tuple[
         Tuple[eqx.Module, optax.OptState, chex.PRNGKey],
     Tuple[chex.Array, chex.Array]]:
         model, opt_state, loop_key = carry
 
         loop_key, _key = jr.split(loop_key)
-        new_loss, grads, average_grads = dp_cce_loss_poisson(
+        new_loss, grads = dp_cce_loss_poisson(
             model, params.X, params.y, _key, params.dummy_batch, params.C
         )
 
@@ -129,7 +130,7 @@ def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex
 
         # Add noisy gradients, update model and optimizer
         updates, new_opt_state = optimizer.update(
-            noised_grads, opt_state, eqx.filter(model, eqx.is_array)
+            noised_grads, opt_state, model
         )
         new_model = eqx.apply_updates(model, updates)
 
@@ -142,14 +143,14 @@ def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex
 
         return (new_model, new_opt_state, loop_key), (new_loss, accuracy)
 
-    initial_carry = (network, optimizer.init(eqx.filter(network, eqx.is_array)), key)
+    initial_carry = (network, optimizer.init(network), key)
     (network, _, loop_key), (losses, accuracies) = jax.lax.scan(
         training_step,
         initial_carry,
         xs=noise_schedule,
     )
 
-    final_loss, _, _ = dp_cce_loss_poisson(
+    final_loss, _ = dp_cce_loss_poisson(
         network, params.X, params.y, loop_key, params.dummy_batch, params.C
     )
 

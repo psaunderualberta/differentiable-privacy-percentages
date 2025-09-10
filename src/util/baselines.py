@@ -12,6 +12,7 @@ import tqdm
 from environments.dp import DP_RL, DP_RL_Params
 from environments.dp import train_with_noise
 from privacy.gdp_privacy import vec_to_mu_schedule
+import optax
 
 file_location = os.path.abspath(os.path.dirname(__file__))
 
@@ -84,8 +85,9 @@ class Baseline:
 
     def generate_baseline_data(self, with_progress_bar = True):
         T = self.env_params.max_steps_in_episode
-        weights = jnp.ones((1, T,)) / T
-        assert jnp.isclose(jnp.sum(weights), 1.0, 1e-5), f"{jnp.sum(weights)}, {T}"
+        weights = jnp.ones((1, T,))
+        weights = optax.projections.projection_simplex(weights, scale=T)
+        assert jnp.isclose(jnp.sum(weights), T, 1e-5), f"{jnp.sum(weights)}, {T}"
         sigmas = vec_to_mu_schedule(weights, self.mu, self.p, T).squeeze()
         self.sigma = float(sigmas[0])  # type: ignore
 

@@ -215,7 +215,7 @@ class ExperimentConfig:
     num_configs: int = 1  # Number of random agent configurations to run
     dataset: Literal["mnist", "california"] = "mnist"  # Dataset on which to privatise
     dataset_poly_d: int | None = None  # Degree of polynomial features to be generated
-    total_timesteps: int = 1000  # Training steps of RL algorithm
+    total_timesteps: int = 100  # Training steps of RL algorithm
     cfg_prng_seed: int = 42  # RL Agent configuration seed
     env_prng_seed: int = 42  # Environment configuration seed
     log_dir: str = "logs"  # Relative directory in which to log results
