@@ -243,6 +243,8 @@ def add_spherical_noise(
         if g is None:
             return g
         normal_noise = jax.random.normal(k, g.shape, g.dtype)
+        # TODO: NaNs are caused by values > 1 in normal_noise, as they result
+        # in exponential growth in gradient magnitudes for the policy. 
         return g + action * normal_noise
     return jt.map(add_the_noise, grads, pytree_keys(grads, key))
 
