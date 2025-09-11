@@ -12,7 +12,7 @@ import tqdm
 import numpy as np
 import wandb
 from util.logger import ExperimentLogger
-from privacy.gdp_privacy import approx_to_gdp, vec_to_mu_schedule
+from privacy.gdp_privacy import approx_to_gdp, weights_to_sigma_schedule, sigma_schedule_to_weights
 from util.util import determine_optimal_num_devices
 from typing import Tuple
 from environments.dp import train_with_noise
@@ -46,7 +46,7 @@ def main():
     # Initialize Policy model
     policy = jnp.ones((T,))
     policy = optax.projections.projection_simplex(policy, scale=T)
-    actions = vec_to_mu_schedule(policy, mu, p, T).squeeze()
+    actions = weights_to_sigma_schedule(policy, mu, p, T).squeeze()
     policy_batch_size = sweep_config.policy.batch_size
 
     private_network_arch = net_factory(
@@ -72,21 +72,18 @@ def main():
     gpus = devices('gpu')[:num_gpus]
 
     @partial(value_and_grad, has_aux=True)
-    def get_policy_loss(policy, key) -> Tuple[chex.Array, Tuple[chex.Array, chex.Array]]:
+    def get_policy_loss(sigmas, key) -> Tuple[chex.Array, Tuple[chex.Array, chex.Array]]:
         """Calculate the policy loss."""
-        # Ensure positive actions
-        actions = vec_to_mu_schedule(policy, mu, p, T).squeeze()
-
         keys = jr.split(key, policy_batch_size)
         
         keys = keys.reshape(policy_batch_size // num_gpus, num_gpus, 2)
         vmapped_twn = pmap(train_with_noise, in_axes=(None, None, 0), devices=gpus)
 
         @partial(vmap, in_axes=(None, None, 0))
-        def pmap_fn(actions, env_params, keys):
-            return vmapped_twn(actions, env_params, keys)
+        def pmap_fn(sigmas, env_params, keys):
+            return vmapped_twn(sigmas, env_params, keys)
 
-        _, losses, accuracies = pmap_fn(actions, env_params, keys)
+        _, losses, accuracies = pmap_fn(sigmas, env_params, keys)
         result = jnp.mean(losses[:, :, -1])
         losses = losses.reshape(-1, T + 1)
         accuracies = accuracies.reshape(-1, T)
@@ -108,15 +105,19 @@ def main():
         key, _ = jr.split(key)
 
         # Get policy loss
-        (loss, (losses, accuracies)), grads = get_policy_loss(policy, key)
+        sigmas = weights_to_sigma_schedule(policy, mu, p, T).squeeze()
+        (loss, (losses, accuracies)), grads = get_policy_loss(sigmas, key)
+        if jnp.isnan(grads).sum() > 0:
+            print(jnp.isnan(grads).sum(), jnp.argwhere(jnp.isnan(grads)))
+            exit()
         
         # Update policy model
         updates, opt_state = optimizer.update(grads, opt_state, policy)
-        print(jnp.isnan(grads).sum(), grads.size)
-        policy = optax.apply_updates(policy, updates) # type: ignore
+        sigmas = optax.apply_updates(sigmas, updates) # type: ignore
+        policy = sigma_schedule_to_weights(sigmas, mu, p, T)
         policy = optax.projections.projection_simplex(policy, scale=T)
 
-        new_noise = vec_to_mu_schedule(policy, mu, p, T).squeeze() # type: ignore
+        new_sigmas = weights_to_sigma_schedule(policy, mu, p, T).squeeze() # type: ignore
         for i in range(losses.shape[0]):
             loss = losses[i, -1]
             accuracy = accuracies[i, -1]
@@ -124,7 +125,7 @@ def main():
                             "batch_idx": i,
                             "loss": loss,
                             "accuracy" : accuracy,
-                            "actions": new_noise,
+                            "actions": new_sigmas,
                             "losses": losses[i, :],
                             "accuracies": accuracies[i, :],
                     })
@@ -140,7 +141,7 @@ def main():
 
 
     # Generate final results iwth lots of iterations
-    actions = vec_to_mu_schedule(policy, mu, p, T).squeeze() # type: ignore
+    actions = weights_to_sigma_schedule(policy, mu, p, T).squeeze() # type: ignore
     eval_num_iterations = 100
     for i in tqdm.tqdm(range(eval_num_iterations), total=eval_num_iterations, desc="Evaluating Policy"):
         key, _key = jr.split(key)

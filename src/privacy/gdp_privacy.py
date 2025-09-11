@@ -1,10 +1,9 @@
 import jax.scipy.stats as jstats
 import chex
 import jax.numpy as jnp
-import jax.nn as jnn
-import jax
 from conf.singleton_conf import SingletonConfig
 from scipy import optimize
+
 
 def approx_to_gdp(eps: float, delta: float, tol: float = 1e-6) -> float:
     """Convert (eps, delta)-DP to GDP.
@@ -31,7 +30,7 @@ def approx_to_gdp(eps: float, delta: float, tol: float = 1e-6) -> float:
     return optimize.root_scalar(f, bracket=[tol, 100], method='brentq').root
 
 
-def mu_to_poisson_subsampling_shedule(mu: float, schedule: chex.Array, p: float, T: int) -> chex.Array:
+def weights_to_mu_schedule(mu: float, schedule: chex.Array, p: float, T: int) -> chex.Array:
     """Convert a GDP mu parameter to a Poisson subsampling schedule.
 
     Args:
@@ -43,10 +42,31 @@ def mu_to_poisson_subsampling_shedule(mu: float, schedule: chex.Array, p: float,
     Returns:
         A 1D array representing the adjusted schedule.
     """
+
+    sigma_s = SingletonConfig.get_policy_config_instance().sigma_s
     
     mu_0 = jnp.sqrt(jnp.log(mu**2 / (p**2 * T) + 1))
-    return jnp.sqrt(jnp.log(schedule * (jnp.exp(mu_0 ** 2) - 1) + 1))
+    return jnp.sqrt(jnp.log(schedule * (jnp.exp(mu_0 ** 2) - 1) + 1) / sigma_s ** 2)
 
+
+def mu_schedule_to_weights(mu: float, schedule: chex.Array, p: float, T: int) -> chex.Array:
+    """Convert to a Poisson subsampling schedule to vector of non-negative weights summing to T.
+    Inverse of `mu_to_poisson_subsampling_shedule`
+
+    Args:
+        mu: The mu parameter of GDP. Assumed to be a non-negative scalar.
+        schedule: A 1D array representing the initial schedule (e.g., learning rates). Assumed to be non-negative and sum to T.
+        p: The subsampling probability. Assumed to be in (0, 1).
+        T: The total number of steps. Assumed to be a positive integer.
+
+    Returns:
+        A 1D array representing the adjusted schedule.
+    """
+
+    sigma_s = SingletonConfig.get_policy_config_instance().sigma_s
+    
+    mu_0 = jnp.sqrt(jnp.log(mu**2 / (p**2 * T) + 1))
+    return (jnp.exp((schedule * sigma_s) ** 2) - 1) / (jnp.exp(mu_0 ** 2) - 1)
 
 def gdp_to_sigma(mu: chex.Array) -> chex.Array:
     """Convert GDP mu parameter to Gaussian noise scale sigma.
@@ -62,17 +82,38 @@ def gdp_to_sigma(mu: chex.Array) -> chex.Array:
     return C / mu
 
 
-def vec_to_mu_schedule(vec: chex.Array, mu, p, T):
-    """Convert a vector of arbitrary reals into a noise schedule for use in NoisySGD
+def weights_to_sigma_schedule(weights: chex.Array, mu, p, T):
+    """Convert a vector of non-negative weights summing to T to a sigma schedule for G-DP. 
 
     Args:
-        mu: The mu parameter of GDP. Assumed to be a non-negative array.
+        schedule: A 1D array representing the weights. Assumed to be non-negative and sum to T.
+        mu: The mu parameter of GDP. Assumed to be a non-negative float or array.
+        p: The sampling probability for poisson sampling
+        T: The number of training iterations
 
     Returns:
         The Gaussian noise scale sigma.
     """
-    mu_schedule = mu_to_poisson_subsampling_shedule(mu, vec, p, T)
+    mu_schedule = weights_to_mu_schedule(mu, weights, p, T)
     return gdp_to_sigma(mu_schedule)
+
+
+def sigma_schedule_to_weights(schedule: chex.Array, mu, p, T):
+    """Convert a sigma schedule vector to a vector of non-negative weights summing to T for G-DP.
+    Inverse of `weights_to_sigma_schedule`
+
+    Args:
+        schedule: sigma schedule vector. Assumed to be non-negative.
+        mu: The mu parameter of GDP. Assumed to be a non-negative float or array.
+        p: The sampling probability for poisson sampling
+        T: The number of training iterations
+
+    Returns:
+        The Gaussian noise scale sigma.
+    """
+    C = SingletonConfig.get_environment_config_instance().C
+    mus = C / schedule
+    return mu_schedule_to_weights(mu, mus, p, T)
 
 
 def test_approx_to_gdp():
@@ -97,6 +138,20 @@ def test_approx_to_gdp():
     assert jnp.isclose(mu, 5.0, atol=1e-3), f"Expected mu to be close to 5.0, but got {mu}"
 
 
+def test_weights_to_sigmas_and_back():
+    def test(weights, mu, p, T):
+        sigmas = weights_to_sigma_schedule(weights, mu, p, T)
+        new_weights = sigma_schedule_to_weights(sigmas, mu, p, T)
+        assert jnp.isclose(weights, new_weights).all(), f"{weights} =/= {new_weights}"
+
+    test(jnp.asarray([1, 1, 1, 1]), mu=0.5, p=250/60_000, T=1000)
+    test(jnp.asarray([5, 3, 0.05, 10.0]), mu=0.5, p=250/60_000, T=1000)
+    test(jnp.asarray([5, 3, 0.05, 10.0]), mu=0.5, p=250/60_000, T=3000)
+    test(jnp.asarray([5, 3, 0.05, 10.0]), mu=0.5, p=1/60_000, T=1000)
+    test(jnp.asarray([5, 3, 0.05, 10.0]), mu=0.1, p=250/60_000, T=1000)
+
+
 if __name__ == "__main__":
     test_approx_to_gdp()
+    test_weights_to_sigmas_and_back()
     print("All tests passed.")

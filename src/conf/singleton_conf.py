@@ -1,5 +1,5 @@
 import tyro
-from conf.config import Config, EnvConfig, SweepConfig, ExperimentConfig, WandbConfig
+from conf.config import Config, EnvConfig, SweepConfig, ExperimentConfig, WandbConfig, PolicyConfig
 from pprint import pprint
 from dataclasses import asdict
 
@@ -27,6 +27,10 @@ class SingletonConfig:
     @classmethod
     def get_environment_config_instance(cls) -> EnvConfig:
         return cls.get_sweep_config_instance().env
+    
+    @classmethod
+    def get_policy_config_instance(cls) -> PolicyConfig:
+        return cls.get_sweep_config_instance().policy
 
     @classmethod
     def get_wandb_config_instance(cls) -> WandbConfig:

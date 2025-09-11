@@ -8,7 +8,7 @@ import optax
 import tqdm
 import os
 from util.logger import ExperimentLogger
-from privacy.gdp_privacy import approx_to_gdp, gdp_to_sigma, mu_to_poisson_subsampling_shedule
+from privacy.gdp_privacy import approx_to_gdp, gdp_to_sigma, weights_to_mu_schedule
 import wandb
 
 
@@ -53,7 +53,7 @@ def main():
 
     def simplex_to_noise_schedule(x: chex.Array) -> chex.Array:
         """Convert a simplex vector to a noise schedule."""
-        mu_schedule = mu_to_poisson_subsampling_shedule(mu, x, p, T)
+        mu_schedule = weights_to_mu_schedule(mu, x, p, T)
         return gdp_to_sigma(mu_schedule)
 
     def pipeline(x: chex.Array) -> chex.Array:

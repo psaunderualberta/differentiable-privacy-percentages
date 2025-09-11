@@ -1,5 +1,6 @@
 from functools import partial
 from typing import Any, Callable, Optional, Tuple
+from conf.singleton_conf import SingletonConfig
 
 import chex
 import equinox as eqx
@@ -239,14 +240,29 @@ def reinit_model(model, key):
 def add_spherical_noise(
     grads: jax.Array, action: chex.Array, key: chex.PRNGKey
 ):
+    
+    sigma_s = SingletonConfig.get_policy_config_instance().sigma_s
+
     def add_the_noise(g, k):
         if g is None:
             return g
-        normal_noise = jax.random.normal(k, g.shape, g.dtype)
-        # TODO: NaNs are caused by values > 1 in normal_noise, as they result
-        # in exponential growth in gradient magnitudes for the policy. 
+        normal_noise = jax.lax.stop_gradient(jax.random.normal(k, g.shape, g.dtype) / sigma_s)
         return g + action * normal_noise
-    return jt.map(add_the_noise, grads, pytree_keys(grads, key))
+
+    def get_the_noise(g, k):
+        if g is None:
+            return g
+        
+        return jax.random.normal(k, g.shape, g.dtype) / sigma_s
+
+    grads = jt.map(add_the_noise, grads, pytree_keys(grads, key))
+
+    noise = jt.map(get_the_noise, grads, pytree_keys(grads, key))
+
+    flat_noise, _ = jt.flatten(noise)
+    # jax.debug.print("{}", jt.reduce(lambda a, b: jnp.maximum(a, jnp.max(b)), flat_noise, 0.0))
+
+    return grads
 
 
 # @jax.jit
