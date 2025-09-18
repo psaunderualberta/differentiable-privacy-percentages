@@ -46,7 +46,6 @@ def main():
     # Initialize Policy model
     policy = jnp.ones((T,))
     policy = optax.projections.projection_simplex(policy, scale=T)
-    actions = weights_to_sigma_schedule(policy, mu, p, T).squeeze()
     policy_batch_size = sweep_config.policy.batch_size
 
     private_network_arch = net_factory(
