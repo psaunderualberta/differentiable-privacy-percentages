@@ -5,7 +5,13 @@ from typing import Callable, Any
 from functools import partial
 
 
-# Source: https://www.cs.toronto.edu/~rgrosse/courses/csc2541_2022/readings/L02_Taylor_approximations.pdf
+
+"""
+Much of this code is adapted from: https://www.cs.toronto.edu/~rgrosse/courses/csc2541_2022/readings/L02_Taylor_approximations.pdf
+"""
+
+
+@partial(jit, static_argnames=("J",))
 def hvp(J, w, v):
   """
 Hessian-vector product of J at w in the direction of v.
@@ -17,11 +23,11 @@ Args:
 Returns:
     The Hessian-vector product H(w) @ v
   """
-  return jvp(grad(J), (w,), (v,))[1]
+  return jvp(grad(J), w, v)[1]
 
 
 @partial(jit, static_argnames=("f",))
-def vhp(f: Callable[..., chex.Array], x: tuple[Any], v: chex.Array) -> Callable[[chex.Array], chex.Array]:
+def vhp(f: Callable[..., chex.Array], x: tuple[chex.Array], v: tuple[chex.Array]) -> Callable[[chex.Array], chex.Array]:
     """
     Vector-Hessian product of f at x in the direction of v.
     Args:
@@ -37,9 +43,10 @@ def vhp(f: Callable[..., chex.Array], x: tuple[Any], v: chex.Array) -> Callable[
     
     """
     _, vjp_fun = vjp(grad(f), *x)
-    return vjp_fun(v)[0]
+    return vjp_fun(*v)[0]
 
 
+@partial(jit, static_argnames=("f", "L"))
 def gnhvp(
     f: Callable[..., chex.Array],
     L: Callable[..., chex.Array],
@@ -60,9 +67,8 @@ def gnhvp(
         A function that takes a vector and returns the vector-Hessian product v^T J^T H(x) J
 
     """
-    z, f_vjp = vjp(f, x) 
+    z, f_vjp = vjp(f, *x) 
     _, f_vjp_vjp = vjp(f_vjp, jnp.zeros_like(z))
-    # input is length-1 tuple, so output is length-1 tuple
-    R_z = f_vjp_vjp((x,))[0]  # J @ v
-    R_gz = hvp(L, z, R_z) # H @ J @ v
-    return f_vjp(R_gz)[0]# (w/ ^) J^T @ H @ J @ v
+    R_z = f_vjp_vjp(v)[0]  # J @ v
+    R_gz = hvp(L, (z,), (R_z,)) # H @ J_f @ v
+    return f_vjp(R_gz)[0]# J^T @ H @ J @ v
