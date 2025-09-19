@@ -1,10 +1,9 @@
-from jax import vjp, grad, jit, jvp
-import jax.numpy as jnp
-import chex
-from typing import Callable, Any
 from functools import partial
+from typing import Any, Callable
 
-
+import chex
+import jax.numpy as jnp
+from jax import grad, jit, jvp, vjp
 
 """
 Much of this code is adapted from: https://www.cs.toronto.edu/~rgrosse/courses/csc2541_2022/readings/L02_Taylor_approximations.pdf
@@ -13,21 +12,23 @@ Much of this code is adapted from: https://www.cs.toronto.edu/~rgrosse/courses/c
 
 @partial(jit, static_argnames=("J",))
 def hvp(J, w, v):
-  """
-Hessian-vector product of J at w in the direction of v.
+    """
+    Hessian-vector product of J at w in the direction of v.
 
-Args:
-    J: A function which computes the Jacobian of a scalar-valued function.
-    w: The point where the Hessian is evaluated.
-    v: The vector to be multiplied with the Hessian.
-Returns:
-    The Hessian-vector product H(w) @ v
-  """
-  return jvp(grad(J), w, v)[1]
+    Args:
+        J: A function which computes the Jacobian of a scalar-valued function.
+        w: The point where the Hessian is evaluated.
+        v: The vector to be multiplied with the Hessian.
+    Returns:
+        The Hessian-vector product H(w) @ v
+    """
+    return jvp(grad(J), w, v)[1]
 
 
 @partial(jit, static_argnames=("f",))
-def vhp(f: Callable[..., chex.Array], x: tuple[chex.Array], v: tuple[chex.Array]) -> Callable[[chex.Array], chex.Array]:
+def vhp(
+    f: Callable[..., chex.Array], x: tuple[chex.Array], v: tuple[chex.Array]
+) -> Callable[[chex.Array], chex.Array]:
     """
     Vector-Hessian product of f at x in the direction of v.
     Args:
@@ -39,8 +40,8 @@ def vhp(f: Callable[..., chex.Array], x: tuple[chex.Array], v: tuple[chex.Array]
 
 
     Note: This implementation assumes a twice-differentiable 'f'. For non-smooth functions, consider using
-    gnhvp linked below. 
-    
+    gnhvp linked below.
+
     """
     _, vjp_fun = vjp(grad(f), *x)
     return vjp_fun(*v)[0]
@@ -51,7 +52,7 @@ def gnhvp(
     f: Callable[..., chex.Array],
     L: Callable[..., chex.Array],
     x: tuple[Any],
-    v: chex.Array
+    v: chex.Array,
 ) -> Callable[[chex.Array], chex.Array]:
     """
     Approximation of the Vector-Hessian product of f at x in the direction of v,
@@ -67,8 +68,8 @@ def gnhvp(
         A function that takes a vector and returns the vector-Hessian product v^T J^T H(x) J
 
     """
-    z, f_vjp = vjp(f, *x) 
+    z, f_vjp = vjp(f, *x)
     _, f_vjp_vjp = vjp(f_vjp, jnp.zeros_like(z))
     R_z = f_vjp_vjp(v)[0]  # J @ v
-    R_gz = hvp(L, (z,), (R_z,)) # H @ J_f @ v
-    return f_vjp(R_gz)[0]# J^T @ H @ J @ v
+    R_gz = hvp(L, (z,), (R_z,))  # H @ J_f @ v
+    return f_vjp(R_gz)[0]  # J^T @ H @ J @ v
