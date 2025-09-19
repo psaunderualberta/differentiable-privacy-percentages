@@ -237,51 +237,46 @@ def reinit_model(model, key):
 
 
 @eqx.filter_jit
-def add_spherical_noise(
+def get_spherical_noise(
     grads: jax.Array, action: chex.Array, key: chex.PRNGKey
 ):
-    
     sigma_s = SingletonConfig.get_policy_config_instance().sigma_s
-
-    def add_the_noise(g, k):
+    def f(g, k):
         if g is None:
             return g
         normal_noise = jax.lax.stop_gradient(jax.random.normal(k, g.shape, g.dtype) / sigma_s)
-        return g + action * normal_noise
+        return action * normal_noise
 
-    def get_the_noise(g, k):
-        if g is None:
-            return g
-        
-        return jax.random.normal(k, g.shape, g.dtype) / sigma_s
+    return jt.map(f, grads, pytree_keys(grads, key))
 
-    grads = jt.map(add_the_noise, grads, pytree_keys(grads, key))
-
-    noise = jt.map(get_the_noise, grads, pytree_keys(grads, key))
-
-    flat_noise, _ = jt.flatten(noise)
-    # jax.debug.print("{}", jt.reduce(lambda a, b: jnp.maximum(a, jnp.max(b)), flat_noise, 0.0))
-
-    return grads
+@eqx.filter_jit
+def add_pytrees(a, b):
+    return eqx.apply_updates(a, b)
 
 
-# @jax.jit
-def baseline_model(env, variance):
-    num_iters = 0
-    variance = jnp.array([variance])
+@eqx.filter_jit
+def subtract_pytrees(a, b):
+    def func(x, y):
+        if x is None or y is None:
+            return None
+        return x - y
+    
+    return jt.map(func, a, b)
 
-    if variance == 0.0:
-        rewards = [env.step(variance, private=False)[1] for _ in range(500)]
-        num_iters = 500
-    else:
-        terminated = False
-        rewards = []
-        while not terminated:
-            num_iters += 1
-            _, reward, terminated, _, _ = env.step(variance)
-            rewards.append(reward)
 
-    return env, rewards, num_iters
+@eqx.filter_jit
+def multiply_pytree_by_scalar(pytree, scalar):
+    return jt.map(lambda x: x * scalar if x is not None else None, pytree)
+
+
+@eqx.filter_jit
+def dot_pytrees(a, b):
+    def func(x, y):
+        if x is None or y is None:
+            return 0.0
+        return jnp.sum(x * y, axis=-1)
+    
+    return jt.reduce(lambda x, y: x + y, jt.map(func, a, b), 0.0)
 
 
 def index_vmapped(structure, index):

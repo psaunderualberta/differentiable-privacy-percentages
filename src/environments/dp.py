@@ -15,7 +15,7 @@ import jax.numpy as jnp
 import jax.random as jr
 from gymnax.environments import spaces
 import optax
-from util.util import reinit_model, dp_cce_loss_poisson, add_spherical_noise, subset_classification_accuracy
+from util.util import reinit_model, dp_cce_loss_poisson, get_spherical_noise, subset_classification_accuracy
 
 from environments.action_envs import ActionTaker, ActionTakers
 from environments.obs_envs import ObservationMaker, ObservationMakers
@@ -104,7 +104,7 @@ class DP_RL(eqx.Module):
 
 @jax.jit
 def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex.PRNGKey) -> Tuple[
-    eqx.Module, chex.Array, chex.Array
+    eqx.Module, eqx.Module, chex.Array, chex.Array
 ]:
     # Create key
     key, _key = jr.split(key)
@@ -113,10 +113,9 @@ def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex
     network = reinit_model(params.network, _key)
     optimizer = optax.sgd(params.lr)
 
-    @jax.checkpoint  # type: ignore
     def training_step(carry, noise) -> Tuple[
         Tuple[eqx.Module, optax.OptState, chex.PRNGKey],
-    Tuple[chex.Array, chex.Array]]:
+    Tuple[eqx.Module, chex.Array, chex.Array]]:
         model, opt_state, loop_key = carry
 
         loop_key, _key = jr.split(loop_key)
@@ -126,7 +125,8 @@ def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex
 
         # Add spherical noise to gradients
         loop_key, _used_key = jr.split(loop_key)
-        noised_grads = add_spherical_noise(grads, noise, _used_key)
+        noises = get_spherical_noise(grads, noise, _used_key)
+        noised_grads = eqx.apply_updates(grads, noises)
 
         # Add noisy gradients, update model and optimizer
         updates, new_opt_state = optimizer.update(
@@ -141,10 +141,10 @@ def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex
             new_model, params.X, params.y, 0.01, _used_key
         )
 
-        return (new_model, new_opt_state, loop_key), (new_loss, accuracy)
+        return (new_model, new_opt_state, loop_key), (new_model, new_loss, accuracy)
 
     initial_carry = (network, optimizer.init(network), key)
-    (network, _, loop_key), (losses, accuracies) = jax.lax.scan(
+    (network, _, loop_key), (networks, losses, accuracies) = jax.lax.scan(
         training_step,
         initial_carry,
         xs=noise_schedule,
@@ -156,4 +156,5 @@ def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex
 
     losses = jnp.concat([losses, jnp.asarray([final_loss])])
 
-    return network, losses, accuracies
+    return network, networks, losses, accuracies
+    
