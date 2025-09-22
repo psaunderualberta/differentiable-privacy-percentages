@@ -1,8 +1,6 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import jax.nn as jnn
-import jax.random as jr
 import chex
 from typing import Callable, Tuple
 from functools import partial
