@@ -130,14 +130,13 @@ def dp_cce_loss(model: eqx.Module, x: chex.Array, y: chex.Array, C: float):
 
 
 @eqx.filter_jit
-def dp_cce_loss_poisson(
-    model: eqx.Module,
+def sample_batch_uniform(
     x: chex.Array,
     y: chex.Array,
-    key: chex.PRNGKey,
     idxs: chex.Array,
-    C: float,
+    key: chex.PRNGKey,
 ):
+    assert len(x.shape) > 0 and len(idxs.shape) > 0 and len(y.shape) > 0
     # get random subset of idxs for training
     key, _key = jr.split(key)
     probs = jr.uniform(_key, (x.shape[0],))
@@ -145,10 +144,8 @@ def dp_cce_loss_poisson(
     # https://arxiv.org/abs/2206.14286 for implementation of approx_max_k
     # jitted_approx_max_k = jax.lax.approx_max_k, static_argnums=(1,))
     _, subsample_idxs = jax.lax.approx_max_k(probs, idxs.shape[0])
-    _x = x[subsample_idxs]
-    _y = y[subsample_idxs]
 
-    return dp_cce_loss(model, _x, _y, C)
+    return x[subsample_idxs], y[subsample_idxs]  #type: ignore
 
 
 @eqx.filter_jit()

@@ -11,7 +11,7 @@ from environments.dp_params import DP_RL_Params
 from environments.dp_state import DP_RL_State
 from jax import vmap
 
-from util.util import (get_spherical_noise, dp_cce_loss_poisson, reinit_model,
+from util.util import (get_spherical_noise, reinit_model,
                        subset_classification_accuracy)
 
 

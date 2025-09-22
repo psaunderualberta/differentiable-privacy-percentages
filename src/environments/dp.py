@@ -15,7 +15,7 @@ import jax.numpy as jnp
 import jax.random as jr
 from gymnax.environments import spaces
 import optax
-from util.util import reinit_model, dp_cce_loss_poisson, get_spherical_noise, subset_classification_accuracy
+from util.util import reinit_model, dp_cce_loss, sample_batch_uniform, get_spherical_noise, subset_classification_accuracy
 
 from environments.action_envs import ActionTaker, ActionTakers
 from environments.obs_envs import ObservationMaker, ObservationMakers
@@ -103,9 +103,11 @@ class DP_RL(eqx.Module):
 
 
 @jax.jit
-def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex.PRNGKey) -> Tuple[
-    eqx.Module, eqx.Module, chex.Array, chex.Array
-]:
+def train_with_noise(
+    noise_schedule: chex.Array,
+    params: DP_RL_Params,
+    key: chex.PRNGKey
+) -> Tuple[eqx.Module, chex.Array, chex.Array]:
     # Create key
     key, _key = jr.split(key)
 
@@ -113,16 +115,15 @@ def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex
     network = reinit_model(params.network, _key)
     optimizer = optax.sgd(params.lr)
 
-    @jax.checkpoint
+    @jax.checkpoint #type: ignore
     def training_step(carry, noise) -> Tuple[
         Tuple[eqx.Module, optax.OptState, chex.PRNGKey],
     Tuple[chex.Array, chex.Array]]:
         model, opt_state, loop_key = carry
 
         loop_key, _key = jr.split(loop_key)
-        new_loss, grads = dp_cce_loss_poisson(
-            model, params.X, params.y, _key, params.dummy_batch, params.C
-        )
+        batch_x, batch_y = sample_batch_uniform(params.X, params.y, params.dummy_batch, _key)
+        new_loss, grads = dp_cce_loss(model, batch_x, batch_y, params.C)
 
         # Add spherical noise to gradients
         loop_key, _used_key = jr.split(loop_key)
@@ -150,9 +151,9 @@ def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex
         xs=noise_schedule,
     )
 
-    final_loss, _ = dp_cce_loss_poisson(
-        network, params.X, params.y, loop_key, params.dummy_batch, params.C
-    )
+    loop_key, _key = jr.split(loop_key)
+    batch_x, batch_y = sample_batch_uniform(params.X, params.y, params.dummy_batch, _key)
+    final_loss, _ = dp_cce_loss(network, batch_x, batch_y, params.C)
 
     losses = jnp.concat([losses, jnp.asarray([final_loss])])
 
