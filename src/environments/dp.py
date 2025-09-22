@@ -113,9 +113,10 @@ def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex
     network = reinit_model(params.network, _key)
     optimizer = optax.sgd(params.lr)
 
+    @jax.checkpoint
     def training_step(carry, noise) -> Tuple[
         Tuple[eqx.Module, optax.OptState, chex.PRNGKey],
-    Tuple[eqx.Module, chex.Array, chex.Array]]:
+    Tuple[chex.Array, chex.Array]]:
         model, opt_state, loop_key = carry
 
         loop_key, _key = jr.split(loop_key)
@@ -136,15 +137,14 @@ def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex
 
         # Subsample each with probability p
         loop_key, _used_key = jr.split(loop_key)
-        loop_key, _used_key = jr.split(loop_key)
         accuracy = subset_classification_accuracy(
             new_model, params.X, params.y, 0.01, _used_key
         )
 
-        return (new_model, new_opt_state, loop_key), (new_model, new_loss, accuracy)
+        return (new_model, new_opt_state, loop_key), (new_loss, accuracy)
 
     initial_carry = (network, optimizer.init(network), key)
-    (network, _, loop_key), (networks, losses, accuracies) = jax.lax.scan(
+    (network, _, loop_key), (losses, accuracies) = jax.lax.scan(
         training_step,
         initial_carry,
         xs=noise_schedule,
@@ -156,5 +156,5 @@ def train_with_noise(noise_schedule: chex.Array, params: DP_RL_Params, key: chex
 
     losses = jnp.concat([losses, jnp.asarray([final_loss])])
 
-    return network, networks, losses, accuracies
+    return network, losses, accuracies
     

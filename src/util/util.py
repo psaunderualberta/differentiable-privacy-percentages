@@ -240,12 +240,10 @@ def reinit_model(model, key):
 def get_spherical_noise(
     grads: jax.Array, action: chex.Array, key: chex.PRNGKey
 ):
-    sigma_s = SingletonConfig.get_policy_config_instance().sigma_s
     def f(g, k):
         if g is None:
             return g
-        normal_noise = jax.lax.stop_gradient(jax.random.normal(k, g.shape, g.dtype) / sigma_s)
-        return action * normal_noise
+        return action * jax.random.normal(k, g.shape, g.dtype)
 
     return jt.map(f, grads, pytree_keys(grads, key))
 
