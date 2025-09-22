@@ -147,6 +147,7 @@ class EnvConfig:
     lr: DistributionConfig = dist_config_helper(
         value=0.01, distribution="constant",
     )  # Learning rate of private network
+    loss_type: Literal["mse", "cce"] = "cce"  # The type of loss function to use
 
     # Privacy Parameters
     eps: float = 0.5 # Epsilon privacy parameter

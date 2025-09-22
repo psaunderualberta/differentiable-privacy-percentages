@@ -1,6 +1,4 @@
-from functools import partial
-from typing import Any, Callable, Optional, Tuple
-from conf.singleton_conf import SingletonConfig
+from typing import Tuple
 
 import chex
 import equinox as eqx
@@ -11,122 +9,7 @@ import numpy as np
 from jax import tree as jt
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
-from optax import (global_norm, per_example_global_norm_clip,
-                   softmax_cross_entropy)
-
-
-@eqx.filter_jit
-@eqx.filter_value_and_grad
-def mse_loss(model: Callable[[chex.Array], jnp.ndarray], x: chex.Array, y: chex.Array):
-    pred_y = jax.vmap(model)(x).squeeze()
-
-    return jnp.mean((pred_y - y) ** 2)
-
-
-@eqx.filter_jit
-@eqx.filter_value_and_grad
-def cce_loss(model: Callable[[chex.Array], jnp.ndarray], x: chex.Array, y: chex.Array):
-    pred_y = jax.vmap(model)(x).squeeze()
-
-    return softmax_cross_entropy(pred_y, y).mean()
-
-
-@eqx.filter_jit
-@eqx.filter_value_and_grad
-def non_vmap_mse_loss(model: Callable[[chex.Array], jnp.ndarray], x: chex.Array, y: chex.Array):
-    pred_y = model(x).squeeze()
-
-    return jnp.mean((pred_y - y) ** 2)
-
-
-@eqx.filter_jit
-@eqx.filter_value_and_grad
-def non_vmap_cce_loss(model: Callable[[chex.Array], jnp.ndarray], x: chex.Array, y: chex.Array):
-    pred_y = model(x).squeeze()
-
-    return softmax_cross_entropy(pred_y, y).mean()
-
-
-@eqx.filter_jit
-@eqx.filter_value_and_grad
-def mse_loss_poisson(
-    model: eqx.Module, x: chex.Array, y: chex.Array, key: chex.PRNGKey, idxs: chex.Array
-):
-    # get random subset of idxs for training
-    key, _key = jr.split(key)
-    probs = jr.uniform(_key, (x.shape[0],))
-
-    # https://arxiv.org/abs/2206.14286 for implementation of approx_max_k
-    jitted_approx_max_k = jax.jit(jax.lax.approx_max_k, static_argnums=(1,))
-    _, subsample_idxs = jitted_approx_max_k(probs, idxs.shape[0])
-
-    return jnp.mean(
-        (jax.vmap(model)(x[subsample_idxs]).squeeze() - y[subsample_idxs]) ** 2
-    )
-
-
-@eqx.filter_jit
-def cce_loss_poisson(
-    model: eqx.Module, x: chex.Array, y: chex.Array, key: chex.PRNGKey, idxs: chex.Array
-):
-    # get random subset of idxs for training
-    key, _key = jr.split(key)
-    probs = jr.uniform(_key, (x.shape[0],))
-
-    # https://arxiv.org/abs/2206.14286 for implementation of approx_max_k
-    jitted_approx_max_k = jax.jit(jax.lax.approx_max_k, static_argnums=(1,))
-    _, subsample_idxs = jitted_approx_max_k(probs, idxs.shape[0])
-
-    return cce_loss(model, x[subsample_idxs], y[subsample_idxs])
-
-
-@eqx.filter_jit
-def dp_mse_loss(model: eqx.Module, x: chex.Array, y: chex.Array, C: float):
-    losses, grads = jax.vmap(non_vmap_mse_loss, in_axes=(None, 0, 0))(model, x, y)
-    # https://github.com/google-deepmind/optax/blob/main/optax/contrib/_privacy.py#L35#L87
-    grads_flat, grads_treedef = jax.tree.flatten(grads)
-    batch_size = grads_flat[0].shape[0]
-
-    # computes "sum of the clipped per-example grads,"
-    # per https://optax.readthedocs.io/en/latest/api/transformations.html#optax.per_example_global_norm_clip
-    # NOTE: This computes the global norm over all layers, not layer-wise
-    # sum_clipped, _ = per_example_global_norm_clip(grads_flat, C)
-
-    # DP optimization as described in
-    # https://proceedings.neurips.cc/paper_files/paper/2023/file/8249b30d877c91611fd8c7aa6ac2b5fe-Paper-Conference.pdf
-    global_grad_norms = jax.vmap(global_norm)(grads)
-    gamma = 0.01
-    multipliers = j1 / (global_grad_norms + gamma)
-    sum_clipped = jax.tree.map(
-        lambda g: jnp.tensordot(multipliers, g, axes=1), grads_flat
-    )
-
-    return losses.mean(), jax.tree.unflatten(grads_treedef, sum_clipped)
-
-
-@eqx.filter_jit
-def dp_cce_loss(model: eqx.Module, x: chex.Array, y: chex.Array, C: float):
-    losses, grads = jax.vmap(non_vmap_cce_loss, in_axes=(None, 0, 0))(model, x, y)
-
-    # https://github.com/google-deepmind/optax/blob/main/optax/contrib/_privacy.py#L35#L87
-    grads_flat, grads_treedef = jax.tree.flatten(grads)
-
-    # computes "sum of the clipped per-example grads,"
-    # per https://optax.readthedocs.io/en/latest/api/transformations.html#optax.per_example_global_norm_clip
-    # NOTE: This computes the global norm over all layers, not layer-wise
-    # sum_clipped, _ = per_example_global_norm_clip(grads_flat, C)
-
-    # DP optimization as described in https://proceedings.neurips.cc/paper_files/paper/2023/file/8249b30d877c91611fd8c7aa6ac2b5fe-Paper-Conference.pdf
-    global_grad_norms = jax.vmap(global_norm)(grads)
-    multipliers = jnp.minimum(1 / global_grad_norms, 1.0)
-    sum_clipped = jax.tree.map(
-        lambda g: jnp.tensordot(multipliers, g, axes=1), grads_flat
-    )
-
-    return (
-        losses.mean(),
-        jax.tree.unflatten(grads_treedef, sum_clipped)
-    )
+from optax import global_norm
 
 
 @eqx.filter_jit
@@ -148,71 +31,25 @@ def sample_batch_uniform(
     return x[subsample_idxs], y[subsample_idxs]  #type: ignore
 
 
-@eqx.filter_jit()
-def hidden_node_gradients(
-    model: eqx.Module,
-    x: chex.Array,
-    y: chex.Array,
-    key: chex.PRNGKey,
-    idxs: chex.Array,
-    C: float,
-):
-    # get random subset of idxs for training
-    key, _key = jr.split(key)
-    probs = jr.uniform(_key, (x.shape[0],))
-
-    # https://arxiv.org/abs/2206.14286 for implementation of approx_max_k
-    # jitted_approx_max_k = jax.lax.approx_max_k, static_argnums=(1,))
-    _, subsample_idxs = jax.lax.approx_max_k(probs, idxs.shape[0])
-    _x = x[subsample_idxs]
-    _y = y[subsample_idxs]
-
-    @partial(jax.jit, static_argnums=(1,))  # Might be problematic w/ larger networks
-    @partial(jax.value_and_grad, has_aux=True)
-    def f(block_in, block_pos):
-        block_out = jax.vmap(model.forward_through_block, in_axes=(0, None))(
-            block_in, block_pos
-        )
-        if block_pos == len(model.layers) - 1:
-            aux = ()
-            loss, grad = jax.value_and_grad(
-                lambda inp: softmax_cross_entropy(inp, _y).mean()
-            )(block_out)
-        else:
-            ((loss, aux), grad) = f(block_out, block_pos + 1)
-
-        # normalizing grad
-        norm = jnp.linalg.norm(grad)
-        norm = jnp.maximum(1.0, norm / C)
-        grad = grad / norm
-        grad = jnp.mean(grad, axis=0)
-
-        aux = (grad, *aux)
-        return loss, aux
-
-    return f(_x, 0)[0]  # don't care abt grad w.r.t. X
-
 
 @eqx.filter_jit
-def dp_mse_loss_poisson(
-    model: eqx.Module,
-    x: chex.Array,
-    y: chex.Array,
-    key: chex.PRNGKey,
-    idxs: chex.Array,
-    C: float,
-):
-    # get random subset of idxs for training
-    key, _key = jr.split(key)
-    probs = jr.uniform(_key, (x.shape[0],))
+def clip_grads_abadi(grads: eqx.Module, C: float):
+    # https://github.com/google-deepmind/optax/blob/main/optax/contrib/_privacy.py#L35#L87
+    grads_flat, grads_treedef = jax.tree.flatten(grads)
 
-    # https://arxiv.org/abs/2206.14286 for implementation of approx_max_k
-    # jitted_approx_max_k = jax.lax.approx_max_k, static_argnums=(1,))
-    _, subsample_idxs = jax.lax.approx_max_k(probs, idxs.shape[0])
-    _x = x[subsample_idxs]
-    _y = y[subsample_idxs]
+    # computes "sum of the clipped per-example grads,"
+    # per https://optax.readthedocs.io/en/latest/api/transformations.html#optax.per_example_global_norm_clip
+    # NOTE: This computes the global norm over all layers, not layer-wise
+    # sum_clipped, _ = per_example_global_norm_clip(grads_flat, C)
 
-    return dp_mse_loss(model, _x, _y, C)
+    # DP optimization as described in https://proceedings.neurips.cc/paper_files/paper/2023/file/8249b30d877c91611fd8c7aa6ac2b5fe-Paper-Conference.pdf
+    global_grad_norms = jax.vmap(global_norm)(grads)
+    multipliers = jnp.minimum(1 / global_grad_norms, C)
+    sum_clipped = jax.tree.map(
+        lambda g: jnp.tensordot(multipliers, g, axes=1), grads_flat
+    )
+
+    return jax.tree.unflatten(grads_treedef, sum_clipped)
 
 
 # Create random PRNG keys w/ same pytree structure as model
@@ -322,3 +159,4 @@ def determine_optimal_num_devices(devices, num_training_runs, printing=True) -> 
         print("Using devices: ", trimmed_devices_)
     mesh = Mesh(trimmed_devices_, ("i",))
     return NamedSharding(mesh, P("i")), len(trimmed_devices_)
+

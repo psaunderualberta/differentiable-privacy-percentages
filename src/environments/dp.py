@@ -13,7 +13,8 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 import optax
-from util.util import reinit_model, dp_cce_loss, sample_batch_uniform, get_spherical_noise, subset_classification_accuracy
+from util.util import reinit_model, clip_grads_abadi, sample_batch_uniform, get_spherical_noise, subset_classification_accuracy
+from environments.losses import vmapped_loss, loss
 
 from environments.dp_params import DP_RL_Params
 
@@ -43,12 +44,13 @@ def train_with_noise(
 
         loop_key, batch_key = jr.split(loop_key)
         batch_x, batch_y = sample_batch_uniform(params.X, params.y, params.dummy_batch, batch_key)
-        new_loss, grads = dp_cce_loss(model, batch_x, batch_y, params.C)
+        new_loss, grads = vmapped_loss(model, batch_x, batch_y)
+        clipped_grads = clip_grads_abadi(grads, params.C)
 
         # Add spherical noise to gradients
         loop_key, noise_key = jr.split(loop_key)
-        noises = get_spherical_noise(grads, noise, noise_key)
-        noised_grads = eqx.apply_updates(grads, noises)
+        noises = get_spherical_noise(clipped_grads, noise, noise_key)
+        noised_grads = eqx.apply_updates(clipped_grads, noises)
 
         # Add noisy gradients, update model and optimizer
         updates, new_opt_state = optimizer.update(
@@ -71,9 +73,9 @@ def train_with_noise(
         xs=noise_schedule,
     )
 
-    loop_key, _key = jr.split(loop_key)
-    batch_x, batch_y = sample_batch_uniform(params.X, params.y, params.dummy_batch, _key)
-    final_loss, _ = dp_cce_loss(network, batch_x, batch_y, params.C)
+    loop_key, batch_key = jr.split(loop_key)
+    batch_x, batch_y = sample_batch_uniform(params.X, params.y, params.dummy_batch, batch_key)
+    final_loss, _ = loss(network, batch_x, batch_y)
 
     losses = jnp.concat([losses, jnp.asarray([final_loss])])
 

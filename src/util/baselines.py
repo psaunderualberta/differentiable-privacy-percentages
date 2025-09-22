@@ -1,15 +1,12 @@
 import os
 
-import equinox as eqx
-import jax
 import jax.numpy as jnp
 import jax.random as jr
-import numpy as np
 import pandas as pd
 import plotly.express as px
 import tqdm
 
-from environments.dp import DP_RL, DP_RL_Params
+from environments.dp import DP_RL_Params
 from environments.dp import train_with_noise
 from privacy.gdp_privacy import weights_to_sigma_schedule
 import optax
