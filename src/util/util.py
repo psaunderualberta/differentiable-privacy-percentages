@@ -52,6 +52,48 @@ def clip_grads_abadi(grads: eqx.Module, C: float):
     return jax.tree.unflatten(grads_treedef, sum_clipped)
 
 
+@eqx.filter_jit
+def uniform_subsample_batch(
+    x: chex.Array,
+    y: chex.Array,
+    key: chex.PRNGKey,
+    idxs: chex.Array,
+):
+    # get random subset of idxs for training
+    key, _key = jr.split(key)
+    probs = jr.uniform(_key, (x.shape[0],))
+
+    # https://arxiv.org/abs/2206.14286 for implementation of approx_max_k
+    # jitted_approx_max_k = jax.lax.approx_max_k, static_argnums=(1,))
+    _, subsample_idxs = jax.lax.approx_max_k(probs, idxs.shape[0])
+    _x = x[subsample_idxs]
+    _y = y[subsample_idxs]
+
+    return _x, _y
+
+
+@eqx.filter_jit
+def dp_mse_loss_poisson(
+    model: eqx.Module,
+    x: chex.Array,
+    y: chex.Array,
+    key: chex.PRNGKey,
+    idxs: chex.Array,
+    C: float,
+):
+    # get random subset of idxs for training
+    key, _key = jr.split(key)
+    probs = jr.uniform(_key, (x.shape[0],))
+
+    # https://arxiv.org/abs/2206.14286 for implementation of approx_max_k
+    # jitted_approx_max_k = jax.lax.approx_max_k, static_argnums=(1,))
+    _, subsample_idxs = jax.lax.approx_max_k(probs, idxs.shape[0])
+    _x = x[subsample_idxs]
+    _y = y[subsample_idxs]
+
+    return dp_mse_loss(model, _x, _y, C)
+
+
 # Create random PRNG keys w/ same pytree structure as model
 @eqx.filter_jit
 def pytree_keys(model, key):
@@ -111,8 +153,12 @@ def dot_pytrees(a, b):
     return jt.reduce(lambda x, y: x + y, jt.map(func, a, b), 0.0)
 
 
-def index_vmapped(structure, index):
-    return jt.map(lambda x: x[index], structure)
+def index_pytree(structure, index):
+    def f(x):
+        if x is None:
+            return None
+        return x[index]
+    return jt.map(f, structure)
 
 
 def subset_classification_accuracy(model, x, y, percent, key):

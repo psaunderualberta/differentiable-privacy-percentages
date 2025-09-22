@@ -61,6 +61,20 @@ def __loss_hessian(cls, pred_y: chex.Array, y: chex.Array) -> chex.Array:
 
 
 @eqx.filter_jit
+def loss(model: Callable[[chex.Array], jnp.ndarray], x: chex.Array, y: chex.Array):
+    """
+    Compute the loss and gradients for a given model and data.
+    Args:
+        model: The model to compute the loss and gradients for.
+        x: Input data.
+        y: Target data.
+    Returns:
+        A tuple containing the loss and the gradients.
+    """
+    return __loss_helper(model, x, y)
+
+
+@eqx.filter_jit
 def vmapped_loss(model: Callable[[chex.Array], jnp.ndarray], x: chex.Array, y: chex.Array):
     """
     Compute the loss and gradients using vmap across the model, producing per-example gradients.

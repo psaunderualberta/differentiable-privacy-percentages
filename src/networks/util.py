@@ -4,8 +4,6 @@ import jax.lax as jlax
 import jax.numpy as jnp
 import jax.random as jr
 from jax import vmap, vjp
-from util.linalg import gnhvp
-from util.util import subtract_pytrees, add_pytrees, dot_pytrees, multiply_pytree_by_scalar
 
 
 class Network:
@@ -101,27 +99,3 @@ def augment_image(
 
     return image
 
-
-def compute_dwI_dsj(f, loss, alpha, ws, ns):
-    """
-    alpha: learning rate (scalar)
-    f: Network function
-      loss: loss function
-    ws: vector of weights, where ws[i] = w_i
-    ns: vector of noises, where ns[j] = n_j:
-          Note: We could also keep a vector of the noise *keys*, since JAX
-      is deterministic wrt keys
-    """
-    assert len(ws) - 1 == len(ns)
-    derivatives = jnp.zeros((ns.shape[0],))
-    prod = multiply_pytree_by_scalar(-alpha, vjp(f, ws[-1]))  # alpha * Jac(l(w_I))
-
-    # Implement via jax fori_loop or scan over ns[::-1]
-    for i in range(ns.shape[0] - 1, -1, -1):
-        derivatives[i] = dot_pytrees(prod, ns[i])  #
-        derivatives[i] = prod @ ns[i]
-
-        # prod = prod * (I - \alpha * H(w[i]))
-        prod = subtract_pytrees(prod, multiply_pytree_by_scalar(-alpha, gnhvp(f, loss, ws[i], prod)))
-
-    return derivatives
