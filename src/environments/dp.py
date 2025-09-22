@@ -116,18 +116,22 @@ def train_with_noise(
     optimizer = optax.sgd(params.lr)
 
     @jax.checkpoint #type: ignore
-    def training_step(carry, noise) -> Tuple[
-        Tuple[eqx.Module, optax.OptState, chex.PRNGKey],
-    Tuple[chex.Array, chex.Array]]:
+    def training_step(
+        carry,
+        noise
+    ) -> Tuple[
+        Tuple[eqx.Module, optax.OptState, chex.PRNGKey],  # Carry values
+        Tuple[chex.Array, chex.Array, eqx.Module, chex.PRNGKey, chex.PRNGKey]  # Scan outputs
+    ]:
         model, opt_state, loop_key = carry
 
-        loop_key, _key = jr.split(loop_key)
-        batch_x, batch_y = sample_batch_uniform(params.X, params.y, params.dummy_batch, _key)
+        loop_key, batch_key = jr.split(loop_key)
+        batch_x, batch_y = sample_batch_uniform(params.X, params.y, params.dummy_batch, batch_key)
         new_loss, grads = dp_cce_loss(model, batch_x, batch_y, params.C)
 
         # Add spherical noise to gradients
-        loop_key, _used_key = jr.split(loop_key)
-        noises = get_spherical_noise(grads, noise, _used_key)
+        loop_key, noise_key = jr.split(loop_key)
+        noises = get_spherical_noise(grads, noise, noise_key)
         noised_grads = eqx.apply_updates(grads, noises)
 
         # Add noisy gradients, update model and optimizer
@@ -142,10 +146,10 @@ def train_with_noise(
             new_model, params.X, params.y, 0.01, _used_key
         )
 
-        return (new_model, new_opt_state, loop_key), (new_loss, accuracy)
+        return (new_model, new_opt_state, loop_key), (new_loss, accuracy, new_model, noise_key, batch_key)
 
     initial_carry = (network, optimizer.init(network), key)
-    (network, _, loop_key), (losses, accuracies) = jax.lax.scan(
+    (network, _, loop_key), (losses, accuracies, networks, noise_keys, batch_keys) = jax.lax.scan(
         training_step,
         initial_carry,
         xs=noise_schedule,
