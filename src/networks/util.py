@@ -3,7 +3,7 @@ import equinox as eqx
 import jax.lax as jlax
 import jax.numpy as jnp
 import jax.random as jr
-from jax import vmap, vjp
+from jax import vmap
 
 
 class Network:
@@ -39,7 +39,8 @@ class Linear(eqx.Module):
             )
 
     def __call__(self, x):
-        return self.weight @ x + self.bias
+        weight = self.weight @ x
+        return weight + self.bias
 
 
 class MaxPool2d(eqx.Module):

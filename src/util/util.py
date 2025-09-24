@@ -148,9 +148,19 @@ def dot_pytrees(a, b):
     def func(x, y):
         if x is None or y is None:
             return 0.0
-        return jnp.sum(x * y, axis=-1)
+        return jnp.sum(x * y, axis=None)
     
     return jt.reduce(lambda x, y: x + y, jt.map(func, a, b), 0.0)
+
+
+@eqx.filter_jit
+def pytree_max(a):
+    def func(x):
+        if x is None:
+            return -100.
+        return jnp.max(x, axis=None)
+    
+    return jt.reduce(lambda x, y: jnp.maximum(x, y), jt.map(func, a), 0.0)
 
 
 def index_pytree(structure, index):
@@ -159,6 +169,24 @@ def index_pytree(structure, index):
             return None
         return x[index]
     return jt.map(f, structure)
+
+
+def pytree_has_nan(tree):
+    def f(t):
+        if t is None:
+            return None
+        return jnp.isnan(t).any(axis=None)
+    
+    return jt.reduce(lambda x, y: jnp.logical_or(x, y), jt.map(f, tree), False)
+
+
+def pytree_has_inf(tree):
+    def f(t):
+        if t is None:
+            return None
+        return jnp.logical_not(jnp.isfinite(t)).any(axis=None)
+    
+    return jt.reduce(lambda x, y: jnp.logical_or(x, y), jt.map(f, tree), False)
 
 
 def subset_classification_accuracy(model, x, y, percent, key):

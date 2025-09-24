@@ -3,6 +3,8 @@ import chex
 import jax.numpy as jnp
 from conf.singleton_conf import SingletonConfig
 from scipy import optimize
+import equinox as eqx
+from util.util import pytree_has_inf
 
 
 def approx_to_gdp(eps: float, delta: float, tol: float = 1e-6) -> float:
@@ -46,6 +48,7 @@ def weights_to_mu_schedule(mu: float, schedule: chex.Array, p: float, T: int) ->
     sigma_s = SingletonConfig.get_policy_config_instance().sigma_s
     
     mu_0 = jnp.sqrt(jnp.log(mu**2 / (p**2 * T) + 1))
+    schedule = eqx.error_if(schedule, (schedule == 0).any(axis=None), "Schedule has zeroes")
     return jnp.sqrt(jnp.log(schedule * (jnp.exp(mu_0 ** 2) - 1) + 1) / sigma_s ** 2)
 
 
@@ -81,6 +84,18 @@ def gdp_to_sigma(mu: chex.Array) -> chex.Array:
     C = SingletonConfig.get_environment_config_instance().C
     return C / mu
 
+def dsigma_dweight(sigmas: jnp.ndarray, mu, p, T) -> jnp.ndarray:
+    """
+    Compute ds / dp, where 's' is sigma and 'p' is the policy
+    """
+
+    mu_0 = jnp.sqrt(jnp.log(mu**2 / (p**2 * T) + 1))
+    numerator = jnp.exp(mu_0**2) - 1
+    denominator_pt1 = numerator * sigmas + 1
+    denominator_pt2 = jnp.log(denominator_pt1) ** (3/2)
+    
+    return numerator / (2 * denominator_pt1 * denominator_pt2)
+
 
 def weights_to_sigma_schedule(weights: chex.Array, mu, p, T):
     """Convert a vector of non-negative weights summing to T to a sigma schedule for G-DP. 
@@ -95,6 +110,7 @@ def weights_to_sigma_schedule(weights: chex.Array, mu, p, T):
         The Gaussian noise scale sigma.
     """
     mu_schedule = weights_to_mu_schedule(mu, weights, p, T)
+    mu_schedule = eqx.error_if(mu_schedule, pytree_has_inf(mu_schedule), "New Sigmas has Inf!")
     return gdp_to_sigma(mu_schedule)
 
 
