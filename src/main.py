@@ -74,27 +74,30 @@ def main():
     vmapped_train_with_noise = vmap(pmapped_train_with_noise, in_axes=(None, None, 0))
 
     @jit
-    @partial(checkify.checkify, errors=checkify.user_checks)
-    def get_policy_loss(sigmas, key) -> Tuple[chex.Array, chex.Array, Tuple[chex.Array, chex.Array]]:
+    @checkify.checkify
+    @partial(eqx.filter_value_and_grad, has_aux=True)
+    def get_policy_loss(policy, key) -> Tuple[chex.Array, Tuple[chex.Array, chex.Array]]:
         """Calculate the policy loss."""
         # Split keys for # of runs in batch
         keys = jr.split(key, policy_batch_size)
+        sigmas = weights_to_sigma_schedule(policy, mu, p, T).squeeze()
+
+        checkify.check(jnp.all(sigmas > 0), "Some sigmas are not zero!")
         
         # Reshape to (num-runs-per-device, num-devices, 2)
         # '2' is to fit with JAX PRNG keys, not related to distributing across devices
         keys = keys.reshape(policy_batch_size // num_gpus, num_gpus, 2)
 
         # Train all networks
-        _, derivatives, losses, accuracies = vmapped_train_with_noise(sigmas, env_params, keys)
+        _, losses, accuracies = vmapped_train_with_noise(sigmas, env_params, keys)
         
         final_loss = jnp.mean(losses[:, :, -1])
         losses = losses.reshape(-1, T + 1)
         accuracies = accuracies.reshape(-1, T)
 
-        derivatives = derivatives.reshape(-1, T)
-        derivatives = derivatives * dsigma_dweight(sigmas, mu, p, T)
-        derivatives = derivatives.mean(axis=0)
-        return final_loss, derivatives, (losses, accuracies)
+        # derivatives = derivatives.reshape(-1, T)
+        # # derivatives = derivatives * dsigma_dweight(sigmas, mu, p, T)
+        return final_loss, (losses, accuracies)
 
     optimizer = optax.adamw(learning_rate=experiment_config.sweep.policy.lr.sample())
     opt_state = optimizer.init(policy) # type: ignore
@@ -111,22 +114,18 @@ def main():
         key, _ = jr.split(key)
 
         # Get policy loss
-        sigmas = weights_to_sigma_schedule(policy, mu, p, T).squeeze()
-        err, (loss, grads, (losses, accuracies)) = get_policy_loss(sigmas, key)
+        err, ((loss, (losses, accuracies)), grads) = get_policy_loss(policy, key)
         err.throw()
-        grads = eqx.error_if(grads, pytree_has_inf(grads), "New Sigmas has Inf!")
+        grads = eqx.error_if(grads, pytree_has_inf(grads), "Gradients have infinite values!")
+        grads = eqx.error_if(grads, pytree_has_nan(grads), "Gradients have infinite values!")
 
         # Update policy model
         updates, opt_state = optimizer.update(grads, opt_state, policy)
-        sigmas = optax.apply_updates(sigmas, updates) # type: ignore
-        policy = sigma_schedule_to_weights(sigmas, mu, p, T)
-        policy = optax.projections.projection_simplex(policy, scale=T)
-        policy = eqx.error_if(policy, pytree_has_inf(policy), "Policy has Inf!")
-        policy = eqx.error_if(policy, pytree_has_nan(policy), "Policy has NaN!")
+        policy = optax.apply_updates(policy, updates) # type: ignore
 
         new_sigmas = weights_to_sigma_schedule(policy, mu, p, T).squeeze() # type: ignore
-        new_sigmas = eqx.error_if(new_sigmas, pytree_has_inf(new_sigmas), "New Sigmas has Inf!")
-        new_sigmas = eqx.error_if(new_sigmas, pytree_has_nan(new_sigmas), "clipped grads has NaN!")
+        new_sigmas = eqx.error_if(new_sigmas, pytree_has_inf(new_sigmas), "Updated Sigmas have infinite values!")
+        new_sigmas = eqx.error_if(new_sigmas, pytree_has_nan(new_sigmas), "Updated Sigmas have NaN values!")
         for i in range(losses.shape[0]):
             loss = losses[i, -1]
             accuracy = accuracies[i, -1]

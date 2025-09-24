@@ -30,7 +30,7 @@ def train_with_noise(
     noise_schedule: jnp.ndarray,
     params: DP_RL_Params,
     key: chex.PRNGKey
-) -> Tuple[eqx.Module, chex.Array, chex.Array, chex.Array]:
+) -> Tuple[eqx.Module, chex.Array, chex.Array]:
     # Create key
     key, _key = jr.split(key)
 
@@ -38,6 +38,7 @@ def train_with_noise(
     network = reinit_model(params.network, _key)
     optimizer = optax.sgd(params.lr)
 
+    @jax.checkpoint  #type:ignore
     def training_step(
         carry,
         noise
@@ -85,42 +86,42 @@ def train_with_noise(
 
     losses = jnp.concat([losses, jnp.asarray([final_loss])])
 
-    ### Manual Computation of approximated gradients ###
-    T = noise_schedule.size
+    # ### Manual Computation of approximated gradients ###
+    # T = noise_schedule.size
 
-    def compute_grad_loop(i, carry):
-        i = T - i - 1
-        derivatives, prod = carry
-        noise_key = noise_keys[i, :]
-        batch_key = batch_keys[i, :]
+    # def compute_grad_loop(i, carry):
+    #     i = T - i - 1
+    #     derivatives, prod = carry
+    #     noise_key = noise_keys[i, :]
+    #     batch_key = batch_keys[i, :]
 
-        w_i = index_pytree(networks, i)
-        n_i = get_spherical_noise(w_i, noise_schedule[i], noise_key)
-        batch_x, batch_y = sample_batch_uniform(params.X, params.y, params.dummy_batch, batch_key)
+    #     w_i = index_pytree(networks, i)
+    #     n_i = get_spherical_noise(w_i, noise_schedule[i], noise_key)
+    #     batch_x, batch_y = sample_batch_uniform(params.X, params.y, params.dummy_batch, batch_key)
 
-        derivatives = derivatives.at[i].set(
-            dot_pytrees(prod, n_i)
-        )
+    #     derivatives = derivatives.at[i].set(
+    #         dot_pytrees(prod, n_i)
+    #     )
 
-        prod = subtract_pytrees(
-            prod,
-            multiply_pytree_by_scalar(
-                neural_net_gnhvp(w_i, batch_x, batch_y, prod),
-                params.lr
-            )
-        )
+    #     prod = subtract_pytrees(
+    #         prod,
+    #         multiply_pytree_by_scalar(
+    #             neural_net_gnhvp(w_i, batch_x, batch_y, prod),
+    #             params.lr
+    #         )
+    #     )
 
-        return (derivatives, prod)
+    #     return (derivatives, prod)
 
-    derivatives = jnp.zeros_like(noise_schedule)
-    prod = multiply_pytree_by_scalar(final_grads, -params.lr)
-    derivatives, _ = jax.lax.fori_loop(
-        0,
-        T,
-        compute_grad_loop,
-        (derivatives, prod)
-    )
+    # derivatives = jnp.zeros_like(noise_schedule)
+    # prod = multiply_pytree_by_scalar(final_grads, -params.lr)
+    # derivatives, _ = jax.lax.fori_loop(
+    #     0,
+    #     T,
+    #     compute_grad_loop,
+    #     (derivatives, prod)
+    # )
 
 
-    return network, derivatives, losses, accuracies
+    return network, losses, accuracies
     
