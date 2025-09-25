@@ -13,8 +13,8 @@ import tqdm
 import numpy as np
 import wandb
 from util.logger import ExperimentLogger
-from privacy.gdp_privacy import approx_to_gdp, weights_to_sigma_schedule, sigma_schedule_to_weights, dsigma_dweight
-from util.util import determine_optimal_num_devices, pytree_has_inf, pytree_has_nan
+from privacy.gdp_privacy import approx_to_gdp, weights_to_sigma_schedule
+from util.util import determine_optimal_num_devices, pytree_has_inf, pytree_has_nan, ensure_valid_pytree
 from typing import Tuple
 from environments.dp import train_with_noise
 from util.baselines import Baseline
@@ -82,7 +82,8 @@ def main():
         keys = jr.split(key, policy_batch_size)
         sigmas = weights_to_sigma_schedule(policy, mu, p, T).squeeze()
 
-        checkify.check(jnp.all(sigmas > 0), "Some sigmas are not zero!")
+        # Ensure privacy loss on each iteration is a real number (i.e. \sigma > 0)
+        checkify.check(jnp.all(sigmas > 0), "Some sigmas are <= zero!")
         
         # Reshape to (num-runs-per-device, num-devices, 2)
         # '2' is to fit with JAX PRNG keys, not related to distributing across devices
@@ -115,17 +116,22 @@ def main():
 
         # Get policy loss
         err, ((loss, (losses, accuracies)), grads) = get_policy_loss(policy, key)
-        err.throw()
-        grads = eqx.error_if(grads, pytree_has_inf(grads), "Gradients have infinite values!")
-        grads = eqx.error_if(grads, pytree_has_nan(grads), "Gradients have infinite values!")
 
-        # Update policy model
+        # Throw checkify error if one occurred, no-op otherwise. 
+        err.throw()
+        
+        # Ensure gradients are real numbers
+        grads = ensure_valid_pytree(grads)
+
+        # Update policy
         updates, opt_state = optimizer.update(grads, opt_state, policy)
         policy = optax.apply_updates(policy, updates) # type: ignore
 
+        # Get new sigmas, ensure still valid
         new_sigmas = weights_to_sigma_schedule(policy, mu, p, T).squeeze() # type: ignore
-        new_sigmas = eqx.error_if(new_sigmas, pytree_has_inf(new_sigmas), "Updated Sigmas have infinite values!")
-        new_sigmas = eqx.error_if(new_sigmas, pytree_has_nan(new_sigmas), "Updated Sigmas have NaN values!")
+        new_sigmas = ensure_valid_pytree(new_sigmas)
+
+        # Log iteration results to file
         for i in range(losses.shape[0]):
             loss = losses[i, -1]
             accuracy = accuracies[i, -1]
@@ -137,34 +143,25 @@ def main():
                             "losses": losses[i, :],
                             "accuracies": accuracies[i, :],
                     })
-            
-        if jnp.isnan(grads).sum() > 0:
-            print(jnp.isnan(grads).sum(), jnp.argwhere(jnp.isnan(grads)))
-            exit()
 
+        # self-explanatory
         iterator.set_description(
             f"Training Progress - Loss: {loss:.4f}"
         )
 
-        if np.isnan(loss):
-            print("NaN loss encountered. Stopping early")
-            exit()
-            break
-
-
-    # Generate final results iwth lots of iterations
-    actions = weights_to_sigma_schedule(policy, mu, p, T).squeeze() # type: ignore
+    # Generate final results with lots of iterations
+    sigmas = weights_to_sigma_schedule(policy, mu, p, T).squeeze() # type: ignore
     eval_num_iterations = 100
     for i in tqdm.tqdm(range(eval_num_iterations), total=eval_num_iterations, desc="Evaluating Policy"):
         key, _key = jr.split(key)
-        _, losses, accuracies = train_with_noise(actions, env_params, _key)
+        _, losses, accuracies = jit(train_with_noise)(sigmas, env_params, _key)
         loss = losses[-1]
         accuracy = accuracies[-1]
         logger.log(0, {"step": total_timesteps,
                 "batch_idx": i,
                 "loss": loss,
                 "accuracy" : accuracy,
-                "actions": actions,
+                "actions": sigmas,
                 "losses": losses,
                 "accuracies": accuracies,
         })

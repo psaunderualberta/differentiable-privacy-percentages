@@ -5,7 +5,7 @@ from conf.singleton_conf import SingletonConfig
 from scipy import optimize
 import equinox as eqx
 from util.util import pytree_has_inf
-
+from jax.nn import softmax
 
 def approx_to_gdp(eps: float, delta: float, tol: float = 1e-6) -> float:
     """Convert (eps, delta)-DP to GDP.
@@ -109,6 +109,7 @@ def weights_to_sigma_schedule(weights: chex.Array, mu, p, T):
     Returns:
         The Gaussian noise scale sigma.
     """
+    weights = softmax(weights) * T
     mu_schedule = weights_to_mu_schedule(mu, weights, p, T)
     mu_schedule = eqx.error_if(mu_schedule, pytree_has_inf(mu_schedule), "New Sigmas has Inf!")
     return gdp_to_sigma(mu_schedule)

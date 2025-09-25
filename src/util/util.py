@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Any
 
 import chex
 import equinox as eqx
@@ -187,6 +187,21 @@ def pytree_has_inf(tree):
         return jnp.logical_not(jnp.isfinite(t)).any(axis=None)
     
     return jt.reduce(lambda x, y: jnp.logical_or(x, y), jt.map(f, tree), False)
+
+
+def ensure_valid_pytree(tree: Any) -> Any:
+    """
+    Ensures PyTree does not have any Inf values or NaN values using eqx.error_if
+
+    Args:
+        Tree: PyTree to check
+
+    Returns:
+        Tree: Original Pytree unmodified, must be used to ensure DCE isn't applied to this function. 
+    """
+    tree = eqx.error_if(tree, pytree_has_inf(tree), "Tree has infinite values!")
+    tree = eqx.error_if(tree, pytree_has_nan(tree), "Tree has NaN values!")
+    return tree
 
 
 def subset_classification_accuracy(model, x, y, percent, key):

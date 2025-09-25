@@ -15,13 +15,7 @@ from jax.experimental import checkify
 import jax.random as jr
 import optax
 from util.util import reinit_model, clip_grads_abadi, sample_batch_uniform, get_spherical_noise, subset_classification_accuracy
-from environments.losses import vmapped_loss, loss, neural_net_gnhvp
-from util.util import (
-    dot_pytrees,
-    multiply_pytree_by_scalar,
-    subtract_pytrees,
-    index_pytree,
-)
+from environments.losses import vmapped_loss, loss
 
 from environments.dp_params import DP_RL_Params
 
@@ -82,7 +76,7 @@ def train_with_noise(
 
     loop_key, batch_key = jr.split(loop_key)
     batch_x, batch_y = sample_batch_uniform(params.X, params.y, params.dummy_batch, batch_key)
-    final_loss, final_grads = loss(network, batch_x, batch_y)
+    final_loss, _ = loss(network, batch_x, batch_y)
 
     losses = jnp.concat([losses, jnp.asarray([final_loss])])
 

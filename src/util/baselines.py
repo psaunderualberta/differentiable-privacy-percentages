@@ -5,11 +5,12 @@ import jax.random as jr
 import pandas as pd
 import plotly.express as px
 import tqdm
+from jax import jit
 
 from environments.dp import DP_RL_Params
 from environments.dp import train_with_noise
 from privacy.gdp_privacy import weights_to_sigma_schedule
-import optax
+
 
 file_location = os.path.abspath(os.path.dirname(__file__))
 
@@ -85,7 +86,6 @@ class Baseline:
 
         # Uniform schedule
         weights = jnp.ones((1, T,))
-        weights = optax.projections.projection_simplex(weights, scale=T)
 
         sigmas = weights_to_sigma_schedule(weights, self.mu, self.p, T).squeeze()
         self.sigma = float(sigmas[0])  # type: ignore
@@ -103,7 +103,7 @@ class Baseline:
         key = jr.PRNGKey(0)
         for _ in iterator:
             key, _key = jr.split(key)
-            _, losses, accuracies = train_with_noise(sigmas, self.env_params, _key)
+            _, losses, accuracies = jit(train_with_noise)(sigmas, self.env_params, _key)
             df.loc[len(df)] = {  # type: ignore
                 "type": f"Constant Noise ({round(self.sigma, 2)})",
                 "step": 0,  # only recording one step for these
