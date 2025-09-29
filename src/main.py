@@ -1,6 +1,8 @@
 import os
 from conf.singleton_conf import SingletonConfig
-from jax import random as jr, vmap, pmap, numpy as jnp, jit, value_and_grad, debug, devices
+from jax import random as jr, vmap, numpy as jnp, jit, devices, shard_map, value_and_grad
+from jax import lax as jlax
+from jax.sharding import Mesh, PartitionSpec as P
 from jax.experimental import checkify
 from functools import partial
 from util.dataloaders import DATALOADERS
@@ -68,37 +70,29 @@ def main():
     logger = ExperimentLogger(directories, columns, large_columns)
 
     _, num_gpus = determine_optimal_num_devices(devices('gpu'), policy_batch_size)
-    gpus = devices('gpu')[:num_gpus]
-    pmapped_train_with_noise = vmap(train_with_noise, in_axes=(None, None, None, None, 0))
-    vmapped_train_with_noise = vmap(pmapped_train_with_noise, in_axes=(None, None, None, None, 0))
+    mesh = Mesh(devices('gpu')[:num_gpus], 'x')
+    vmapped_train_with_noise = vmap(train_with_noise, in_axes=(None, None, None, None, 0))
+    # vmapped_train_with_noise = vmap(pmapped_train_with_noise, in_axes=(None, None, None, None, 0))
 
     @jit
-    @checkify.checkify
-    @partial(eqx.filter_value_and_grad, has_aux=True)
-    def get_policy_loss(policy, key) -> Tuple[chex.Array, Tuple[chex.Array, chex.Array]]:
+    @partial(value_and_grad, has_aux=True)
+    @partial(shard_map, mesh=mesh, in_specs=(P(), P(), P(), P('x')), out_specs=(P(), (P('x'), P('x'))), check_vma=False)
+    def get_policy_loss(policy, mb_key, init_key, noise_keys) -> Tuple[chex.Array, Tuple[chex.Array, chex.Array]]:
         """Calculate the policy loss."""
         # Split keys for # of runs in batch
-        key, init_key = jr.split(key)
-        key, mb_key = jr.split(key)
-        noise_keys = jr.split(key, policy_batch_size)
         sigmas = weights_to_sigma_schedule(policy, mu, p, T).squeeze()
 
         # Ensure privacy loss on each iteration is a real number (i.e. \sigma > 0)
-        checkify.check(jnp.all(sigmas > 0), "Some sigmas are <= zero!")
-
-        # sigmas = ensure_valid_pytree(sigmas)
-        # Reshape to (num-runs-per-device, num-devices, 2)
-        # '2' is to fit with JAX PRNG keys, not related to distributing across devices
-        noise_keys = noise_keys.reshape(policy_batch_size // num_gpus, num_gpus, 2)
+        sigmas = eqx.error_if(sigmas, jnp.any(sigmas <= 0), "Some sigmas are <= zero!")
 
         # Train all networks
         _, losses, accuracies = vmapped_train_with_noise(sigmas, env_params, mb_key, init_key, noise_keys)
-        losses = ensure_valid_pytree(losses)
-        accuracies = ensure_valid_pytree(accuracies)
         
-        final_loss = jnp.mean(losses[:, :, -1])
-        losses = losses.reshape(-1, T + 1)
-        accuracies = accuracies.reshape(-1, T)
+        # Average over all shard-mapped networks
+        final_loss = jlax.pmean(losses[:, -1], 'x').squeeze()
+
+        # losses = losses.reshape(-1, T + 1)
+        # accuracies = accuracies.reshape(-1, T)
 
         # derivatives = derivatives.reshape(-1, T)
         # # derivatives = derivatives * dsigma_dweight(sigmas, mu, p, T)
@@ -119,10 +113,11 @@ def main():
         key, _ = jr.split(key)
 
         # Get policy loss
-        err, ((loss, (losses, accuracies)), grads) = get_policy_loss(policy, key)
-
-        # Throw checkify error if one occurred, no-op otherwise. 
-        err.throw()
+        key, init_key = jr.split(key)
+        key, mb_key = jr.split(key)
+        key, _key = jr.split(key)
+        noise_keys = jr.split(_key, policy_batch_size)
+        (loss, (losses, accuracies)), grads = get_policy_loss(policy, mb_key, init_key, noise_keys)
         
         # Ensure gradients are real numbers
         loss = ensure_valid_pytree(loss)

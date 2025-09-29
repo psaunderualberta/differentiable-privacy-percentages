@@ -28,7 +28,7 @@ def train_with_noise(
     noise_key: chex.PRNGKey,
 ) -> Tuple[eqx.Module, chex.Array, chex.Array]:
     # Create network
-    network = reinit_model(params.network, init_key)
+    network = reinit_model(jax.lax.pvary(params.network, 'x'), init_key)
     optimizer = optax.sgd(params.lr)
 
     @jax.checkpoint  #type:ignore
