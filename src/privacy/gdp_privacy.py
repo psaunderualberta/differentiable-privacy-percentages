@@ -109,9 +109,10 @@ def weights_to_sigma_schedule(weights: chex.Array, mu, p, T):
     Returns:
         The Gaussian noise scale sigma.
     """
-    weights = softmax(weights) * T
+    weights = (T * jnp.exp(weights)) / jnp.sum(jnp.exp(weights), axis=-1, keepdims=True)
     mu_schedule = weights_to_mu_schedule(mu, weights, p, T)
     mu_schedule = eqx.error_if(mu_schedule, pytree_has_inf(mu_schedule), "New Sigmas has Inf!")
+    mu_schedule = eqx.error_if(mu_schedule, (mu_schedule == 0).any(), "Some mus are 0!")
     return gdp_to_sigma(mu_schedule)
 
 

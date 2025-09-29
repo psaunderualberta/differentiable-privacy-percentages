@@ -46,7 +46,6 @@ def main():
 
     # Initialize Policy model
     policy = jnp.ones((T,))
-    policy = optax.projections.projection_simplex(policy, scale=T)
     policy_batch_size = sweep_config.policy.batch_size
 
     private_network_arch = net_factory(
@@ -70,8 +69,8 @@ def main():
 
     _, num_gpus = determine_optimal_num_devices(devices('gpu'), policy_batch_size)
     gpus = devices('gpu')[:num_gpus]
-    pmapped_train_with_noise = pmap(train_with_noise, in_axes=(None, None, 0), devices=gpus)
-    vmapped_train_with_noise = vmap(pmapped_train_with_noise, in_axes=(None, None, 0))
+    pmapped_train_with_noise = vmap(train_with_noise, in_axes=(None, None, None, None, 0))
+    vmapped_train_with_noise = vmap(pmapped_train_with_noise, in_axes=(None, None, None, None, 0))
 
     @jit
     @checkify.checkify
@@ -79,18 +78,23 @@ def main():
     def get_policy_loss(policy, key) -> Tuple[chex.Array, Tuple[chex.Array, chex.Array]]:
         """Calculate the policy loss."""
         # Split keys for # of runs in batch
-        keys = jr.split(key, policy_batch_size)
+        key, init_key = jr.split(key)
+        key, mb_key = jr.split(key)
+        noise_keys = jr.split(key, policy_batch_size)
         sigmas = weights_to_sigma_schedule(policy, mu, p, T).squeeze()
 
         # Ensure privacy loss on each iteration is a real number (i.e. \sigma > 0)
         checkify.check(jnp.all(sigmas > 0), "Some sigmas are <= zero!")
-        
+
+        # sigmas = ensure_valid_pytree(sigmas)
         # Reshape to (num-runs-per-device, num-devices, 2)
         # '2' is to fit with JAX PRNG keys, not related to distributing across devices
-        keys = keys.reshape(policy_batch_size // num_gpus, num_gpus, 2)
+        noise_keys = noise_keys.reshape(policy_batch_size // num_gpus, num_gpus, 2)
 
         # Train all networks
-        _, losses, accuracies = vmapped_train_with_noise(sigmas, env_params, keys)
+        _, losses, accuracies = vmapped_train_with_noise(sigmas, env_params, mb_key, init_key, noise_keys)
+        losses = ensure_valid_pytree(losses)
+        accuracies = ensure_valid_pytree(accuracies)
         
         final_loss = jnp.mean(losses[:, :, -1])
         losses = losses.reshape(-1, T + 1)
@@ -100,7 +104,7 @@ def main():
         # # derivatives = derivatives * dsigma_dweight(sigmas, mu, p, T)
         return final_loss, (losses, accuracies)
 
-    optimizer = optax.adamw(learning_rate=experiment_config.sweep.policy.lr.sample())
+    optimizer = optax.adam(learning_rate=experiment_config.sweep.policy.lr.sample())
     opt_state = optimizer.init(policy) # type: ignore
 
     iterator = tqdm.tqdm(
@@ -121,11 +125,13 @@ def main():
         err.throw()
         
         # Ensure gradients are real numbers
+        loss = ensure_valid_pytree(loss)
         grads = ensure_valid_pytree(grads)
 
         # Update policy
         updates, opt_state = optimizer.update(grads, opt_state, policy)
         policy = optax.apply_updates(policy, updates) # type: ignore
+        policy = ensure_valid_pytree(policy)
 
         # Get new sigmas, ensure still valid
         new_sigmas = weights_to_sigma_schedule(policy, mu, p, T).squeeze() # type: ignore
@@ -154,7 +160,8 @@ def main():
     eval_num_iterations = 100
     for i in tqdm.tqdm(range(eval_num_iterations), total=eval_num_iterations, desc="Evaluating Policy"):
         key, _key = jr.split(key)
-        _, losses, accuracies = jit(train_with_noise)(sigmas, env_params, _key)
+        k1, k2, k3 = jr.split(_key, 3)
+        _, losses, accuracies = jit(train_with_noise)(sigmas, env_params, k1, k2, k3)
         loss = losses[-1]
         accuracy = accuracies[-1]
         logger.log(0, {"step": total_timesteps,

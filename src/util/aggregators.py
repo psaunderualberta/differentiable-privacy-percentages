@@ -127,6 +127,13 @@ def _actions_plotter(df: pd.DataFrame, col_name: str, timesteps: Optional[list[i
     fig.update_layout(
         xaxis_title="Training Step",
         yaxis_title=col_name.capitalize(),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5,
+        )
     )
 
     return fig

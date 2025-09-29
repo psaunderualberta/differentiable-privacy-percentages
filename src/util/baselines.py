@@ -50,13 +50,13 @@ class Baseline:
 
     def baseline_comparison_final_loss_plotter(self, df=None):
         df = self.combine_dataset(df)
-        return px.box(
-            df, x="type", y="loss", title="Final Loss Box Plot", log_y=True
+        return px.violin(
+            df, x="type", y="loss", title="Final Loss Violin Plot", box=True,
         )
 
     def baseline_comparison_accuracy_plotter(self, df=None):
         df = self.combine_dataset(df)
-        return px.box(df, x="type", y="accuracy", title="Accuracy Box Plot")
+        return px.violin(df, x="type", y="accuracy", title="Accuracy Violin Plot", box=True)
 
     def create_baseline_figures(self, save_figs=False):
         figs = [
@@ -103,7 +103,8 @@ class Baseline:
         key = jr.PRNGKey(0)
         for _ in iterator:
             key, _key = jr.split(key)
-            _, losses, accuracies = jit(train_with_noise)(sigmas, self.env_params, _key)
+            k1, k2, k3 = jr.split(_key, 3)
+            _, losses, accuracies = jit(train_with_noise)(sigmas, self.env_params, k1, k2, k3)
             df.loc[len(df)] = {  # type: ignore
                 "type": f"Constant Noise ({round(self.sigma, 2)})",
                 "step": 0,  # only recording one step for these

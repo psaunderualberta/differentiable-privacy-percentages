@@ -23,13 +23,12 @@ from environments.dp_params import DP_RL_Params
 def train_with_noise(
     noise_schedule: jnp.ndarray,
     params: DP_RL_Params,
-    key: chex.PRNGKey
+    mb_key: chex.PRNGKey,
+    init_key: chex.PRNGKey,
+    noise_key: chex.PRNGKey,
 ) -> Tuple[eqx.Module, chex.Array, chex.Array]:
-    # Create key
-    key, _key = jr.split(key)
-
     # Create network
-    network = reinit_model(params.network, _key)
+    network = reinit_model(params.network, init_key)
     optimizer = optax.sgd(params.lr)
 
     @jax.checkpoint  #type:ignore
@@ -37,20 +36,20 @@ def train_with_noise(
         carry,
         noise
     ) -> Tuple[
-        Tuple[eqx.Module, optax.OptState, chex.PRNGKey],  # Carry values
+        Tuple[eqx.Module, optax.OptState, chex.PRNGKey, chex.PRNGKey],  # Carry values
         Tuple[chex.Array, chex.Array, eqx.Module, chex.PRNGKey, chex.PRNGKey]  # Scan outputs
     ]:
-        model, opt_state, loop_key = carry
+        model, opt_state, mb_key, noise_key = carry
 
-        loop_key, batch_key = jr.split(loop_key)
-        batch_x, batch_y = sample_batch_uniform(params.X, params.y, params.dummy_batch, batch_key)
+        mb_key, _key = jr.split(mb_key)
+        batch_x, batch_y = sample_batch_uniform(params.X, params.y, params.dummy_batch, _key)
 
         new_loss, grads = vmapped_loss(model, batch_x, batch_y)
         clipped_grads = clip_grads_abadi(grads, params.C)
 
         # Add spherical noise to gradients
-        loop_key, noise_key = jr.split(loop_key)
-        noises = get_spherical_noise(clipped_grads, noise, noise_key)
+        noise_key, _key = jr.split(noise_key)
+        noises = get_spherical_noise(clipped_grads, noise, _key)
         noised_grads = eqx.apply_updates(clipped_grads, noises)
 
         # Add noisy gradients, update model and optimizer
@@ -60,21 +59,21 @@ def train_with_noise(
         new_model = eqx.apply_updates(model, updates)
 
         # Subsample each with probability p
-        loop_key, _used_key = jr.split(loop_key)
+        mb_key, _key = jr.split(mb_key)
         accuracy = subset_classification_accuracy(
-            new_model, params.X, params.y, 0.01, _used_key
+            new_model, params.X, params.y, 0.01, _key
         )
 
-        return (new_model, new_opt_state, loop_key), (new_loss, accuracy, new_model, noise_key, batch_key)
+        return (new_model, new_opt_state, mb_key, noise_key), (new_loss, accuracy, new_model, noise_key, mb_key)
 
-    initial_carry = (network, optimizer.init(network), key)
-    (network, _, loop_key), (losses, accuracies, networks, noise_keys, batch_keys) = jax.lax.scan(
+    initial_carry = (network, optimizer.init(network), mb_key, noise_key)
+    (network, _, mb_key, noise_key), (losses, accuracies, networks, noise_keys, batch_keys) = jax.lax.scan(
         training_step,
         initial_carry,
         xs=noise_schedule,
     )
 
-    loop_key, batch_key = jr.split(loop_key)
+    mb_key, batch_key = jr.split(mb_key)
     batch_x, batch_y = sample_batch_uniform(params.X, params.y, params.dummy_batch, batch_key)
     final_loss, _ = loss(network, batch_x, batch_y)
 
