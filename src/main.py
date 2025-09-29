@@ -39,15 +39,18 @@ def main():
 
     epsilon = experiment_config.sweep.env.eps
     delta = experiment_config.sweep.env.delta
-    mu = approx_to_gdp(epsilon, delta)
+    mu_tot = approx_to_gdp(epsilon, delta)
     p = experiment_config.sweep.env.batch_size / X.shape[0]  # Assuming MNIST dataset size
     T = environment_config.max_steps_in_episode
     print("Privacy parameters:")
     print(f"\t(epsilon, delta)-DP: ({epsilon}, {delta})")
-    print(f"\tmu-GDP: {mu}")
+    print(f"\tmu-GDP: {mu_tot}")
 
     # Initialize Policy model
     policy = jnp.ones((T,))
+    mu_0 = jnp.sqrt(jnp.log(mu_tot**2 / (p**2 * T) + 1))
+    l2_ball_radius = mu_tot / (p * jnp.sqrt(jnp.exp(mu_0**2) - 1))
+    policy = optax.projections.projection_l2_ball(policy, scale=l2_ball_radius)**2
     policy_batch_size = sweep_config.policy.batch_size
 
     private_network_arch = net_factory(
@@ -80,7 +83,7 @@ def main():
     def get_policy_loss(policy, mb_key, init_key, noise_keys) -> Tuple[chex.Array, Tuple[chex.Array, chex.Array]]:
         """Calculate the policy loss."""
         # Split keys for # of runs in batch
-        sigmas = weights_to_sigma_schedule(policy, mu, p, T).squeeze()
+        sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()
 
         # Ensure privacy loss on each iteration is a real number (i.e. \sigma > 0)
         sigmas = eqx.error_if(sigmas, jnp.any(sigmas <= 0), "Some sigmas are <= zero!")
@@ -126,10 +129,11 @@ def main():
         # Update policy
         updates, opt_state = optimizer.update(grads, opt_state, policy)
         policy = optax.apply_updates(policy, updates) # type: ignore
+        policy = optax.projections.projection_l2_ball(jnp.sqrt(policy), scale=l2_ball_radius)**2
         policy = ensure_valid_pytree(policy)
 
         # Get new sigmas, ensure still valid
-        new_sigmas = weights_to_sigma_schedule(policy, mu, p, T).squeeze() # type: ignore
+        new_sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze() # type: ignore
         new_sigmas = ensure_valid_pytree(new_sigmas)
 
         # Log iteration results to file
@@ -151,7 +155,7 @@ def main():
         )
 
     # Generate final results with lots of iterations
-    sigmas = weights_to_sigma_schedule(policy, mu, p, T).squeeze() # type: ignore
+    sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze() # type: ignore
     eval_num_iterations = 100
     for i in tqdm.tqdm(range(eval_num_iterations), total=eval_num_iterations, desc="Evaluating Policy"):
         key, _key = jr.split(key)
@@ -170,7 +174,7 @@ def main():
 
     # Generate baseline if directed
     if experiment_config.sweep.with_baselines:
-        baseline = Baseline(env_params, mu, eval_num_iterations)
+        baseline = Baseline(env_params, mu_tot, eval_num_iterations)
         baseline.generate_baseline_data()
     else:
         baseline = None
