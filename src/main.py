@@ -68,8 +68,8 @@ def main():
     )
 
     directories = [os.path.join(".", "logs", "0")]
-    columns = ["step", "batch_idx", "loss", "accuracy", "actions", "losses", "accuracies"]
-    large_columns = ["actions", "losses", "accuracies"]
+    columns = ["step", "batch_idx", "loss", "accuracy", "actions", "losses", "accuracies", "policy"]
+    large_columns = ["actions", "losses", "accuracies", "policy"]
     logger = ExperimentLogger(directories, columns, large_columns)
 
     _, num_gpus = determine_optimal_num_devices(devices('gpu'), policy_batch_size)
@@ -77,6 +77,7 @@ def main():
     vmapped_train_with_noise = vmap(train_with_noise, in_axes=(None, None, None, None, 0))
     # vmapped_train_with_noise = vmap(pmapped_train_with_noise, in_axes=(None, None, None, None, 0))
 
+    # @partial(checkify.checkify, errors=checkify.nan_checks)
     @jit
     @partial(value_and_grad, has_aux=True)
     @partial(shard_map, mesh=mesh, in_specs=(P(), P(), P(), P('x')), out_specs=(P(), (P('x'), P('x'))), check_vma=False)
@@ -92,7 +93,8 @@ def main():
         _, losses, accuracies = vmapped_train_with_noise(sigmas, env_params, mb_key, init_key, noise_keys)
         
         # Average over all shard-mapped networks
-        final_loss = jlax.pmean(losses[:, -1], 'x').squeeze()
+        final_loss = jnp.mean(losses[:, -1])
+        # final_loss = jlax.pmean(final_losses, 'x').squeeze()
 
         # losses = losses.reshape(-1, T + 1)
         # accuracies = accuracies.reshape(-1, T)
@@ -128,7 +130,7 @@ def main():
 
         # Update policy
         updates, opt_state = optimizer.update(grads, opt_state, policy)
-        policy = optax.apply_updates(policy, updates) # type: ignore
+        policy: jnp.ndarray = optax.apply_updates(policy, updates) # type: ignore
         policy = optax.projections.projection_l2_ball(jnp.sqrt(policy), scale=l2_ball_radius)**2
         policy = ensure_valid_pytree(policy)
 
@@ -145,6 +147,7 @@ def main():
                             "loss": loss,
                             "accuracy" : accuracy,
                             "actions": new_sigmas,
+                            "policy": policy,
                             "losses": losses[i, :],
                             "accuracies": accuracies[i, :],
                     })

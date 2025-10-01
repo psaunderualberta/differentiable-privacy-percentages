@@ -43,8 +43,12 @@ def clip_grads_abadi(grads: eqx.Module, C: float):
     # sum_clipped, _ = per_example_global_norm_clip(grads_flat, C)
 
     # DP optimization as described in https://proceedings.neurips.cc/paper_files/paper/2023/file/8249b30d877c91611fd8c7aa6ac2b5fe-Paper-Conference.pdf
+    grads = ensure_valid_pytree(grads)
     global_grad_norms = jax.vmap(global_norm)(grads)
-    multipliers = jnp.minimum(1 / global_grad_norms, C)
+
+    # Safe way to avoid NaN appearing on backward pass
+    multipliers = 1 / jnp.where(global_grad_norms > 1 / C, global_grad_norms, 1 / C)
+
     sum_clipped = jax.tree.map(
         lambda g: jnp.tensordot(multipliers, g, axes=1), grads_flat
     )

@@ -21,7 +21,8 @@ from util.aggregators import (
     std_loss_aggregator,
     actions_plotter,
     losses_plotter,
-    accuracy_plotter
+    accuracy_plotter,
+    policy_plotter,
 )
 
 import wandb
@@ -51,6 +52,7 @@ class ExperimentLogger(eqx.Module):
             actions_plotter,
             losses_plotter,
             accuracy_plotter,
+            policy_plotter,
         ]
 
         self.baseline_plotters = [
