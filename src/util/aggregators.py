@@ -80,7 +80,7 @@ def policy_plotter(df: pd.DataFrame, timesteps: Optional[list[int]] = None) -> g
     num_training_steps = df["step"].max()
     plotting_freq = num_training_steps // SingletonConfig.get_experiment_config_instance().sweep.plotting_steps
     steps_to_log = [i for i in range(0, num_training_steps, plotting_freq)] + [num_training_steps]
-    return _policy_plotter(df, "policy", timesteps=steps_to_log, batches=batches)
+    return _actions_plotter(df, "policy", timesteps=steps_to_log, batches=batches)
 
 
 def lr_plotter(df: pd.DataFrame, timesteps: Optional[list[int]] = None) -> go.Figure:

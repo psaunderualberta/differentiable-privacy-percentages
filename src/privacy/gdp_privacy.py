@@ -6,6 +6,7 @@ from scipy import optimize
 import equinox as eqx
 from util.util import pytree_has_inf
 from jax.nn import softmax
+import optax
 
 def approx_to_gdp(eps: float, delta: float, tol: float = 1e-6) -> float:
     """Convert (eps, delta)-DP to GDP.
@@ -131,6 +132,24 @@ def sigma_schedule_to_weights(schedule: chex.Array, mu, p, T):
     C = SingletonConfig.get_environment_config_instance().C
     mus = C / schedule
     return mu_schedule_to_weights(mu, mus, p, T)
+
+
+def project_weights(weights: jnp.ndarray, mu: float, p: float, T: int) -> jnp.ndarray:
+    """
+    W: in the form w**2 + eps
+    """
+    eps = SingletonConfig.get_policy_config_instance().eps
+
+    # undo shift
+    centred_weights = jnp.sqrt(weights - eps)
+
+    # project to l2 ball
+    mu_0 = jnp.sqrt(jnp.log(mu**2 / (p**2 * T) + 1))
+    l2_ball_radius = jnp.sqrt(mu**2 / (p**2 * (jnp.exp(mu_0**2) - 1)) - T * eps)
+    projected_weights = optax.projections.projection_l2_ball(centred_weights, scale=l2_ball_radius)
+
+    # reshift to ensure no mu is 0
+    return projected_weights**2 + eps
 
 
 def test_approx_to_gdp():

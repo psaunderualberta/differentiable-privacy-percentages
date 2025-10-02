@@ -116,6 +116,7 @@ class PolicyConfig:
         value=0.01, distribution="constant",
     )  # Learning rate of policy network
     sigma_s: float = 1.0
+    eps: float = 1e-8
 
 
     @property

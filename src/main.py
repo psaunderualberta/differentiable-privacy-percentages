@@ -15,7 +15,7 @@ import tqdm
 import numpy as np
 import wandb
 from util.logger import ExperimentLogger
-from privacy.gdp_privacy import approx_to_gdp, weights_to_sigma_schedule
+from privacy.gdp_privacy import approx_to_gdp, weights_to_sigma_schedule, project_weights
 from util.util import determine_optimal_num_devices, pytree_has_inf, pytree_has_nan, ensure_valid_pytree
 from typing import Tuple
 from environments.dp import train_with_noise
@@ -47,10 +47,7 @@ def main():
     print(f"\tmu-GDP: {mu_tot}")
 
     # Initialize Policy model
-    policy = jnp.ones((T,))
-    mu_0 = jnp.sqrt(jnp.log(mu_tot**2 / (p**2 * T) + 1))
-    l2_ball_radius = mu_tot / (p * jnp.sqrt(jnp.exp(mu_0**2) - 1))
-    policy = optax.projections.projection_l2_ball(policy, scale=l2_ball_radius)**2
+    policy = project_weights(jnp.ones((T,)), mu_tot, p, T)
     policy_batch_size = sweep_config.policy.batch_size
 
     private_network_arch = net_factory(
@@ -94,7 +91,7 @@ def main():
         
         # Average over all shard-mapped networks
         final_loss = jnp.mean(losses[:, -1])
-        # final_loss = jlax.pmean(final_losses, 'x').squeeze()
+        final_loss = jlax.pmean(final_loss, 'x').squeeze()
 
         # losses = losses.reshape(-1, T + 1)
         # accuracies = accuracies.reshape(-1, T)
@@ -131,7 +128,7 @@ def main():
         # Update policy
         updates, opt_state = optimizer.update(grads, opt_state, policy)
         policy: jnp.ndarray = optax.apply_updates(policy, updates) # type: ignore
-        policy = optax.projections.projection_l2_ball(jnp.sqrt(policy), scale=l2_ball_radius)**2
+        policy = project_weights(policy, mu_tot, p, T)
         policy = ensure_valid_pytree(policy)
 
         # Get new sigmas, ensure still valid
@@ -171,6 +168,7 @@ def main():
                 "loss": loss,
                 "accuracy" : accuracy,
                 "actions": sigmas,
+                "policy": policy,
                 "losses": losses,
                 "accuracies": accuracies,
         })

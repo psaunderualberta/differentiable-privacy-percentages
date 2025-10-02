@@ -111,6 +111,7 @@ class Baseline:
                 "loss": losses[-1],
                 "accuracy": accuracies[-1],
                 "losses": losses,
+                "policy": weights,
                 "accuracies": accuracies,
                 "actions": sigmas,
             }
