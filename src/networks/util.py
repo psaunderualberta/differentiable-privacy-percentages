@@ -3,8 +3,9 @@ import equinox as eqx
 import jax.lax as jlax
 import jax.numpy as jnp
 import jax.random as jr
-from jax import vmap
-
+from typing import Sequence
+from jaxtyping import Array, PRNGKeyArray
+from jax.experimental import checkify
 
 class Network:
     pass
@@ -43,24 +44,79 @@ class Linear(eqx.Module):
         return weight + self.bias
 
 
-class MaxPool2d(eqx.Module):
+# https://github.com/patrick-kidger/equinox/blob/27f8d7d7a09fa37e2186b62090ba4945fede50f5/equinox/nn/_pool.py#L299-L344
+# Accessed Oct 2nd, 2025
+class MaxPool2d(eqx.nn.Pool):
+    """
+    Two-dimensional downsample using the maximum over a sliding window.
+    NB: Almost Identical to eqx.nn.MaxPool2d, but using a Jax-able operation
+    """
+
     kernel_size: int
     stride: int
+    dummy_kernel: Array
 
-    def __init__(self, kernel_size: int, stride: int):
-        self.kernel_size = kernel_size
-        self.stride = stride
+    class __max(eqx.Module):
+        def __call__(self, x, y):
+            return jlax.max(x, y)
 
-    def __call__(self, x: chex.Array):
-        def per_channel_pool(channel: chex.Array):
-            m, n = channel.shape  # type: ignore
+    def __init__(
+        self,
+        dummy_kernel: Array,
+        kernel_size: int | Sequence[int] = 2,
+        stride: int | Sequence[int] = 1,
+        padding: int | Sequence[int] | Sequence[tuple[int, int]] = 0,
+        use_ceil: bool = False,
+    ):
+        """**Arguments:**
 
-            mk = m // self.kernel_size
-            nk = n // self.kernel_size
+        - `kernel_size`: The size of the convolutional kernel.
+        - `stride`: The stride of the convolution.
+        - `padding`: The amount of padding to apply before and after each
+            spatial dimension.
+        - `use_ceil`: If `True`, then `ceil` is used to compute the final output
+            shape instead of `floor`. For `ceil`, if required, extra padding is added.
+            Defaults to `False`.
+        """
+        super().__init__(
+            init=-jnp.inf,
+            operation=MaxPool2d.__max(),
+            num_spatial_dims=2,
+            kernel_size=dummy_kernel.shape,
+            stride=stride,
+            padding=padding,
+            use_ceil=use_ceil,
+        )
 
-            return jlax.reshape(channel, (m // 2, 2, n // 2, 2)).max(axis=(1, 3))
+        self.dummy_kernel = dummy_kernel
 
-        return vmap(per_channel_pool)(x)
+    def __call__(self, x: Array, *, key: PRNGKeyArray | None = None) -> Array:
+            """**Arguments:**
+
+            - `x`: The input. Should be a JAX array of shape `(channels, dim_1, dim_2)`.
+            - `key`: Ignored; provided for compatibility with the rest of the Equinox API.
+                (Keyword only argument.)
+
+            **Returns:**
+
+            A JAX array of shape `(channels, new_dim_1, new_dim_2)`.
+            """
+
+            return super().__call__(x)
+    
+    def _check_is_padding_valid(self, padding):
+        for (left_padding, right_padding), kernel_size in zip(
+            padding, self.kernel_size
+        ):
+            checkify.check(
+                jlax.max(left_padding, right_padding) <= kernel_size,
+                "Paddings should be less than the size of the kernel. "
+                "Padding ({}, {}) received for kernel size "
+                "{}.",
+                jnp.asarray(left_padding),
+                jnp.asarray(right_padding),
+                jnp.asarray(kernel_size)
+            )
 
 
 def augment_image(

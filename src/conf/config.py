@@ -4,6 +4,7 @@ import numpy as np
 from typing import Dict, Literal
 
 import tyro
+import jax.numpy as jnp
 
 
 @dataclass(frozen=True)
@@ -74,19 +75,20 @@ class MLPConfig:
 class CNNConfig:
     """Configuration for Convolutional Neural Network"""
 
+    # linear config params
+    mlp: MLPConfig
+
     # conv config params
     nchannels: int = -1  # Number of input channels, derived from data
-    kernel_size: int = 5  # Size of kernel
-    pool_dim: int = 2  # Which dimension to pool over
-    conv_dim_out: int = 6272  # Dimension of the output after convolution and flattening
+    kernel_size: int = 3  # Edge Length of kernel
+    pool_kernel_size: int = 2 # Edge length of pooling kernel
     hidden_channels: int = 32  # Number of hidden channels
     nhidden_conv: int = 1  # Number of hidden convolution layers
-
-    # linear config params
-    dhidden: int = 32  # See MLP.dhidden
-    nhidden: int = 2  # See MLP.nhidden
-    nclasses: int = 10  # Value is derived from data
     key: int = 0  # Overridden as derivative from experiment.env_prng_key
+
+    # dummy item, used to determine MLP input shape
+    dummy_data: jnp.ndarray | None = None 
+
 
     def to_wandb(self) -> Dict:
         attrs = [

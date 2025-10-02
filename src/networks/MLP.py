@@ -67,6 +67,7 @@ class MLP(eqx.Module, Network):
         return MLP(new_net_layers)
 
     def __call__(self, x: chex.Array):
+        x = x.reshape(-1, 1).squeeze()
         for block in self.layers:
             for layer in block:
                 x = layer(x)

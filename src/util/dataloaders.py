@@ -46,7 +46,10 @@ def _dataloader_mnist(_=None) -> Tuple[chex.Array, chex.Array]:
 
     # normalize & flatten images
     images = images / 255.0
-    images = images.reshape((images.shape[0], -1))
+
+    # Add channel dimension in second position
+    # (ndatapoints, nchannels, *image_shape)
+    images = jnp.expand_dims(images, 1)
 
     return images, labels
 

@@ -1,8 +1,10 @@
 from dataclasses import replace
 from typing import Tuple
+from jax import numpy as jnp
 
 from conf.config import CNNConfig, MLPConfig
-from networks.nets import MLP
+from networks.MLP import MLP
+from networks.CNN import CNN
 
 
 def net_factory(
@@ -12,10 +14,17 @@ def net_factory(
     assert len(output_shape) >= 2, "Output shape must have at least 2 dimensions"
 
     if isinstance(conf, MLPConfig):
-        conf = replace(conf, din=input_shape[1], nclasses=output_shape[1])
+        din = jnp.prod(jnp.asarray(input_shape[1:])).item()
+        conf = replace(conf, din=din, nclasses=output_shape[1])
         return MLP.from_config(conf)
-    # if isinstance(conf, CNNConfig):
-    #     conf = replace(conf, nchannels=input_shape[1], nclasses=output_shape[1])
-    #     return CNN.from_config(conf)
+    elif isinstance(conf, CNNConfig):
+        conf = replace(
+            conf,
+            nchannels=input_shape[1],
+            dummy_data=jnp.zeros(input_shape[1:]),
+            mlp=replace(conf.mlp, nclasses=output_shape[1])
+        )
+
+        return CNN.from_config(conf)
 
     raise ValueError(f"Network config of type '{type(conf)}' is not recognized!")

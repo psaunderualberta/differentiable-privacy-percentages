@@ -56,6 +56,11 @@ def main():
         conf=sweep_config.env.network,
     )
 
+    # print(private_network_arch)
+    # print(private_network_arch.reinitialize(jr.PRNGKey(env_prng_seed)))
+
+    # exit()
+
     # Initialize private environment
     env_params = DP_RL_Params.create(
         environment_config,
@@ -74,10 +79,10 @@ def main():
     vmapped_train_with_noise = vmap(train_with_noise, in_axes=(None, None, None, None, 0))
     # vmapped_train_with_noise = vmap(pmapped_train_with_noise, in_axes=(None, None, None, None, 0))
 
-    # @partial(checkify.checkify, errors=checkify.nan_checks)
     @jit
     @partial(value_and_grad, has_aux=True)
     @partial(shard_map, mesh=mesh, in_specs=(P(), P(), P(), P('x')), out_specs=(P(), (P('x'), P('x'))), check_vma=False)
+    @partial(checkify.checkify, errors=checkify.user_checks)
     def get_policy_loss(policy, mb_key, init_key, noise_keys) -> Tuple[chex.Array, Tuple[chex.Array, chex.Array]]:
         """Calculate the policy loss."""
         # Split keys for # of runs in batch
@@ -119,8 +124,11 @@ def main():
         key, mb_key = jr.split(key)
         key, _key = jr.split(key)
         noise_keys = jr.split(_key, policy_batch_size)
-        (loss, (losses, accuracies)), grads = get_policy_loss(policy, mb_key, init_key, noise_keys)
+        err, ((loss, (losses, accuracies)), grads) = get_policy_loss(policy, mb_key, init_key, noise_keys)
         
+        # 
+        err.throw()
+
         # Ensure gradients are real numbers
         loss = ensure_valid_pytree(loss)
         grads = ensure_valid_pytree(grads)
