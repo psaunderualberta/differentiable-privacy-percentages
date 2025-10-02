@@ -11,7 +11,7 @@ import chex
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jax.experimental import checkify
+from jaxtyping import PyTree
 import jax.random as jr
 import optax
 from util.util import reinit_model, clip_grads_abadi, sample_batch_uniform, get_spherical_noise, subset_classification_accuracy
@@ -27,8 +27,14 @@ def train_with_noise(
     init_key: chex.PRNGKey,
     noise_key: chex.PRNGKey,
 ) -> Tuple[eqx.Module, chex.Array, chex.Array]:
+    # Vary network arrays across devices
+    net_params, net_static = eqx.partition(params.network, eqx.is_array)
+    net_params = eqx.filter_jit(jax.lax.pvary)(net_params, 'x')
+    varied_network = eqx.combine(net_params, net_static)
+
     # Create network
-    network = reinit_model(jax.lax.pvary(params.network, 'x'), init_key)
+    network = reinit_model(varied_network, init_key)
+    net_params, net_static = eqx.partition(params.network, eqx.is_array)
     optimizer = optax.sgd(params.lr)
 
     @jax.checkpoint  #type:ignore
@@ -36,10 +42,11 @@ def train_with_noise(
         carry,
         noise
     ) -> Tuple[
-        Tuple[eqx.Module, optax.OptState, chex.PRNGKey, chex.PRNGKey],  # Carry values
-        Tuple[chex.Array, chex.Array, eqx.Module, chex.PRNGKey, chex.PRNGKey]  # Scan outputs
+        Tuple[PyTree, optax.OptState, chex.PRNGKey, chex.PRNGKey],  # Carry values
+        Tuple[chex.Array, chex.Array]  # Scan outputs
     ]:
-        model, opt_state, mb_key, noise_key = carry
+        net_params, opt_state, mb_key, noise_key = carry
+        model = eqx.combine(net_params, net_static)
 
         mb_key, _key = jr.split(mb_key)
         batch_x, batch_y = sample_batch_uniform(params.X, params.y, params.dummy_batch, _key)
@@ -47,7 +54,7 @@ def train_with_noise(
         new_loss, grads = vmapped_loss(model, batch_x, batch_y)
         clipped_grads = clip_grads_abadi(grads, params.C)
 
-        # Add spherical noise to gradients
+        # # Add spherical noise to gradients
         noise_key, _key = jr.split(noise_key)
         noises = get_spherical_noise(clipped_grads, noise, _key)
         noised_grads = eqx.apply_updates(clipped_grads, noises)
@@ -64,10 +71,11 @@ def train_with_noise(
             new_model, params.X, params.y, 0.01, _key
         )
 
-        return (new_model, new_opt_state, mb_key, noise_key), (new_loss, accuracy, new_model, noise_key, mb_key)
+        new_net_params, _ = eqx.partition(params.network, eqx.is_array)
+        return (new_net_params, new_opt_state, mb_key, noise_key), (new_loss, accuracy)
 
-    initial_carry = (network, optimizer.init(network), mb_key, noise_key)
-    (network, _, mb_key, noise_key), (losses, accuracies, networks, noise_keys, batch_keys) = jax.lax.scan(
+    initial_carry = (net_params, optimizer.init(network), mb_key, noise_key)
+    (net_params, _, mb_key, noise_key), (losses, accuracies) = jax.lax.scan(
         training_step,
         initial_carry,
         xs=noise_schedule,

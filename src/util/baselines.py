@@ -5,7 +5,7 @@ import jax.random as jr
 import pandas as pd
 import plotly.express as px
 import tqdm
-from jax import jit
+import equinox as eqx
 
 from environments.dp import DP_RL_Params
 from environments.dp import train_with_noise
@@ -104,7 +104,7 @@ class Baseline:
         for _ in iterator:
             key, _key = jr.split(key)
             k1, k2, k3 = jr.split(_key, 3)
-            _, losses, accuracies = jit(train_with_noise)(sigmas, self.env_params, k1, k2, k3)
+            _, losses, accuracies = eqx.filter_jit(train_with_noise)(sigmas, self.env_params, k1, k2, k3)
             df.loc[len(df)] = {  # type: ignore
                 "type": f"Constant Noise ({round(self.sigma, 2)})",
                 "step": 0,  # only recording one step for these

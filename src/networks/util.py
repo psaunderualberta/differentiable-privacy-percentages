@@ -45,55 +45,6 @@ class Linear(eqx.Module):
         return weight + self.bias
 
 
-# https://github.com/patrick-kidger/equinox/blob/27f8d7d7a09fa37e2186b62090ba4945fede50f5/equinox/nn/_pool.py#L299-L344
-# Accessed Oct 2nd, 2025
-class MaxPool2d(eqx.Module):
-    dummy_kernel: Array
-    padding: int
-
-    def __init__(
-            self,
-            kernel_size: int,
-            stride: int = 1,
-            padding: int = 0
-        ):
-        self.dummy_kernel = self.get_dummy_kernel(kernel_size)
-        self.padding = padding
-
-    def get_dummy_kernel(self, kernel_size: int) -> Array:
-        return jnp.zeros((kernel_size, kernel_size))
-
-    def get_dummy_padding(self, padding: int) -> tuple[tuple[int, int], tuple[int, int]]:
-        return ((padding, padding), (padding, padding))
-
-    def __call__(self, x: chex.Array):
-        padding_tup = ((self.padding, self.padding, 0), (self.padding, self.padding, 0))
-
-        def per_channel_max_pool(channel):
-            channel = channel.squeeze()
-            padded = jlax.pad(channel, 0.0, padding_tup)
-            ksize = self.dummy_kernel.shape[0]
-
-            arange = jnp.arange(padded.size).reshape(*padded.shape)
-            slice_lengths = (padded.shape[0]-ksize+1, padded.shape[1]-ksize+1)
-
-            def f(_, idxs):
-                return None, jlax.dynamic_slice(arange, idxs, slice_lengths).reshape(-1)
-
-            _, idxs = jlax.scan(
-                f,
-                None,
-                xs=jnp.indices(self.dummy_kernel.shape).reshape(2, -1).T
-            )
-
-            flat_image = padded.reshape(-1)
-            new_side_len = channel.shape[0] + 2 * self.padding - self.dummy_kernel.shape[0] + 1
-            pooled = jnp.max(flat_image[idxs], axis=0, keepdims=True)
-            return pooled.reshape(new_side_len, new_side_len)
-        
-        return vmap(per_channel_max_pool)(x)
-
-
 
 def augment_image(
     image: chex.Array, key: chex.PRNGKey, patch_size: int = 24

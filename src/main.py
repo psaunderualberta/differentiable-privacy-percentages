@@ -76,11 +76,11 @@ def main():
 
     _, num_gpus = determine_optimal_num_devices(devices('gpu'), policy_batch_size)
     mesh = Mesh(devices('gpu')[:num_gpus], 'x')
-    vmapped_train_with_noise = vmap(train_with_noise, in_axes=(None, None, None, None, 0))
+    vmapped_train_with_noise = eqx.filter_vmap(train_with_noise, in_axes=(None, None, None, None, 0))
     # vmapped_train_with_noise = vmap(pmapped_train_with_noise, in_axes=(None, None, None, None, 0))
 
-    @jit
-    @partial(value_and_grad, has_aux=True)
+    @eqx.filter_jit
+    @partial(eqx.filter_value_and_grad, has_aux=True)
     @partial(shard_map, mesh=mesh, in_specs=(P(), P(), P(), P('x')), out_specs=(P(), (P('x'), P('x'))), check_vma=False)
     def get_policy_loss(policy, mb_key, init_key, noise_keys) -> Tuple[chex.Array, Tuple[chex.Array, chex.Array]]:
         """Calculate the policy loss."""
@@ -114,49 +114,49 @@ def main():
     )
 
     key = jr.PRNGKey(env_prng_seed)
-    # for timestep in iterator:
-    #     # Generate random key for the current timestep
-    #     key, _ = jr.split(key)
+    for timestep in iterator:
+        # Generate random key for the current timestep
+        key, _ = jr.split(key)
 
-    #     # Get policy loss
-    #     key, init_key = jr.split(key)
-    #     key, mb_key = jr.split(key)
-    #     key, _key = jr.split(key)
-    #     noise_keys = jr.split(_key, policy_batch_size)
-    #     (loss, (losses, accuracies)), grads = get_policy_loss(policy, mb_key, init_key, noise_keys)
+        # Get policy loss
+        key, init_key = jr.split(key)
+        key, mb_key = jr.split(key)
+        key, _key = jr.split(key)
+        noise_keys = jr.split(_key, policy_batch_size)
+        (loss, (losses, accuracies)), grads = get_policy_loss(policy, mb_key, init_key, noise_keys)
 
-    #     # Ensure gradients are real numbers
-    #     loss = ensure_valid_pytree(loss)
-    #     grads = ensure_valid_pytree(grads)
+        # Ensure gradients are real numbers
+        loss = ensure_valid_pytree(loss)
+        grads = ensure_valid_pytree(grads)
 
-    #     # Update policy
-    #     updates, opt_state = optimizer.update(grads, opt_state, policy)
-    #     policy: jnp.ndarray = optax.apply_updates(policy, updates) # type: ignore
-    #     policy = project_weights(policy, mu_tot, p, T)
-    #     policy = ensure_valid_pytree(policy)
+        # Update policy
+        updates, opt_state = optimizer.update(grads, opt_state, policy)
+        policy: jnp.ndarray = optax.apply_updates(policy, updates) # type: ignore
+        policy = project_weights(policy, mu_tot, p, T)
+        policy = ensure_valid_pytree(policy)
 
-    #     # Get new sigmas, ensure still valid
-    #     new_sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze() # type: ignore
-    #     new_sigmas = ensure_valid_pytree(new_sigmas)
+        # Get new sigmas, ensure still valid
+        new_sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze() # type: ignore
+        new_sigmas = ensure_valid_pytree(new_sigmas)
 
-    #     # Log iteration results to file
-    #     for i in range(losses.shape[0]):
-    #         loss = losses[i, -1]
-    #         accuracy = accuracies[i, -1]
-    #         logger.log(0, {"step": timestep,
-    #                         "batch_idx": i,
-    #                         "loss": loss,
-    #                         "accuracy" : accuracy,
-    #                         "actions": new_sigmas,
-    #                         "policy": policy,
-    #                         "losses": losses[i, :],
-    #                         "accuracies": accuracies[i, :],
-    #                 })
+        # Log iteration results to file
+        for i in range(losses.shape[0]):
+            loss = losses[i, -1]
+            accuracy = accuracies[i, -1]
+            logger.log(0, {"step": timestep,
+                            "batch_idx": i,
+                            "loss": loss,
+                            "accuracy" : accuracy,
+                            "actions": new_sigmas,
+                            "policy": policy,
+                            "losses": losses[i, :],
+                            "accuracies": accuracies[i, :],
+                    })
 
-    #     # self-explanatory
-    #     iterator.set_description(
-    #         f"Training Progress - Loss: {loss:.4f}"
-    #     )
+        # self-explanatory
+        iterator.set_description(
+            f"Training Progress - Loss: {loss:.4f}"
+        )
 
     # Generate final results with lots of iterations
     sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze() # type: ignore
@@ -164,7 +164,7 @@ def main():
     for i in tqdm.tqdm(range(eval_num_iterations), total=eval_num_iterations, desc="Evaluating Policy"):
         key, _key = jr.split(key)
         k1, k2, k3 = jr.split(_key, 3)
-        _, losses, accuracies = jit(train_with_noise)(sigmas, env_params, k1, k2, k3)
+        _, losses, accuracies = eqx.filter_jit(train_with_noise)(sigmas, env_params, k1, k2, k3)
         loss = losses[-1]
         accuracy = accuracies[-1]
         logger.log(0, {"step": total_timesteps,

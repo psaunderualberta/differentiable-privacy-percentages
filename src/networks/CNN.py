@@ -8,7 +8,7 @@ import jax.random as jr
 import optax
 
 from conf.config import CNNConfig
-from networks.util import Network, ReLU, MaxPool2d
+from networks.util import Network, ReLU
 from dataclasses import replace
 from networks.MLP import MLP
 
@@ -34,7 +34,7 @@ class CNN(eqx.Module, Network):
             new_layer = [
                 eqx.nn.Conv2d(in_channels, conf.hidden_channels, conf.kernel_size, key=_key),
                 ReLU(),
-                MaxPool2d(
+                eqx.nn.MaxPool2d(
                     kernel_size=conf.kernel_size,
                 )
             ]

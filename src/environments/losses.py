@@ -34,7 +34,7 @@ def __py_y_loss(pred_y: jnp.ndarray, y: jnp.ndarray) -> chex.Array:
 
 
 @eqx.filter_value_and_grad
-@partial(jax.jit, static_argnames=("to_vmap",))
+@eqx.filter_jit
 def __loss_helper(model, x, y, to_vmap: bool = True) -> Tuple[chex.Array, chex.Array]:
     """
     Compute the loss and gradients for a given model and data.
