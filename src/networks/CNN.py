@@ -13,8 +13,13 @@ from dataclasses import replace
 from networks.MLP import MLP
 
 
+
 class CNN(eqx.Module, Network):
     layers: list
+
+    class __ravel(eqx.Module):
+        def __call__(self, x):
+            return jnp.ravel(x)
 
     def __init__(self, layers: List[Any]):
         self.layers = layers
@@ -29,20 +34,23 @@ class CNN(eqx.Module, Network):
             new_layer = [
                 eqx.nn.Conv2d(in_channels, conf.hidden_channels, conf.kernel_size, key=_key),
                 ReLU(),
-                MaxPool2d(dummy_kernel=jnp.zeros((conf.pool_kernel_size, conf.pool_kernel_size)))
+                MaxPool2d(
+                    kernel_size=conf.kernel_size,
+                )
             ]
 
             blocks.append(new_layer)
+
+        blocks.append([CNN.__ravel()])
+
         in_channels = conf.hidden_channels
 
         cnn_wo_mlp = CNN(blocks)
         assert conf.dummy_data is not None, "CNN Configuration's dummy data must be filled!"
         dummy_out = cnn_wo_mlp(conf.dummy_data)
-        mlp_in = jnp.prod(jnp.asarray(dummy_out.shape)).item()
 
         # Create final MLP
-        conf = replace(conf, mlp=replace(conf.mlp, din=mlp_in))
-        conf = replace(conf, mlp=replace(conf.mlp, din=mlp_in))
+        conf = replace(conf, mlp=replace(conf.mlp, din=dummy_out.size))
         mlp = MLP.from_config(conf.mlp)
 
         cnn = CNN(blocks + [[mlp]])
@@ -62,12 +70,13 @@ class CNN(eqx.Module, Network):
                         kernel_size=layer.kernel_size,
                         key=_key,
                     ))
-                if isinstance(layer, ReLU) or isinstance(layer, MaxPool2d): 
-                    new_block.append(layer)
-                if isinstance(layer, MLP):
+                elif isinstance(layer, MLP):
                     new_block.append(
                         layer.reinitialize(key)
                     )
+                else:
+                    # relu, MaxPool2d, ravel
+                    new_block.append(layer)
             new_blocks.append(new_block)
         
         return CNN(new_blocks)

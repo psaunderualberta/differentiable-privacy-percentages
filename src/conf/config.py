@@ -82,7 +82,7 @@ class CNNConfig:
     nchannels: int = -1  # Number of input channels, derived from data
     kernel_size: int = 3  # Edge Length of kernel
     pool_kernel_size: int = 2 # Edge length of pooling kernel
-    hidden_channels: int = 32  # Number of hidden channels
+    hidden_channels: int = 3  # Number of hidden channels
     nhidden_conv: int = 1  # Number of hidden convolution layers
     key: int = 0  # Overridden as derivative from experiment.env_prng_key
 

@@ -82,7 +82,6 @@ def main():
     @jit
     @partial(value_and_grad, has_aux=True)
     @partial(shard_map, mesh=mesh, in_specs=(P(), P(), P(), P('x')), out_specs=(P(), (P('x'), P('x'))), check_vma=False)
-    @partial(checkify.checkify, errors=checkify.user_checks)
     def get_policy_loss(policy, mb_key, init_key, noise_keys) -> Tuple[chex.Array, Tuple[chex.Array, chex.Array]]:
         """Calculate the policy loss."""
         # Split keys for # of runs in batch
@@ -115,52 +114,49 @@ def main():
     )
 
     key = jr.PRNGKey(env_prng_seed)
-    for timestep in iterator:
-        # Generate random key for the current timestep
-        key, _ = jr.split(key)
+    # for timestep in iterator:
+    #     # Generate random key for the current timestep
+    #     key, _ = jr.split(key)
 
-        # Get policy loss
-        key, init_key = jr.split(key)
-        key, mb_key = jr.split(key)
-        key, _key = jr.split(key)
-        noise_keys = jr.split(_key, policy_batch_size)
-        err, ((loss, (losses, accuracies)), grads) = get_policy_loss(policy, mb_key, init_key, noise_keys)
-        
-        # 
-        err.throw()
+    #     # Get policy loss
+    #     key, init_key = jr.split(key)
+    #     key, mb_key = jr.split(key)
+    #     key, _key = jr.split(key)
+    #     noise_keys = jr.split(_key, policy_batch_size)
+    #     (loss, (losses, accuracies)), grads = get_policy_loss(policy, mb_key, init_key, noise_keys)
 
-        # Ensure gradients are real numbers
-        loss = ensure_valid_pytree(loss)
-        grads = ensure_valid_pytree(grads)
+    #     # Ensure gradients are real numbers
+    #     loss = ensure_valid_pytree(loss)
+    #     grads = ensure_valid_pytree(grads)
 
-        # Update policy
-        updates, opt_state = optimizer.update(grads, opt_state, policy)
-        policy: jnp.ndarray = optax.apply_updates(policy, updates) # type: ignore
-        policy = project_weights(policy, mu_tot, p, T)
-        policy = ensure_valid_pytree(policy)
+    #     # Update policy
+    #     updates, opt_state = optimizer.update(grads, opt_state, policy)
+    #     policy: jnp.ndarray = optax.apply_updates(policy, updates) # type: ignore
+    #     policy = project_weights(policy, mu_tot, p, T)
+    #     policy = ensure_valid_pytree(policy)
 
-        # Get new sigmas, ensure still valid
-        new_sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze() # type: ignore
-        new_sigmas = ensure_valid_pytree(new_sigmas)
+    #     # Get new sigmas, ensure still valid
+    #     new_sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze() # type: ignore
+    #     new_sigmas = ensure_valid_pytree(new_sigmas)
 
-        # Log iteration results to file
-        for i in range(losses.shape[0]):
-            loss = losses[i, -1]
-            accuracy = accuracies[i, -1]
-            logger.log(0, {"step": timestep,
-                            "batch_idx": i,
-                            "loss": loss,
-                            "accuracy" : accuracy,
-                            "actions": new_sigmas,
-                            "policy": policy,
-                            "losses": losses[i, :],
-                            "accuracies": accuracies[i, :],
-                    })
+    #     # Log iteration results to file
+    #     for i in range(losses.shape[0]):
+    #         loss = losses[i, -1]
+    #         accuracy = accuracies[i, -1]
+    #         logger.log(0, {"step": timestep,
+    #                         "batch_idx": i,
+    #                         "loss": loss,
+    #                         "accuracy" : accuracy,
+    #                         "actions": new_sigmas,
+    #                         "policy": policy,
+    #                         "losses": losses[i, :],
+    #                         "accuracies": accuracies[i, :],
+    #                 })
 
-        # self-explanatory
-        iterator.set_description(
-            f"Training Progress - Loss: {loss:.4f}"
-        )
+    #     # self-explanatory
+    #     iterator.set_description(
+    #         f"Training Progress - Loss: {loss:.4f}"
+    #     )
 
     # Generate final results with lots of iterations
     sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze() # type: ignore
