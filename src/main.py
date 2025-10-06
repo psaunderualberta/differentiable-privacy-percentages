@@ -5,11 +5,11 @@ import chex
 import equinox as eqx
 import optax
 import tqdm
-from jax import devices
+from jax import devices, shard_map
 from jax import numpy as jnp
 from jax import random as jr
 from jax.experimental import checkify
-from jax.sharding import Mesh
+from jax.sharding import Mesh, PartitionSpec as P
 from jaxtyping import Array, PRNGKeyArray
 
 import wandb
@@ -92,10 +92,16 @@ def main():
         train_with_noise, in_axes=(None, None, None, None, 0)
     )
 
-    @partial(checkify.checkify, errors=checkify.nan_checks)
+    # @partial(checkify.checkify, errors=checkify.nan_checks)
     @eqx.filter_jit
     @partial(eqx.filter_value_and_grad, has_aux=True)
-    # @partial(shard_map, mesh=mesh, in_specs=(P(), P(), P(), P('x')), out_specs=(P(), (P('x'), P('x'))), check_vma=False)
+    # @partial(
+    #     shard_map,
+    #     mesh=mesh,
+    #     in_specs=(P(), P(), P(), P("x")),
+    #     out_specs=(P(), (P("x"), P("x"))),
+    #     check_vma=False,
+    # )
     def get_policy_loss(
         policy: Array,
         mb_key: PRNGKeyArray,
@@ -142,11 +148,9 @@ def main():
         key, mb_key = jr.split(key)
         key, _key = jr.split(key)
         noise_keys = jr.split(_key, policy_batch_size)
-        err, ((loss, (losses, accuracies)), grads) = get_policy_loss(
+        (loss, (losses, accuracies)), grads = get_policy_loss(
             policy, mb_key, init_key, noise_keys
         )
-
-        err.throw()
 
         # Ensure gradients are real numbers
         loss = ensure_valid_pytree(loss, "loss in main")

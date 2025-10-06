@@ -7,7 +7,7 @@ from typing import Callable, Tuple
 from functools import partial
 from conf.singleton_conf import SingletonConfig
 from util.linalg import hvp
-from optax import softmax_cross_entropy
+from optax import safe_softmax_cross_entropy
 from util.util import pytree_has_inf
 
 
@@ -18,7 +18,7 @@ def __py_y_loss(pred_y: jnp.ndarray, y: jnp.ndarray) -> chex.Array:
     Args:
         pred_y: Predicted Y values
         y: Actual y values
-    
+
     Returns:
         The loss value
     """
@@ -26,7 +26,7 @@ def __py_y_loss(pred_y: jnp.ndarray, y: jnp.ndarray) -> chex.Array:
     if loss_type == "mse":
         loss_value = ((pred_y - y) ** 2).mean()
     elif loss_type == "cce":
-        loss_value = softmax_cross_entropy(pred_y, y).mean()
+        loss_value = safe_softmax_cross_entropy(pred_y, y).mean()
     else:
         raise ValueError(f"Unknown loss type in 'py_y_loss: {loss_type}")
 
@@ -50,7 +50,7 @@ def __loss_helper(model, x, y, to_vmap: bool = True) -> Tuple[chex.Array, chex.A
         model = jax.vmap(model)
     pred_y = model(x)
 
-    return __py_y_loss(pred_y, y)  #type: ignore
+    return __py_y_loss(pred_y, y)  # type: ignore
 
 
 # See page 16 of https://www.cs.toronto.edu/~rgrosse/courses/csc2541_2022/readings/L02_Taylor_approximations.pdf
@@ -83,7 +83,9 @@ def loss(model: Callable[[chex.Array], jnp.ndarray], x: chex.Array, y: chex.Arra
 
 
 @eqx.filter_jit
-def vmapped_loss(model: Callable[[chex.Array], jnp.ndarray], x: chex.Array, y: chex.Array):
+def vmapped_loss(
+    model: Callable[[chex.Array], jnp.ndarray], x: chex.Array, y: chex.Array
+):
     """
     Compute the loss and gradients using vmap across the model, producing per-example gradients.
 
@@ -96,7 +98,7 @@ def vmapped_loss(model: Callable[[chex.Array], jnp.ndarray], x: chex.Array, y: c
 
     """
     # model = eqx.error_if(model, jnp.logical_not(pytree_has_nan(model)), "Model has NaN values")
-    losses, grads = jax.vmap(__loss_helper, in_axes=(None, 0, 0, None))(model, x, y, False)
+    losses, grads = jax.vmap(__loss_helper, in_axes=(None, 0, 0, None))(
+        model, x, y, False
+    )
     return losses.mean(), grads
-
-

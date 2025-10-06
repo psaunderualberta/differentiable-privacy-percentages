@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from pprint import pprint
 import numpy as np
-from typing import Literal, Unknown
+from typing import Literal
 
 import tyro
 import jax.numpy as jnp
@@ -65,7 +65,7 @@ class MLPConfig:
     initialization: Literal["glorot", "zeros"] = "glorot"
     key: int = 0  # Overridden as derivative from experiment.env_prng_key
 
-    def to_wandb(self) -> dict[str, dict[Unknown, Unknown]]:
+    def to_wandb(self) -> dict[str, object]:
         attrs = [
             "din",
             "dhidden",
@@ -92,7 +92,7 @@ class CNNConfig:
     # dummy item, used to determine MLP input shape
     dummy_data: jnp.ndarray | None = None
 
-    def to_wandb(self) -> dict[str, dict[Unknown, Unknown]]:
+    def to_wandb(self) -> dict[str, object]:
         attrs = [
             "nchannels",
             "kernel_size",
@@ -130,7 +130,7 @@ class PolicyConfig:
         """Get the actual network configuration."""
         return getattr(self, self.network_type)
 
-    def to_wandb(self) -> dict[str, dict[Unknown, Unknown]]:
+    def to_wandb(self) -> dict[str, object]:
         return {
             "parameters": {
                 "network_type": {"value": self.network_type},
@@ -171,7 +171,7 @@ class EnvConfig:
     def network(self) -> MLPConfig | CNNConfig:
         return getattr(self, self.network_type)
 
-    def to_wandb(self) -> dict[str, dict[Unknown, Unknown]]:
+    def to_wandb(self) -> dict[str, object]:
         return {
             "parameters": {
                 "lr": self.lr.to_wandb(),
@@ -198,7 +198,7 @@ class SweepConfig:
     description: str | None = None  # The (optional) description of the wandb sweep
     with_baselines: bool = False  # Flag to compute plots comparing against baseline (Expensive, default is False)
 
-    def to_wandb(self) -> dict[str, dict[Unknown, Unknown]]:
+    def to_wandb(self) -> dict[str, object]:
         config = {
             "method": self.method,
             "metric": {
