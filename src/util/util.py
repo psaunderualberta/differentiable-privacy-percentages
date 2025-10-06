@@ -1,6 +1,5 @@
-from typing import Tuple, Any
+from typing import Any
 
-import chex
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -9,15 +8,15 @@ import numpy as np
 from jax import tree as jt
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
-from optax import global_norm
+from jaxtyping import Array, PRNGKeyArray, PyTree, PyTreeDef
 
 
 @eqx.filter_jit
 def sample_batch_uniform(
-    x: chex.Array,
-    y: chex.Array,
-    idxs: chex.Array,
-    key: chex.PRNGKey,
+    x: Array,
+    y: Array,
+    idxs: Array,
+    key: PRNGKeyArray,
 ):
     assert len(x.shape) > 0 and len(idxs.shape) > 0 and len(y.shape) > 0
     # get random subset of idxs for training
@@ -32,7 +31,7 @@ def sample_batch_uniform(
 
 
 @eqx.filter_jit
-def clip_grads_abadi(grads: eqx.Module, C: float):
+def clip_grads_abadi(grads: eqx.Module, C: float) -> eqx.Module:
     # https://github.com/google-deepmind/optax/blob/main/optax/contrib/_privacy.py#L35#L87
     grads_flat, grads_treedef = jax.tree.flatten(grads)
 
@@ -45,7 +44,7 @@ def clip_grads_abadi(grads: eqx.Module, C: float):
     grads = ensure_valid_pytree(grads, "grads in clip_grads")
     gamma = 0.01
 
-    def get_multiplier(grad):
+    def get_multiplier(grad: eqx.Module):
         return 1 / (
             jnp.sqrt(
                 1e-8 + sum(jnp.sum(jnp.abs(x) ** 2) for x in jax.tree.leaves(grad))
@@ -63,10 +62,10 @@ def clip_grads_abadi(grads: eqx.Module, C: float):
 
 @eqx.filter_jit
 def uniform_subsample_batch(
-    x: chex.Array,
-    y: chex.Array,
-    key: chex.PRNGKey,
-    idxs: chex.Array,
+    x: Array,
+    y: Array,
+    key: PRNGKeyArray,
+    idxs: Array,
 ):
     # get random subset of idxs for training
     key, _key = jr.split(key)
@@ -84,10 +83,10 @@ def uniform_subsample_batch(
 @eqx.filter_jit
 def dp_mse_loss_poisson(
     model: eqx.Module,
-    x: chex.Array,
-    y: chex.Array,
-    key: chex.PRNGKey,
-    idxs: chex.Array,
+    x: Array,
+    y: Array,
+    key: PRNGKeyArray,
+    idxs: Array,
     C: float,
 ):
     # get random subset of idxs for training
@@ -105,25 +104,27 @@ def dp_mse_loss_poisson(
 
 # Create random PRNG keys w/ same pytree structure as model
 @eqx.filter_jit
-def pytree_keys(model, key):
+def pytree_keys(model: eqx.Module, key: PRNGKeyArray) -> PRNGKeyArray:
     treedef = jt.structure(model)
     keys = jr.split(key, treedef.num_leaves)
     return jt.unflatten(treedef, keys)
 
 
 @eqx.filter_jit
-def is_none(x):
+def is_none(x: Array | None) -> bool:
     return x is None
 
 
 @eqx.filter_jit
-def reinit_model(model, key):
+def reinit_model(model: eqx.Module, key: PRNGKeyArray) -> eqx.Module:
     return model.reinitialize(key)
 
 
 @eqx.filter_jit
-def get_spherical_noise(grads: jax.Array, action: chex.Array, key: chex.PRNGKey):
-    def f(g, k):
+def get_spherical_noise(
+    grads: eqx.Module, action: float, key: PRNGKeyArray
+) -> eqx.Module:
+    def f(g: eqx.Module | None, k: PRNGKeyArray):
         if g is None:
             return g
         return action * jax.random.normal(k, g.shape, g.dtype)
@@ -132,12 +133,12 @@ def get_spherical_noise(grads: jax.Array, action: chex.Array, key: chex.PRNGKey)
 
 
 @eqx.filter_jit
-def add_pytrees(a, b):
+def add_pytrees(a: PyTree, b: PyTree) -> PyTree:
     return eqx.apply_updates(a, b)
 
 
 @eqx.filter_jit
-def subtract_pytrees(a, b):
+def subtract_pytrees(a: PyTree, b: PyTree) -> PyTree:
     def func(x, y):
         if x is None or y is None:
             return None
@@ -147,12 +148,12 @@ def subtract_pytrees(a, b):
 
 
 @eqx.filter_jit
-def multiply_pytree_by_scalar(pytree, scalar):
+def multiply_pytree_by_scalar(pytree: PyTree, scalar: PyTree) -> PyTree:
     return jt.map(lambda x: x * scalar if x is not None else None, pytree)
 
 
 @eqx.filter_jit
-def dot_pytrees(a, b):
+def dot_pytrees(a: PyTree, b: PyTree) -> PyTree:
     def func(x, y):
         if x is None or y is None:
             return 0.0
@@ -162,7 +163,7 @@ def dot_pytrees(a, b):
 
 
 @eqx.filter_jit
-def pytree_max(a):
+def pytree_max(a: PyTree) -> PyTree:
     def func(x):
         if x is None:
             return -100.0
@@ -171,7 +172,7 @@ def pytree_max(a):
     return jt.reduce(lambda x, y: jnp.maximum(x, y), jt.map(func, a), 0.0)
 
 
-def index_pytree(structure, index):
+def index_pytree(structure: PyTree, index: int) -> PyTree:
     def f(x):
         if x is None:
             return None
@@ -180,8 +181,8 @@ def index_pytree(structure, index):
     return jt.map(f, structure)
 
 
-def pytree_has_nan(tree):
-    def f(t):
+def pytree_has_nan(tree: PyTree) -> Array:
+    def f(t: PyTree) -> bool:
         if t is None:
             return None
         return jnp.isnan(t).any(axis=None)
@@ -189,8 +190,8 @@ def pytree_has_nan(tree):
     return jt.reduce(lambda x, y: jnp.logical_or(x, y), jt.map(f, tree), False)
 
 
-def pytree_has_inf(tree):
-    def f(t):
+def pytree_has_inf(tree: PyTree) -> Array:
+    def f(t: PyTree) -> bool:
         if t is None:
             return None
         return ~jnp.isfinite(t).any(axis=None)
@@ -198,7 +199,7 @@ def pytree_has_inf(tree):
     return jt.reduce(lambda x, y: jnp.logical_or(x, y), jt.map(f, tree), False)
 
 
-def ensure_valid_pytree(tree: Any, tree_name: str) -> Any:
+def ensure_valid_pytree(tree: PyTree, tree_name: str) -> PyTree:
     """
     Ensures PyTree does not have any Inf values or NaN values using eqx.error_if
 
@@ -217,7 +218,9 @@ def ensure_valid_pytree(tree: Any, tree_name: str) -> Any:
     return tree
 
 
-def subset_classification_accuracy(model, x, y, percent, key):
+def subset_classification_accuracy(
+    model: eqx.Module, x: Array, y: Array, percent: float, key: PRNGKeyArray
+) -> Array:
     num_samples = x.shape[0]
     num_samples = int(num_samples * percent)
     idxs = jr.permutation(key, jnp.arange(x.shape[0]))[:num_samples]
@@ -225,7 +228,7 @@ def subset_classification_accuracy(model, x, y, percent, key):
 
 
 @eqx.filter_jit
-def classification_accuracy(model, x, y):
+def classification_accuracy(model: eqx.Module, x: Array, y: Array) -> Array:
     pred_y = jax.vmap(model)(x).squeeze()
     pred_y_int = jnp.argmax(pred_y, axis=1)
     y_int = jnp.argmax(y, axis=1)
@@ -241,7 +244,7 @@ def recursive_list_to_jnp_array(obj: dict | list | str | int):
         return obj
 
 
-def str_to_jnp_array(s: str, sep: str = ", ", with_brackets: bool = True) -> chex.Array:
+def str_to_jnp_array(s: str, sep: str = ", ", with_brackets: bool = True) -> Array:
     if with_brackets:
         s = s[1:-1]
     return jnp.asarray(np.fromstring(s, dtype=float, sep=sep))
@@ -249,7 +252,7 @@ def str_to_jnp_array(s: str, sep: str = ", ", with_brackets: bool = True) -> che
 
 def determine_optimal_num_devices(
     devices, num_training_runs, printing=True
-) -> Tuple[NamedSharding, int]:
+) -> tuple[NamedSharding, int]:
     """
     Maximize # of devices s.t. |runs| % |devices| = 0
     (otherwise JAX will throw an error when trying to distribute runs)

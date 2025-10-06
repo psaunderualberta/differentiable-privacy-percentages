@@ -13,6 +13,7 @@ from environments.dp_params import DP_RL_Params
 import equinox as eqx
 import chex
 import optax
+from jaxtyping import Array, PRNGKeyArray
 import tqdm
 import wandb
 from util.logger import ExperimentLogger
@@ -99,7 +100,10 @@ def main():
     @partial(eqx.filter_value_and_grad, has_aux=True)
     # @partial(shard_map, mesh=mesh, in_specs=(P(), P(), P(), P('x')), out_specs=(P(), (P('x'), P('x'))), check_vma=False)
     def get_policy_loss(
-        policy, mb_key, init_key, noise_keys
+        policy: Array,
+        mb_key: PRNGKeyArray,
+        init_key: PRNGKeyArray,
+        noise_keys: PRNGKeyArray,
     ) -> tuple[chex.Array, tuple[chex.Array, chex.Array]]:
         """Calculate the policy loss."""
 

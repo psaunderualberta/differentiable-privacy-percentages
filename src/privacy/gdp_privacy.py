@@ -93,7 +93,7 @@ def gdp_to_sigma(mu: Array) -> Array:
     return C / mu
 
 
-def dsigma_dweight(sigmas: jnp.ndarray, mu, p, T) -> jnp.ndarray:
+def dsigma_dweight(sigmas: Array, mu, p, T) -> Array:
     """
     Compute ds / dp, where 's' is sigma and 'p' is the policy
     """
@@ -144,7 +144,7 @@ def sigma_schedule_to_weights(schedule: Array, mu, p, T):
     return mu_schedule_to_weights(mu, mus, p, T)
 
 
-def project_weights(weights: jnp.ndarray, mu: float, p: float, T: int) -> jnp.ndarray:
+def project_weights(weights: Array, mu: float, p: float, T: int) -> Array:
     """
     W: in the form w**2 + eps
     """

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from pprint import pprint
 import numpy as np
-from typing import Dict, Literal
+from typing import Literal, Unknown
 
 import tyro
 import jax.numpy as jnp
@@ -9,7 +9,7 @@ import jax.numpy as jnp
 
 @dataclass(frozen=True)
 class DistributionConfig:
-    min: float # minimum of distribiution
+    min: float  # minimum of distribiution
     max: float  # maximum of distribution
     value: float  # constant value if distribution == 'constant'
     distribution: str  # type of distribution, in wandb-format (i.e. uniform, log_uniform_values, etc.)
@@ -17,32 +17,35 @@ class DistributionConfig:
     def sample(self) -> float:
         if self.distribution == "constant":
             return self.value
-    
+
         elif self.distribution == "log_uniform_values":
             return np.exp(
                 np.random.uniform(low=np.log(self.min), high=np.log(self.max))
             )
-        
+
         return np.random.uniform(low=self.min, high=self.min)
-    
+
     def to_wandb(self):
         if self.distribution == "constant":
-            return {
+            return {"distribution": self.distribution, "value": self.value}
+
+        return (
+            {
+                "min": self.min,
+                "max": self.max,
                 "distribution": self.distribution,
-                "value": self.value
-            }
-
-        return {
-            "min": self.min,
-            "max": self.max,
-            "distribution": self.distribution,
-        },
-
+            },
+        )
 
 
 # wandb cannot create sweeps if any distribution has min >= max
 # >:(
-def dist_config_helper(min: float = 0.0, max: float = 0.0, value: float = 0.0, distribution: str = "constant") -> DistributionConfig:
+def dist_config_helper(
+    min: float = 0.0,
+    max: float = 0.0,
+    value: float = 0.0,
+    distribution: str = "constant",
+) -> DistributionConfig:
     if min >= max:
         max += 1e-10
     return DistributionConfig(min=min, max=max, value=value, distribution=distribution)
@@ -62,7 +65,7 @@ class MLPConfig:
     initialization: Literal["glorot", "zeros"] = "glorot"
     key: int = 0  # Overridden as derivative from experiment.env_prng_key
 
-    def to_wandb(self) -> Dict:
+    def to_wandb(self) -> dict[str, dict[Unknown, Unknown]]:
         attrs = [
             "din",
             "dhidden",
@@ -81,16 +84,15 @@ class CNNConfig:
     # conv config params
     nchannels: int = -1  # Number of input channels, derived from data
     kernel_size: int = 3  # Edge Length of kernel
-    pool_kernel_size: int = 2 # Edge length of pooling kernel
+    pool_kernel_size: int = 2  # Edge length of pooling kernel
     hidden_channels: int = 3  # Number of hidden channels
     nhidden_conv: int = 1  # Number of hidden convolution layers
     key: int = 0  # Overridden as derivative from experiment.env_prng_key
 
     # dummy item, used to determine MLP input shape
-    dummy_data: jnp.ndarray | None = None 
+    dummy_data: jnp.ndarray | None = None
 
-
-    def to_wandb(self) -> Dict:
+    def to_wandb(self) -> dict[str, dict[Unknown, Unknown]]:
         attrs = [
             "nchannels",
             "kernel_size",
@@ -101,11 +103,14 @@ class CNNConfig:
         ]
         return {
             "parameters": {attr: {"value": getattr(self, attr)} for attr in attrs}
-                        | {"mlp": self.mlp.to_wandb()}}
+            | {"mlp": self.mlp.to_wandb()}
+        }
+
 
 # ---
 # Config for the policy
 # ---
+
 
 @dataclass
 class PolicyConfig:
@@ -114,18 +119,18 @@ class PolicyConfig:
     network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to use as policy
     batch_size: int = 1  # Batch size for policy training
     lr: DistributionConfig = dist_config_helper(
-        value=0.01, distribution="constant",
+        value=0.01,
+        distribution="constant",
     )  # Learning rate of policy network
     sigma_s: float = 1.0
     eps: float = 1e-8
-
 
     @property
     def network(self) -> MLPConfig | CNNConfig:
         """Get the actual network configuration."""
         return getattr(self, self.network_type)
-    
-    def to_wandb(self) -> Dict:
+
+    def to_wandb(self) -> dict[str, dict[Unknown, Unknown]]:
         return {
             "parameters": {
                 "network_type": {"value": self.network_type},
@@ -143,19 +148,21 @@ class PolicyConfig:
 @dataclass
 class EnvConfig:
     "Configuration for the Reinforcement Learning Environment"
+
     mlp: MLPConfig  # Configuration for the MLP to privatize. Ignored if 'network_type' = cnn
     cnn: CNNConfig  # Configuration for the CNN to privatize. Ignored if 'network_type' = mlp
 
     lr: DistributionConfig = dist_config_helper(
-        value=0.01, distribution="constant",
+        value=0.01,
+        distribution="constant",
     )  # Learning rate of private network
     loss_type: Literal["mse", "cce"] = "cce"  # The type of loss function to use
 
     # Privacy Parameters
-    eps: float = 0.5 # Epsilon privacy parameter
+    eps: float = 0.5  # Epsilon privacy parameter
     delta: float = 1e-7  # Delta privacy parameter
     batch_size: int = 250  # Batch size for NN training
-    max_steps_in_episode: int = 100 # Maximum # of steps within an episode
+    max_steps_in_episode: int = 100  # Maximum # of steps within an episode
     C: float = 1.0  # Ignored
     network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to privatize.
 
@@ -164,7 +171,7 @@ class EnvConfig:
     def network(self) -> MLPConfig | CNNConfig:
         return getattr(self, self.network_type)
 
-    def to_wandb(self) -> Dict:
+    def to_wandb(self) -> dict[str, dict[Unknown, Unknown]]:
         return {
             "parameters": {
                 "lr": self.lr.to_wandb(),
@@ -191,7 +198,7 @@ class SweepConfig:
     description: str | None = None  # The (optional) description of the wandb sweep
     with_baselines: bool = False  # Flag to compute plots comparing against baseline (Expensive, default is False)
 
-    def to_wandb(self) -> Dict:
+    def to_wandb(self) -> dict[str, dict[Unknown, Unknown]]:
         config = {
             "method": self.method,
             "metric": {
