@@ -28,8 +28,7 @@ def sample_batch_uniform(
     # jitted_approx_max_k = jax.lax.approx_max_k, static_argnums=(1,))
     _, subsample_idxs = jax.lax.approx_max_k(probs, idxs.shape[0])
 
-    return x[subsample_idxs], y[subsample_idxs]  #type: ignore
-
+    return x[subsample_idxs], y[subsample_idxs]  # type: ignore
 
 
 @eqx.filter_jit
@@ -43,15 +42,15 @@ def clip_grads_abadi(grads: eqx.Module, C: float):
     # sum_clipped, _ = per_example_global_norm_clip(grads_flat, C)
 
     # DP optimization as described in https://proceedings.neurips.cc/paper_files/paper/2023/file/8249b30d877c91611fd8c7aa6ac2b5fe-Paper-Conference.pdf
-    grads = ensure_valid_pytree(grads, 'grads in clip_grads')
+    grads = ensure_valid_pytree(grads, "grads in clip_grads")
     gamma = 0.01
 
     def get_multiplier(grad):
         return 1 / (
             jnp.sqrt(
-                1e-8
-                + sum(jnp.sum(jnp.abs(x) ** 2) for x in jax.tree.leaves(grad))
-            ) + gamma
+                1e-8 + sum(jnp.sum(jnp.abs(x) ** 2) for x in jax.tree.leaves(grad))
+            )
+            + gamma
         )
 
     multipliers = jax.vmap(get_multiplier)(grads)
@@ -123,15 +122,14 @@ def reinit_model(model, key):
 
 
 @eqx.filter_jit
-def get_spherical_noise(
-    grads: jax.Array, action: chex.Array, key: chex.PRNGKey
-):
+def get_spherical_noise(grads: jax.Array, action: chex.Array, key: chex.PRNGKey):
     def f(g, k):
         if g is None:
             return g
         return action * jax.random.normal(k, g.shape, g.dtype)
 
     return jt.map(f, grads, pytree_keys(grads, key))
+
 
 @eqx.filter_jit
 def add_pytrees(a, b):
@@ -144,7 +142,7 @@ def subtract_pytrees(a, b):
         if x is None or y is None:
             return None
         return x - y
-    
+
     return jt.map(func, a, b)
 
 
@@ -159,7 +157,7 @@ def dot_pytrees(a, b):
         if x is None or y is None:
             return 0.0
         return jnp.sum(x * y, axis=None)
-    
+
     return jt.reduce(lambda x, y: x + y, jt.map(func, a, b), 0.0)
 
 
@@ -167,9 +165,9 @@ def dot_pytrees(a, b):
 def pytree_max(a):
     def func(x):
         if x is None:
-            return -100.
+            return -100.0
         return jnp.max(x, axis=None)
-    
+
     return jt.reduce(lambda x, y: jnp.maximum(x, y), jt.map(func, a), 0.0)
 
 
@@ -178,6 +176,7 @@ def index_pytree(structure, index):
         if x is None:
             return None
         return x[index]
+
     return jt.map(f, structure)
 
 
@@ -186,7 +185,7 @@ def pytree_has_nan(tree):
         if t is None:
             return None
         return jnp.isnan(t).any(axis=None)
-    
+
     return jt.reduce(lambda x, y: jnp.logical_or(x, y), jt.map(f, tree), False)
 
 
@@ -195,7 +194,7 @@ def pytree_has_inf(tree):
         if t is None:
             return None
         return ~jnp.isfinite(t).any(axis=None)
-    
+
     return jt.reduce(lambda x, y: jnp.logical_or(x, y), jt.map(f, tree), False)
 
 
@@ -207,10 +206,14 @@ def ensure_valid_pytree(tree: Any, tree_name: str) -> Any:
         Tree: PyTree to check
 
     Returns:
-        Tree: Original Pytree unmodified, must be used to ensure DCE isn't applied to this function. 
+        Tree: Original Pytree unmodified, must be used to ensure DCE isn't applied to this function.
     """
-    tree = eqx.error_if(tree, pytree_has_inf(tree), "Tree '" + tree_name + "' has infinite values!")
-    tree = eqx.error_if(tree, pytree_has_nan(tree), "Tree '" + tree_name + "' has NaN values!")
+    tree = eqx.error_if(
+        tree, pytree_has_inf(tree), "Tree '" + tree_name + "' has infinite values!"
+    )
+    tree = eqx.error_if(
+        tree, pytree_has_nan(tree), "Tree '" + tree_name + "' has NaN values!"
+    )
     return tree
 
 
@@ -244,7 +247,9 @@ def str_to_jnp_array(s: str, sep: str = ", ", with_brackets: bool = True) -> che
     return jnp.asarray(np.fromstring(s, dtype=float, sep=sep))
 
 
-def determine_optimal_num_devices(devices, num_training_runs, printing=True) -> Tuple[NamedSharding, int]:
+def determine_optimal_num_devices(
+    devices, num_training_runs, printing=True
+) -> Tuple[NamedSharding, int]:
     """
     Maximize # of devices s.t. |runs| % |devices| = 0
     (otherwise JAX will throw an error when trying to distribute runs)
@@ -258,4 +263,3 @@ def determine_optimal_num_devices(devices, num_training_runs, printing=True) -> 
         print("Using devices: ", trimmed_devices_)
     mesh = Mesh(trimmed_devices_, ("i",))
     return NamedSharding(mesh, P("i")), len(trimmed_devices_)
-
