@@ -43,7 +43,7 @@ def clip_grads_abadi(grads: eqx.Module, C: float):
     # sum_clipped, _ = per_example_global_norm_clip(grads_flat, C)
 
     # DP optimization as described in https://proceedings.neurips.cc/paper_files/paper/2023/file/8249b30d877c91611fd8c7aa6ac2b5fe-Paper-Conference.pdf
-    grads = ensure_valid_pytree(grads)
+    grads = ensure_valid_pytree(grads, 'grads in clip_grads')
     gamma = 0.01
 
     def get_multiplier(grad):
@@ -194,12 +194,12 @@ def pytree_has_inf(tree):
     def f(t):
         if t is None:
             return None
-        return jnp.logical_not(jnp.isfinite(t)).any(axis=None)
+        return ~jnp.isfinite(t).any(axis=None)
     
     return jt.reduce(lambda x, y: jnp.logical_or(x, y), jt.map(f, tree), False)
 
 
-def ensure_valid_pytree(tree: Any) -> Any:
+def ensure_valid_pytree(tree: Any, tree_name: str) -> Any:
     """
     Ensures PyTree does not have any Inf values or NaN values using eqx.error_if
 
@@ -209,8 +209,8 @@ def ensure_valid_pytree(tree: Any) -> Any:
     Returns:
         Tree: Original Pytree unmodified, must be used to ensure DCE isn't applied to this function. 
     """
-    tree = eqx.error_if(tree, pytree_has_inf(tree), "Tree has infinite values!")
-    tree = eqx.error_if(tree, pytree_has_nan(tree), "Tree has NaN values!")
+    tree = eqx.error_if(tree, pytree_has_inf(tree), "Tree '" + tree_name + "' has infinite values!")
+    tree = eqx.error_if(tree, pytree_has_nan(tree), "Tree '" + tree_name + "' has NaN values!")
     return tree
 
 

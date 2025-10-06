@@ -47,7 +47,7 @@ def main():
     print(f"\tmu-GDP: {mu_tot}")
 
     # Initialize Policy model
-    policy = project_weights(jnp.ones((T,)), mu_tot, p, T)
+    policy = project_weights(jnp.ones((T,), dtype=jnp.float32), mu_tot, p, T)
     policy_batch_size = sweep_config.policy.batch_size
 
     private_network_arch = net_factory(
@@ -56,10 +56,6 @@ def main():
         conf=sweep_config.env.network,
     )
 
-    # print(private_network_arch)
-    # print(private_network_arch.reinitialize(jr.PRNGKey(env_prng_seed)))
-
-    # exit()
 
     # Initialize private environment
     env_params = DP_RL_Params.create(
@@ -79,10 +75,11 @@ def main():
     vmapped_train_with_noise = eqx.filter_vmap(train_with_noise, in_axes=(None, None, None, None, 0))
     # vmapped_train_with_noise = vmap(pmapped_train_with_noise, in_axes=(None, None, None, None, 0))
 
+    @partial(checkify.checkify, errors=checkify.nan_checks)
     @eqx.filter_jit
     @partial(eqx.filter_value_and_grad, has_aux=True)
-    @partial(shard_map, mesh=mesh, in_specs=(P(), P(), P(), P('x')), out_specs=(P(), (P('x'), P('x'))), check_vma=False)
-    def get_policy_loss(policy, mb_key, init_key, noise_keys) -> Tuple[chex.Array, Tuple[chex.Array, chex.Array]]:
+    # @partial(shard_map, mesh=mesh, in_specs=(P(), P(), P(), P('x')), out_specs=(P(), (P('x'), P('x'))), check_vma=False)
+    def test(policy, mb_key, init_key, noise_keys) -> Tuple[chex.Array, Tuple[chex.Array, chex.Array]]:
         """Calculate the policy loss."""
         # Split keys for # of runs in batch
         sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()
@@ -92,10 +89,10 @@ def main():
 
         # Train all networks
         _, losses, accuracies = vmapped_train_with_noise(sigmas, env_params, mb_key, init_key, noise_keys)
-        
+
         # Average over all shard-mapped networks
         final_loss = jnp.mean(losses[:, -1])
-        final_loss = jlax.pmean(final_loss, 'x').squeeze()
+        # final_loss = jlax.pmean(final_loss, 'x').squeeze()
 
         # losses = losses.reshape(-1, T + 1)
         # accuracies = accuracies.reshape(-1, T)
@@ -123,21 +120,23 @@ def main():
         key, mb_key = jr.split(key)
         key, _key = jr.split(key)
         noise_keys = jr.split(_key, policy_batch_size)
-        (loss, (losses, accuracies)), grads = get_policy_loss(policy, mb_key, init_key, noise_keys)
+        err, ((loss, (losses, accuracies)), grads) = test(policy, mb_key, init_key, noise_keys)
+
+        err.throw()
 
         # Ensure gradients are real numbers
-        loss = ensure_valid_pytree(loss)
-        grads = ensure_valid_pytree(grads)
+        loss = ensure_valid_pytree(loss, 'loss in main')
+        grads = ensure_valid_pytree(grads, 'grads in main')
 
         # Update policy
         updates, opt_state = optimizer.update(grads, opt_state, policy)
         policy: jnp.ndarray = optax.apply_updates(policy, updates) # type: ignore
         policy = project_weights(policy, mu_tot, p, T)
-        policy = ensure_valid_pytree(policy)
+        policy = ensure_valid_pytree(policy, 'policy in main')
 
         # Get new sigmas, ensure still valid
         new_sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze() # type: ignore
-        new_sigmas = ensure_valid_pytree(new_sigmas)
+        new_sigmas = ensure_valid_pytree(new_sigmas, 'sigmas in main')
 
         # Log iteration results to file
         for i in range(losses.shape[0]):
@@ -164,7 +163,7 @@ def main():
     for i in tqdm.tqdm(range(eval_num_iterations), total=eval_num_iterations, desc="Evaluating Policy"):
         key, _key = jr.split(key)
         k1, k2, k3 = jr.split(_key, 3)
-        _, losses, accuracies = eqx.filter_jit(train_with_noise)(sigmas, env_params, k1, k2, k3)
+        _, losses, accuracies = train_with_noise(sigmas, env_params, k1, k2, k3)
         loss = losses[-1]
         accuracy = accuracies[-1]
         logger.log(0, {"step": total_timesteps,

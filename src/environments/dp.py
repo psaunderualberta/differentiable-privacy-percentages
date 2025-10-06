@@ -20,6 +20,7 @@ from environments.losses import vmapped_loss, loss
 from environments.dp_params import DP_RL_Params
 
 
+@eqx.filter_jit
 def train_with_noise(
     noise_schedule: jnp.ndarray,
     params: DP_RL_Params,
@@ -36,6 +37,9 @@ def train_with_noise(
     network = reinit_model(varied_network, init_key)
     net_params, net_static = eqx.partition(params.network, eqx.is_array)
     optimizer = optax.sgd(params.lr)
+    opt_state = optimizer.init(network)
+
+    opt_state_params, opt_state_static = eqx.partition(opt_state, eqx.is_array)
 
     @jax.checkpoint  #type:ignore
     def training_step(
@@ -45,8 +49,9 @@ def train_with_noise(
         Tuple[PyTree, optax.OptState, chex.PRNGKey, chex.PRNGKey],  # Carry values
         Tuple[chex.Array, chex.Array]  # Scan outputs
     ]:
-        net_params, opt_state, mb_key, noise_key = carry
+        net_params, opt_state_params, mb_key, noise_key = carry
         model = eqx.combine(net_params, net_static)
+        opt_state = eqx.combine(opt_state_params, opt_state_static)
 
         mb_key, _key = jr.split(mb_key)
         batch_x, batch_y = sample_batch_uniform(params.X, params.y, params.dummy_batch, _key)
@@ -71,10 +76,11 @@ def train_with_noise(
             new_model, params.X, params.y, 0.01, _key
         )
 
-        new_net_params, _ = eqx.partition(params.network, eqx.is_array)
+        new_net_params, _ = eqx.partition(new_model, eqx.is_array)
+        opt_state_params, _ = eqx.partition(new_opt_state, eqx.is_array)
         return (new_net_params, new_opt_state, mb_key, noise_key), (new_loss, accuracy)
 
-    initial_carry = (net_params, optimizer.init(network), mb_key, noise_key)
+    initial_carry = (net_params, opt_state_params, mb_key, noise_key)
     (net_params, _, mb_key, noise_key), (losses, accuracies) = jax.lax.scan(
         training_step,
         initial_carry,
@@ -82,6 +88,7 @@ def train_with_noise(
     )
 
     mb_key, batch_key = jr.split(mb_key)
+    network = eqx.combine(net_params, net_static)
     batch_x, batch_y = sample_batch_uniform(params.X, params.y, params.dummy_batch, batch_key)
     final_loss, _ = loss(network, batch_x, batch_y)
 

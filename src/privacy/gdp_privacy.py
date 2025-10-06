@@ -47,6 +47,8 @@ def weights_to_mu_schedule(mu: float, schedule: chex.Array, p: float, T: int) ->
     """
 
     sigma_s = SingletonConfig.get_policy_config_instance().sigma_s
+    eps = SingletonConfig.get_policy_config_instance().eps
+    schedule = schedule ** 2 + eps
     
     mu_0 = jnp.sqrt(jnp.log(mu**2 / (p**2 * T) + 1))
     schedule = eqx.error_if(schedule, (schedule == 0).any(axis=None), "Schedule has zeroes")
@@ -140,16 +142,13 @@ def project_weights(weights: jnp.ndarray, mu: float, p: float, T: int) -> jnp.nd
     """
     eps = SingletonConfig.get_policy_config_instance().eps
 
-    # undo shift
-    centred_weights = jnp.sqrt(weights - eps)
-
     # project to l2 ball
     mu_0 = jnp.sqrt(jnp.log(mu**2 / (p**2 * T) + 1))
     l2_ball_radius = jnp.sqrt(mu**2 / (p**2 * (jnp.exp(mu_0**2) - 1)) - T * eps)
-    projected_weights = optax.projections.projection_l2_ball(centred_weights, scale=l2_ball_radius)
+    projected_weights = optax.projections.projection_l2_ball(weights, scale=l2_ball_radius)
 
     # reshift to ensure no mu is 0
-    return projected_weights**2 + eps
+    return projected_weights
 
 
 def test_approx_to_gdp():

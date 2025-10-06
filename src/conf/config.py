@@ -94,15 +94,14 @@ class CNNConfig:
         attrs = [
             "nchannels",
             "kernel_size",
-            "pool_dim",
-            "conv_dim_out",
+            "pool_kernel_size",
             "hidden_channels",
             "nhidden_conv",
-            "dhidden",
-            "nhidden",
-            "nclasses",
+            "key",
         ]
-        return {"parameters": {attr: {"value": getattr(self, attr)} for attr in attrs}}
+        return {
+            "parameters": {attr: {"value": getattr(self, attr)} for attr in attrs}
+                        | {"mlp": self.mlp.to_wandb()}}
 
 # ---
 # Config for the policy
