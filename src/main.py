@@ -98,7 +98,7 @@ def main():
     @eqx.filter_jit
     @partial(eqx.filter_value_and_grad, has_aux=True)
     # @partial(shard_map, mesh=mesh, in_specs=(P(), P(), P(), P('x')), out_specs=(P(), (P('x'), P('x'))), check_vma=False)
-    def test(
+    def get_policy_loss(
         policy, mb_key, init_key, noise_keys
     ) -> tuple[chex.Array, tuple[chex.Array, chex.Array]]:
         """Calculate the policy loss."""
@@ -141,7 +141,7 @@ def main():
         key, mb_key = jr.split(key)
         key, _key = jr.split(key)
         noise_keys = jr.split(_key, policy_batch_size)
-        err, ((loss, (losses, accuracies)), grads) = test(
+        err, ((loss, (losses, accuracies)), grads) = get_policy_loss(
             policy, mb_key, init_key, noise_keys
         )
 
