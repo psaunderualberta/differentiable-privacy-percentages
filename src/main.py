@@ -1,34 +1,31 @@
 import os
-from conf.singleton_conf import SingletonConfig
-from jax import (
-    random as jr,
-    numpy as jnp,
-    devices,
-)
-from jax.sharding import Mesh
-from jax.experimental import checkify
 from functools import partial
-from networks.net_factory import net_factory
-from environments.dp_params import DP_RL_Params
-import equinox as eqx
+
 import chex
+import equinox as eqx
 import optax
-from jaxtyping import Array, PRNGKeyArray
 import tqdm
+from jax import devices
+from jax import numpy as jnp
+from jax import random as jr
+from jax.experimental import checkify
+from jax.sharding import Mesh
+from jaxtyping import Array, PRNGKeyArray
+
 import wandb
-from util.logger import ExperimentLogger
+from conf.singleton_conf import SingletonConfig
+from environments.dp import train_with_noise
+from environments.dp_params import DP_RL_Params
+from networks.net_factory import net_factory
 from privacy.gdp_privacy import (
     approx_to_gdp,
-    weights_to_sigma_schedule,
     project_weights,
+    weights_to_sigma_schedule,
 )
-from util.util import (
-    determine_optimal_num_devices,
-    ensure_valid_pytree,
-)
-from util.dataloaders import DATALOADERS
-from environments.dp import train_with_noise
 from util.baselines import Baseline
+from util.dataloaders import DATALOADERS
+from util.logger import ExperimentLogger
+from util.util import determine_optimal_num_devices, ensure_valid_pytree
 
 
 def main():
