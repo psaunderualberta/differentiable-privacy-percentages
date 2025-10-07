@@ -14,7 +14,13 @@ import jax.numpy as jnp
 from jaxtyping import PyTree
 import jax.random as jr
 import optax
-from util.util import reinit_model, clip_grads_abadi, sample_batch_uniform, get_spherical_noise, subset_classification_accuracy
+from util.util import (
+    reinit_model,
+    clip_grads_abadi,
+    sample_batch_uniform,
+    get_spherical_noise,
+    subset_classification_accuracy,
+)
 from environments.losses import vmapped_loss, loss
 
 from environments.dp_params import DP_RL_Params
@@ -30,7 +36,7 @@ def train_with_noise(
 ) -> Tuple[eqx.Module, chex.Array, chex.Array]:
     # Vary network arrays across devices
     net_params, net_static = eqx.partition(params.network, eqx.is_array)
-    net_params = eqx.filter_jit(jax.lax.pvary)(net_params, 'x')
+    net_params = eqx.filter_jit(jax.lax.pvary)(net_params, "x")
     varied_network = eqx.combine(net_params, net_static)
 
     # Create network
@@ -41,20 +47,21 @@ def train_with_noise(
 
     opt_state_params, opt_state_static = eqx.partition(opt_state, eqx.is_array)
 
-    @jax.checkpoint  #type:ignore
+    @jax.checkpoint  # type:ignore
     def training_step(
-        carry,
-        noise
+        carry, noise
     ) -> Tuple[
         Tuple[PyTree, optax.OptState, chex.PRNGKey, chex.PRNGKey],  # Carry values
-        Tuple[chex.Array, chex.Array]  # Scan outputs
+        Tuple[chex.Array, chex.Array],  # Scan outputs
     ]:
         net_params, opt_state_params, mb_key, noise_key = carry
         model = eqx.combine(net_params, net_static)
         opt_state = eqx.combine(opt_state_params, opt_state_static)
 
         mb_key, _key = jr.split(mb_key)
-        batch_x, batch_y = sample_batch_uniform(params.X, params.y, params.dummy_batch, _key)
+        batch_x, batch_y = sample_batch_uniform(
+            params.X, params.y, params.dummy_batch, _key
+        )
 
         new_loss, grads = vmapped_loss(model, batch_x, batch_y)
         clipped_grads = clip_grads_abadi(grads, params.C)
@@ -65,9 +72,7 @@ def train_with_noise(
         noised_grads = eqx.apply_updates(clipped_grads, noises)
 
         # Add noisy gradients, update model and optimizer
-        updates, new_opt_state = optimizer.update(
-            noised_grads, opt_state, model
-        )
+        updates, new_opt_state = optimizer.update(noised_grads, opt_state, model)
         new_model = eqx.apply_updates(model, updates)
 
         # Subsample each with probability p
@@ -89,7 +94,9 @@ def train_with_noise(
 
     mb_key, batch_key = jr.split(mb_key)
     network = eqx.combine(net_params, net_static)
-    batch_x, batch_y = sample_batch_uniform(params.X, params.y, params.dummy_batch, batch_key)
+    batch_x, batch_y = sample_batch_uniform(
+        params.X, params.y, params.dummy_batch, batch_key
+    )
     final_loss, _ = loss(network, batch_x, batch_y)
 
     losses = jnp.concat([losses, jnp.asarray([final_loss])])
@@ -130,6 +137,4 @@ def train_with_noise(
     #     (derivatives, prod)
     # )
 
-
     return network, losses, accuracies
-    

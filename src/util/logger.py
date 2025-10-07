@@ -27,6 +27,7 @@ from util.aggregators import (
 
 import wandb
 
+
 class ExperimentLogger(eqx.Module):
     directories: List[str]
     columns: List[str]
@@ -41,7 +42,7 @@ class ExperimentLogger(eqx.Module):
         columns: List[str],
         large_columns: List[str] = [],
         aggregators: List[Callable[[pd.DataFrame], go.Figure]] = [],
-        clear_files: bool = True
+        clear_files: bool = True,
     ):
         self.directories = directories
         self.columns = columns
@@ -116,7 +117,6 @@ class ExperimentLogger(eqx.Module):
         baseline: Optional[Baseline] = None,
         show: bool = False,
     ) -> Dict[str, go.Figure]:
-
         if len(aggregators) == 0:
             aggregators = self.aggregators
 
@@ -167,7 +167,7 @@ class ExperimentLogger(eqx.Module):
                 fig = plotter(baseline, df)
 
                 if log_to_wandb:
-                    wandb.log({plotter_name: fig}) 
+                    wandb.log({plotter_name: fig})
 
         return aggregates
 

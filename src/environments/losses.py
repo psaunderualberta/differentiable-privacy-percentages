@@ -3,11 +3,11 @@ import jax
 import jax.numpy as jnp
 from jax.experimental import checkify
 import chex
-from typing import Callable, Tuple
+from typing import Callable
 from functools import partial
 from conf.singleton_conf import SingletonConfig
 from util.linalg import hvp
-from optax import safe_softmax_cross_entropy
+from optax import softmax_cross_entropy
 from util.util import pytree_has_inf
 
 
@@ -26,7 +26,7 @@ def __py_y_loss(pred_y: jnp.ndarray, y: jnp.ndarray) -> chex.Array:
     if loss_type == "mse":
         loss_value = ((pred_y - y) ** 2).mean()
     elif loss_type == "cce":
-        loss_value = safe_softmax_cross_entropy(pred_y, y).mean()
+        loss_value = softmax_cross_entropy(pred_y, y).mean()
     else:
         raise ValueError(f"Unknown loss type in 'py_y_loss: {loss_type}")
 
@@ -35,7 +35,7 @@ def __py_y_loss(pred_y: jnp.ndarray, y: jnp.ndarray) -> chex.Array:
 
 @eqx.filter_value_and_grad
 @eqx.filter_jit
-def __loss_helper(model, x, y, to_vmap: bool = True) -> Tuple[chex.Array, chex.Array]:
+def __loss_helper(model, x, y, to_vmap: bool = True) -> tuple[chex.Array, chex.Array]:
     """
     Compute the loss and gradients for a given model and data.
     Args:
