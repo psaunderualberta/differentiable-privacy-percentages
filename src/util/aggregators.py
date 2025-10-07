@@ -67,19 +67,33 @@ def std_accuracy_aggregator(df: pd.DataFrame) -> Tuple[pd.Series, pd.Series, str
 ### ---
 
 
-def actions_plotter(df: pd.DataFrame, timesteps: Optional[list[int]] = None) -> go.Figure:
+def actions_plotter(
+    df: pd.DataFrame, timesteps: Optional[list[int]] = None
+) -> go.Figure:
     batches = [df["batch_idx"].min()]
     num_training_steps = df["step"].max()
-    plotting_freq = num_training_steps // SingletonConfig.get_experiment_config_instance().sweep.plotting_steps
-    steps_to_log = [i for i in range(0, num_training_steps, plotting_freq)] + [num_training_steps]
+    plotting_freq = (
+        num_training_steps
+        // SingletonConfig.get_experiment_config_instance().sweep.plotting_steps
+    )
+    steps_to_log = [i for i in range(0, num_training_steps, plotting_freq)] + [
+        num_training_steps
+    ]
     return _actions_plotter(df, "actions", timesteps=steps_to_log, batches=batches)
 
 
-def policy_plotter(df: pd.DataFrame, timesteps: Optional[list[int]] = None) -> go.Figure:
+def policy_plotter(
+    df: pd.DataFrame, timesteps: Optional[list[int]] = None
+) -> go.Figure:
     batches = [df["batch_idx"].min()]
     num_training_steps = df["step"].max()
-    plotting_freq = num_training_steps // SingletonConfig.get_experiment_config_instance().sweep.plotting_steps
-    steps_to_log = [i for i in range(0, num_training_steps, plotting_freq)] + [num_training_steps]
+    plotting_freq = (
+        num_training_steps
+        // SingletonConfig.get_experiment_config_instance().sweep.plotting_steps
+    )
+    steps_to_log = [i for i in range(0, num_training_steps, plotting_freq)] + [
+        num_training_steps
+    ]
     return _actions_plotter(df, "policy", timesteps=steps_to_log, batches=batches)
 
 
@@ -87,53 +101,34 @@ def lr_plotter(df: pd.DataFrame, timesteps: Optional[list[int]] = None) -> go.Fi
     return _actions_plotter(df, "lrs", timesteps)
 
 
-def losses_plotter(df: pd.DataFrame, timesteps: Optional[list[int]] = None) -> go.Figure:
+def losses_plotter(
+    df: pd.DataFrame, timesteps: Optional[list[int]] = None
+) -> go.Figure:
     timesteps = [df["step"].max()]
     batches = df["batch_idx"].unique()
     return _actions_plotter(df, "losses", timesteps=timesteps, batches=batches)
 
 
-def accuracy_plotter(df: pd.DataFrame, timesteps: Optional[list[int]] = None) -> go.Figure:
+def accuracy_plotter(
+    df: pd.DataFrame, timesteps: Optional[list[int]] = None
+) -> go.Figure:
     return _actions_plotter(df, "accuracies", timesteps)
 
 
-def _actions_plotter(df: pd.DataFrame, col_name: str, timesteps: Optional[list[int]] = None, batches: Optional[list[int] | np.ndarray] = None) -> go.Figure:
-    if timesteps is None:
-        timesteps = [df["step"].max()]
-    if batches is None:
-        batches = df['batch_idx'].unique()
-
-    assert timesteps is not None
-    assert batches is not None
-    assert (len(timesteps) == 1) or (len(batches) == 1), f"len(timesteps) = {len(timesteps)},len(batches) = {len(batches)}"
-    idxs = df["step"].isin(timesteps) & df["batch_idx"].isin(batches)
-
-    final_df = df[idxs][["step", "batch_idx", col_name]]
-    final_df[col_name] = final_df[col_name].apply(str_to_jnp_array)
-
-    final_df["iter"] = final_df.apply(lambda row: list(range(len(row[col_name]))), axis=1)
-
-    # Flatten actions into a single list
-    final_df = (
-        final_df
-        .explode(['iter', col_name])
-        .reset_index(drop=True)
-    )
-
-    color_indicator = None
-    if len(timesteps) > 1:
-        color_indicator = 'step'
-    else:
-        color_indicator = 'batch_idx'
-
+def multi_line_plotter(
+    df: pd.DataFrame, col_name: str, color_indicator: str = "step"
+) -> go.Figure:
+    print(df)
+    df_melted = df.melt(id_vars=color_indicator, var_name="iter", value_name=col_name)
+    print(df_melted)
     fig = px.line(
-        final_df,
+        df_melted,
         x="iter",
         y=col_name,
         color=color_indicator,
     )
 
-    fig.update_layout(
+    _ = fig.update_layout(
         xaxis_title="Training Step",
         yaxis_title=col_name.capitalize(),
         legend=dict(
@@ -142,7 +137,7 @@ def _actions_plotter(df: pd.DataFrame, col_name: str, timesteps: Optional[list[i
             y=1.02,
             xanchor="center",
             x=0.5,
-        )
+        ),
     )
 
     return fig

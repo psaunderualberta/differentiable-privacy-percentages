@@ -3,27 +3,16 @@ import pickle
 from typing import Any, Callable, Dict, List, Tuple
 
 import chex
+import jax.numpy as jnp
 import equinox as eqx
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import wandb
 from typing import Optional
 from util.baselines import Baseline
 
-from util.aggregators import (
-    max_accuracy_aggregator,
-    mean_accuracy_aggregator,
-    min_accuracy_aggregator,
-    std_accuracy_aggregator,
-    max_loss_aggregator,
-    mean_loss_aggregator,
-    min_loss_aggregator,
-    std_loss_aggregator,
-    actions_plotter,
-    losses_plotter,
-    accuracy_plotter,
-    policy_plotter,
-)
+from util.aggregators import multi_line_plotter
 
 import wandb
 
@@ -184,3 +173,70 @@ class ExperimentLogger(eqx.Module):
             wandb.log({"data": wandb.Table(dataframe=df)})
 
         return df
+
+
+class WandbTableLogger(eqx.Module):
+    tables: dict[str, wandb.Table]
+    cols: dict[str, list[str]]
+    freqs: dict[str, int]
+    counts: dict[str, int]
+
+    def __init__(self, schemas: dict[str, list[str]], freqs: dict[str, int]):
+        super().__init__()
+        self.tables = {}
+        self.cols = {}
+        for name, cols in schemas.items():
+            self.tables[name] = wandb.Table(columns=cols, log_mode="INCREMENTAL")
+            self.cols[name] = cols
+
+        self.freqs = {name: freqs.get(name, 1) for name in schemas.keys()}
+        self.counts = {name: 0 for name in schemas.keys()}
+
+    def log(self, name: str, data: dict[str, int | float], force: bool = False) -> bool:
+        assert name in self.tables, (
+            f"Name '{name}' not found in set of tables: {list(self.tables.keys())}"
+        )
+        log_time = self.counts[name] % self.freqs[name] == 0
+        if log_time or force:
+            table = self.tables[name]
+            data_ordered = [jnp.asarray(data[col]).tolist() for col in table.columns]
+
+            table.add_data(*data_ordered)
+
+        self.counts[name] += 1
+        return log_time or force
+
+    def log_array(
+        self,
+        name: str,
+        arr: chex.Array,
+        aux: dict[str, object] | None = None,
+        force: bool = False,
+    ) -> bool:
+        cols = {str(j): item for (j, item) in enumerate(arr)}
+
+        aux = aux if isinstance(aux, dict) else dict()
+        return self.log(name, cols | aux, force=force)
+
+    def commit(self, metrics: dict[str, int] | None = None):
+        if metrics is None:
+            metrics = dict()
+        assert len(self.tables.keys() & metrics) == 0, "Name Overlap"
+        wandb.log(metrics)
+
+    def finish(self):
+        final_tables = {
+            name: wandb.Table(
+                columns=table.columns, data=table.data, log_mode="IMMUTABLE"
+            )
+            for (name, table) in self.tables.items()
+        }
+
+        wandb.log(final_tables)
+
+    def plot(self):
+        for table_name in ["actions", "policy", "grads"]:
+            wandb_table = self.tables[table_name]
+            df = pd.DataFrame(columns=wandb_table.columns, data=wandb_table.data)
+            fig = multi_line_plotter(df, table_name)
+            wandb.log({f"{table_name}-plot": fig})
