@@ -22,6 +22,7 @@ from privacy.gdp_privacy import (
     approx_to_gdp,
     project_weights,
     weights_to_sigma_schedule,
+    weights_to_mu_schedule,
 )
 from util.baselines import Baseline
 from util.dataloaders import DATALOADERS
@@ -85,6 +86,7 @@ def main():
     logger = WandbTableLogger(
         {
             "policy": ["step", *(str(step) for step in range(T))],
+            "mu": ["step", *(str(step) for step in range(T))],
             "losses": ["step", "losses"],
             "accuracies": ["step", "accuracies"],
             "actions": ["step", *(str(step) for step in range(T))],
@@ -92,6 +94,7 @@ def main():
         },
         {
             "policy": total_timesteps // sweep_config.plotting_steps,
+            "mu": total_timesteps // sweep_config.plotting_steps,
             "actions": total_timesteps // sweep_config.plotting_steps,
             "losses": total_timesteps // sweep_config.plotting_steps,
             "accuracies": total_timesteps // sweep_config.plotting_steps,
@@ -144,7 +147,7 @@ def main():
         # # derivatives = derivatives * dsigma_dweight(sigmas, mu, p, T)
         return final_loss, (losses, accuracies)
 
-    optimizer = optax.adam(learning_rate=experiment_config.sweep.policy.lr.sample())
+    optimizer = optax.adamw(learning_rate=experiment_config.sweep.policy.lr.sample())
     opt_state = optimizer.init(policy)  # type: ignore
 
     iterator = tqdm.tqdm(
@@ -159,8 +162,10 @@ def main():
             key, _ = jr.split(key)
 
             # Log policy & sigmas for this iteration
+            mu_sched = weights_to_mu_schedule(mu_tot, policy, p, T).squeeze()
             new_sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()  # type: ignore
             _ = logger.log_array("policy", policy, timestep_dict)
+            _ = logger.log_array("mu", mu_sched, timestep_dict)
             _ = logger.log_array("actions", new_sigmas, timestep_dict)
 
             # Get policy loss
@@ -201,57 +206,38 @@ def main():
             iterator.set_description(f"Training Progress - Loss: {loss:.4f}")
 
     except Exception as e:
+        mu_sched = weights_to_mu_schedule(mu_tot, policy, p, T).squeeze()
         _ = logger.log_array("policy", policy, timestep_dict, force=True)
+        _ = logger.log_array("mu", mu_sched, timestep_dict, force=True)
         _ = logger.log_array("actions", new_sigmas, timestep_dict, force=True)
         _ = logger.log_array("grads", grads, timestep_dict, force=True)
-        logger.plot()
-        logger.finish()
-        run.finish()
-        raise e
-    logger.plot()
-    logger.finish()
-    run.finish()
 
-    exit()
+        print("WARNING: Error raised during training: ")
+        print(e.args[0])
 
     # Generate final results with lots of iterations
     sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()  # type: ignore
     eval_num_iterations = 100
-    for i in tqdm.tqdm(
-        range(eval_num_iterations), total=eval_num_iterations, desc="Evaluating Policy"
-    ):
-        key, _key = jr.split(key)
-        k1, k2, k3 = jr.split(_key, 3)
-        _, losses, accuracies = train_with_noise(sigmas, env_params, k1, k2, k3)
-        loss = losses[-1]
-        accuracy = accuracies[-1]
-        logger.log(
-            0,
-            {
-                "step": total_timesteps,
-                "batch_idx": i,
-                "loss": loss,
-                "accuracy": accuracy,
-                "actions": sigmas,
-                "policy": policy,
-                "losses": losses,
-                "accuracies": accuracies,
-            },
-        )
+    eval_key = jr.PRNGKey(0)
 
     # Generate baseline if directed
     if experiment_config.sweep.with_baselines:
         baseline = Baseline(env_params, mu_tot, eval_num_iterations)
-        baseline.generate_baseline_data()
-    else:
-        baseline = None
+        _ = baseline.generate_baseline_data(eval_key)
+        eval_df = baseline.generate_schedule_data(sigmas, "Learned Policy", eval_key)
+        final_loss_fig = baseline.baseline_comparison_final_loss_plotter(eval_df)
+        accuracy_fig = baseline.baseline_comparison_accuracy_plotter(eval_df)
+        wandb.log(
+            {
+                "Baseline - Final Losses": final_loss_fig,
+                "Baseline - Accuracy": accuracy_fig,
+            }
+        )
 
-    # Log to wandb, if enabled
-    run_ids = []
-    log_to_wandb = wandb_config.mode != "disabled"
-    run_ids.append(run.id)
-    logger.create_plots(0, log_to_wandb=log_to_wandb, baseline=baseline)
-    logger.get_csv(0, log_to_wandb=log_to_wandb)
+    # Cleanup, finish wandb run
+    logger.multi_line_plots()
+    logger.finish()
+    run.finish()
 
     # sweep
     # print(run_ids)

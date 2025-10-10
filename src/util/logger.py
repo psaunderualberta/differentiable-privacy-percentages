@@ -234,8 +234,8 @@ class WandbTableLogger(eqx.Module):
 
         wandb.log(final_tables)
 
-    def plot(self):
-        for table_name in ["actions", "policy", "grads"]:
+    def multi_line_plots(self):
+        for table_name in ["actions", "policy", "grads", "mu"]:
             wandb_table = self.tables[table_name]
             df = pd.DataFrame(columns=wandb_table.columns, data=wandb_table.data)
             fig = multi_line_plotter(df, table_name)

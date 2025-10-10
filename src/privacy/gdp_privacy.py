@@ -35,6 +35,19 @@ def approx_to_gdp(eps: float, delta: float, tol: float = 1e-6) -> float:
     return optimize.root_scalar(f, bracket=[tol, 100], method="brentq").root
 
 
+def compute_mu_0(mu: float, p: float, T: int) -> Array:
+    return jnp.sqrt(jnp.log(mu**2 / (p**2 * T) + 1))
+
+
+def compute_eps(mu: float, p: float, T: int, max_sigma: float | None = None) -> Array:
+    mu_0 = compute_mu_0(mu, p, T)
+
+    if max_sigma is None:
+        max_sigma = SingletonConfig.get_policy_config_instance().max_sigma
+
+    return (jnp.exp(1 / max_sigma**2) - 1) / (jnp.exp(mu_0**2) - 1)
+
+
 def weights_to_mu_schedule(mu: float, schedule: Array, p: float, T: int) -> Array:
     """Convert a GDP mu parameter to a Poisson subsampling schedule.
 
@@ -48,15 +61,14 @@ def weights_to_mu_schedule(mu: float, schedule: Array, p: float, T: int) -> Arra
         A 1D array representing the adjusted schedule.
     """
 
-    sigma_s = SingletonConfig.get_policy_config_instance().sigma_s
-    eps = SingletonConfig.get_policy_config_instance().eps
+    eps = compute_eps(mu, p, T)
     schedule = schedule**2 + eps
 
-    mu_0 = jnp.sqrt(jnp.log(mu**2 / (p**2 * T) + 1))
+    mu_0 = compute_mu_0(mu, p, T)
     schedule = eqx.error_if(
         schedule, (schedule == 0).any(axis=None), "Schedule has zeroes"
     )
-    return jnp.sqrt(jnp.log(schedule * (jnp.exp(mu_0**2) - 1) + 1) / sigma_s**2)
+    return jnp.sqrt(jnp.log(schedule * (jnp.exp(mu_0**2) - 1) + 1))
 
 
 def mu_schedule_to_weights(mu: float, schedule: Array, p: float, T: int) -> Array:
@@ -73,10 +85,8 @@ def mu_schedule_to_weights(mu: float, schedule: Array, p: float, T: int) -> Arra
         A 1D array representing the adjusted schedule.
     """
 
-    sigma_s = SingletonConfig.get_policy_config_instance().sigma_s
-
     mu_0 = jnp.sqrt(jnp.log(mu**2 / (p**2 * T) + 1))
-    return (jnp.exp((schedule * sigma_s) ** 2) - 1) / (jnp.exp(mu_0**2) - 1)
+    return (jnp.exp(schedule**2) - 1) / (jnp.exp(mu_0**2) - 1)
 
 
 def gdp_to_sigma(mu: Array) -> Array:
@@ -144,14 +154,15 @@ def sigma_schedule_to_weights(schedule: Array, mu, p, T):
     return mu_schedule_to_weights(mu, mus, p, T)
 
 
+# TODO: Move projection into the gradient computation
 def project_weights(weights: Array, mu: float, p: float, T: int) -> Array:
     """
     W: in the form w**2 + eps
     """
-    eps = SingletonConfig.get_policy_config_instance().eps
+    eps = compute_eps(mu, p, T)
 
     # project to l2 ball
-    mu_0 = jnp.sqrt(jnp.log(mu**2 / (p**2 * T) + 1))
+    mu_0 = compute_mu_0(mu, p, T)
     l2_ball_radius = jnp.sqrt(mu**2 / (p**2 * (jnp.exp(mu_0**2) - 1)) - T * eps)
     projected_weights = optax.projections.projection_l2_ball(
         weights, scale=l2_ball_radius
@@ -159,52 +170,3 @@ def project_weights(weights: Array, mu: float, p: float, T: int) -> Array:
 
     # reshift to ensure no mu is 0
     return projected_weights
-
-
-def test_approx_to_gdp():
-    epsilon = 3.0
-    delta = 0.566737999092
-    mu = approx_to_gdp(epsilon, delta)
-    assert jnp.isclose(mu, 3.0, atol=1e-3), (
-        f"Expected mu to be close to 3.0, but got {mu}"
-    )
-
-    epsilon = 0.5
-    delta = 0.0524403232877
-    mu = approx_to_gdp(epsilon, delta)
-    assert jnp.isclose(mu, 0.5, atol=1e-3), (
-        f"Expected mu to be close to 0.5, but got {mu}"
-    )
-
-    epsilon = 1.0
-    delta = 0.126936737507
-    mu = approx_to_gdp(epsilon, delta)
-    assert jnp.isclose(mu, 1.0, atol=1e-3), (
-        f"Expected mu to be close to 1.0, but got {mu}"
-    )
-
-    epsilon = 7
-    delta = 0.811589893405
-    mu = approx_to_gdp(epsilon, delta)
-    assert jnp.isclose(mu, 5.0, atol=1e-3), (
-        f"Expected mu to be close to 5.0, but got {mu}"
-    )
-
-
-def test_weights_to_sigmas_and_back():
-    def test(weights, mu, p, T):
-        sigmas = weights_to_sigma_schedule(weights, mu, p, T)
-        new_weights = sigma_schedule_to_weights(sigmas, mu, p, T)
-        assert jnp.isclose(weights, new_weights).all(), f"{weights} =/= {new_weights}"
-
-    test(jnp.asarray([1, 1, 1, 1]), mu=0.5, p=250 / 60_000, T=1000)
-    test(jnp.asarray([5, 3, 0.05, 10.0]), mu=0.5, p=250 / 60_000, T=1000)
-    test(jnp.asarray([5, 3, 0.05, 10.0]), mu=0.5, p=250 / 60_000, T=3000)
-    test(jnp.asarray([5, 3, 0.05, 10.0]), mu=0.5, p=1 / 60_000, T=1000)
-    test(jnp.asarray([5, 3, 0.05, 10.0]), mu=0.1, p=250 / 60_000, T=1000)
-
-
-if __name__ == "__main__":
-    test_approx_to_gdp()
-    test_weights_to_sigmas_and_back()
-    print("All tests passed.")

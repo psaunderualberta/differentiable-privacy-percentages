@@ -118,9 +118,7 @@ def accuracy_plotter(
 def multi_line_plotter(
     df: pd.DataFrame, col_name: str, color_indicator: str = "step"
 ) -> go.Figure:
-    print(df)
     df_melted = df.melt(id_vars=color_indicator, var_name="iter", value_name=col_name)
-    print(df_melted)
     fig = px.line(
         df_melted,
         x="iter",

@@ -2,6 +2,7 @@ import os
 
 import jax.numpy as jnp
 import jax.random as jr
+from jaxtyping import Array, PRNGKeyArray
 import pandas as pd
 import plotly.express as px
 import tqdm
@@ -29,7 +30,6 @@ class Baseline:
             "accuracy",
             "losses",
             "accuracies",
-            "actions",
         ]
 
     def delete_non_baseline_data(self):
@@ -89,29 +89,19 @@ class Baseline:
         pdf_directory = os.path.join(".", "plots", name + ".pdf")
         fig.write_image(pdf_directory)
 
-    def generate_baseline_data(self, with_progress_bar=True):
-        T = self.env_params.max_steps_in_episode
-
-        # Uniform schedule
-        weights = jnp.ones(
-            (
-                1,
-                T,
-            )
-        )
-
-        sigmas = weights_to_sigma_schedule(weights, self.mu, self.p, T).squeeze()
-        self.sigma = float(sigmas[0])  # type: ignore
-
+    def generate_schedule_data(
+        self,
+        sigmas: Array,
+        name: str,
+        key: PRNGKeyArray,
+        with_progress_bar: bool = True,
+    ) -> pd.DataFrame:
         df = pd.DataFrame(columns=self.columns)
 
         iterator = range(self.num_repetitions)
         if with_progress_bar:
-            iterator = tqdm.tqdm(
-                iterator, desc="Evaluating Baselines", total=self.num_repetitions
-            )
+            iterator = tqdm.tqdm(iterator, desc=name, total=self.num_repetitions)
 
-        key = jr.PRNGKey(0)
         for _ in iterator:
             key, _key = jr.split(key)
             k1, k2, k3 = jr.split(_key, 3)
@@ -119,18 +109,40 @@ class Baseline:
                 sigmas, self.env_params, k1, k2, k3
             )
             df.loc[len(df)] = {  # type: ignore
-                "type": f"Constant Noise ({round(self.sigma, 2)})",
+                "type": name,
                 "step": 0,  # only recording one step for these
                 "loss": losses[-1],
                 "accuracy": accuracies[-1],
                 "losses": losses,
-                "policy": weights,
                 "accuracies": accuracies,
                 "actions": sigmas,
             }
 
         # Create a copy of baseline data, then another to be modified
+        return df
+
+    def generate_baseline_data(
+        self, key: PRNGKeyArray, with_progress_bar: bool = True
+    ) -> pd.DataFrame:
+        T = self.env_params.max_steps_in_episode
+
+        # Uniform schedule
+        weights = jnp.ones(
+            (
+                1,
+                T,
+            ),
+            dtype=jnp.float32,
+        )
+        sigmas = weights_to_sigma_schedule(weights, self.mu, self.p, T).squeeze()
+        sigma = float(sigmas[0])
+        name = f"Constant Noise ({round(sigma, 2)})"
+
+        df = self.generate_schedule_data(
+            sigmas, name, key, with_progress_bar=with_progress_bar
+        )
+
         self.original_df = df
         self.df = self.original_df.copy()
 
-        return
+        return self.df.copy()
