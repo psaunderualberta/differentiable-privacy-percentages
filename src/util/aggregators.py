@@ -127,7 +127,7 @@ def multi_line_plotter(
     )
 
     _ = fig.update_layout(
-        xaxis_title="Training Step",
+        xaxis_title="Private Training Step",
         yaxis_title=col_name.capitalize(),
         legend=dict(
             orientation="h",

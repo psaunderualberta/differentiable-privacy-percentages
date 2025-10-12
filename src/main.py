@@ -147,7 +147,9 @@ def main():
         # # derivatives = derivatives * dsigma_dweight(sigmas, mu, p, T)
         return final_loss, (losses, accuracies)
 
-    optimizer = optax.adamw(learning_rate=experiment_config.sweep.policy.lr.sample())
+    optimizer = optax.adamw(
+        learning_rate=experiment_config.sweep.policy.lr.sample(),
+    )
     opt_state = optimizer.init(policy)  # type: ignore
 
     iterator = tqdm.tqdm(

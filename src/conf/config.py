@@ -192,7 +192,7 @@ class SweepConfig:
     method: str = "random"  # The wandb search method
     metric_name: str = "Mean Accuracy"  # The metric for wandb to optimize
     metric_goal: str = "maximize"  # The wandb optimization goal
-    plotting_steps: int = 80
+    plotting_steps: int = 20
     name: str | None = None  # The (optional) name of the wandb sweep
     description: str | None = None  # The (optional) description of the wandb sweep
     with_baselines: bool = False  # Flag to compute plots comparing against baseline (Expensive, default is False)
