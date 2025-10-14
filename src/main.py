@@ -126,6 +126,7 @@ def main():
     ) -> tuple[chex.Array, tuple[chex.Array, chex.Array]]:
         """Calculate the policy loss."""
 
+        policy = project_weights(policy, mu_tot, p, T)
         sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()
 
         # Ensure privacy loss on each iteration is a real number (i.e. \sigma > 0)
@@ -197,7 +198,6 @@ def main():
             updates, opt_state = optimizer.update(grads, opt_state, policy)
             policy = optax.apply_updates(policy, updates)
             assert isinstance(policy, jnp.ndarray), "Policy is not an array"
-            policy = project_weights(policy, mu_tot, p, T)
             policy = ensure_valid_pytree(policy, "policy in main")
 
             # Get new sigmas, ensure still valid

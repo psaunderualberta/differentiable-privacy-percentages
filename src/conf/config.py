@@ -119,7 +119,7 @@ class PolicyConfig:
     network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to use as policy
     batch_size: int = 1  # Batch size for policy training
     lr: DistributionConfig = dist_config_helper(
-        value=0.001,
+        value=0.1,
         distribution="constant",
     )  # Learning rate of policy network
     max_sigma: float = 10.0
@@ -152,7 +152,8 @@ class EnvConfig:
     cnn: CNNConfig  # Configuration for the CNN to privatize. Ignored if 'network_type' = mlp
 
     lr: DistributionConfig = dist_config_helper(
-        value=0.01,
+        value=0.1,
+        #Breathe bb :)
         distribution="constant",
     )  # Learning rate of private network
     loss_type: Literal["mse", "cce"] = "cce"  # The type of loss function to use
@@ -204,7 +205,6 @@ class SweepConfig:
                 "name": self.metric_name,
                 "goal": self.metric_goal,
             },
-            "name": self.name,
             "parameters": {
                 "env": self.env.to_wandb(),
                 "policy": self.policy.to_wandb(),
@@ -248,5 +248,5 @@ class Config:
 
 
 if __name__ == "__main__":
-    args = tyro.cli(Config)
+    args = tyro.cli(Config, config=(tyro.conf.ConsolidateSubcommandArgs,))
     pprint(args)

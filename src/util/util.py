@@ -9,6 +9,7 @@ from jax import tree as jt
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, PRNGKeyArray, PyTree, PyTreeDef
+from conf.singleton_conf import SingletonConfig
 
 
 @eqx.filter_jit
@@ -52,12 +53,14 @@ def clip_grads_abadi(grads: eqx.Module, C: float) -> eqx.Module:
             + gamma
         )
 
-    multipliers = jax.vmap(get_multiplier)(grads)
-    sum_clipped = jax.tree.map(
+
+    batch_size = SingletonConfig.get_environment_config_instance().batch_size
+    multipliers = jax.vmap(get_multiplier)(grads) / batch_size
+    mean_clipped = jax.tree.map(
         lambda g: jnp.tensordot(multipliers, g, axes=1), grads_flat
     )
 
-    return jax.tree.unflatten(grads_treedef, sum_clipped)
+    return jax.tree.unflatten(grads_treedef, mean_clipped)
 
 
 @eqx.filter_jit
@@ -124,10 +127,13 @@ def reinit_model(model: eqx.Module, key: PRNGKeyArray) -> eqx.Module:
 def get_spherical_noise(
     grads: eqx.Module, action: float, key: PRNGKeyArray
 ) -> eqx.Module:
+
+    batch_size = SingletonConfig.get_environment_config_instance().batch_size
+
     def f(g: eqx.Module | None, k: PRNGKeyArray):
         if g is None:
             return g
-        return action * jax.random.normal(k, g.shape, g.dtype)
+        return action * jax.random.normal(k, g.shape, g.dtype) / batch_size
 
     return jt.map(f, grads, pytree_keys(grads, key))
 

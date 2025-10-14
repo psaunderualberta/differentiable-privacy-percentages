@@ -24,6 +24,7 @@ class SingletonConfig:
     @classmethod
     def get_sweep_config_instance(cls) -> SweepConfig:
         return cls.get_experiment_config_instance().sweep
+        
     @classmethod
     def get_environment_config_instance(cls) -> EnvConfig:
         return cls.get_sweep_config_instance().env
