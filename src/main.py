@@ -126,7 +126,6 @@ def main():
     ) -> tuple[chex.Array, tuple[chex.Array, chex.Array]]:
         """Calculate the policy loss."""
 
-        policy = project_weights(policy, mu_tot, p, T)
         sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()
 
         # Ensure privacy loss on each iteration is a real number (i.e. \sigma > 0)
@@ -167,21 +166,18 @@ def main():
             # Log policy & sigmas for this iteration
             mu_sched = weights_to_mu_schedule(mu_tot, policy, p, T).squeeze()
             new_sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()  # type: ignore
-            _ = logger.log_array("policy", policy, timestep_dict)
-            _ = logger.log_array("mu", mu_sched, timestep_dict)
-            _ = logger.log_array("actions", new_sigmas, timestep_dict)
+            _ = logger.log_array("policy", policy, timestep_dict, plot=True)
+            _ = logger.log_array("mu", mu_sched, timestep_dict, plot=True)
+            _ = logger.log_array("actions", new_sigmas, timestep_dict, plot=True)
 
             # Get policy loss
-            key, init_key = jr.split(key)
-            key, mb_key = jr.split(key)
-            key, _key = jr.split(key)
-            noise_keys = jr.split(_key, policy_batch_size)
+            key, init_key, mb_key, noise_key = jr.split(key, 4)
             (loss, (losses, accuracies)), grads = get_policy_loss(
-                policy, mb_key, init_key, noise_keys
+                policy, mb_key, init_key, jr.split(noise_key, policy_batch_size)
             )
 
             # log grads
-            _ = logger.log_array("grads", grads, timestep_dict)
+            _ = logger.log_array("grads", grads, timestep_dict, plot=True)
 
             # Log iteration results to file
             _ = logger.log("losses", timestep_dict | {"losses": losses})
@@ -199,6 +195,7 @@ def main():
             policy = optax.apply_updates(policy, updates)
             assert isinstance(policy, jnp.ndarray), "Policy is not an array"
             policy = ensure_valid_pytree(policy, "policy in main")
+            policy = project_weights(policy, mu_tot, p, T)
 
             # Get new sigmas, ensure still valid
             new_sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()  # type: ignore
@@ -209,13 +206,18 @@ def main():
 
     except Exception as e:
         mu_sched = weights_to_mu_schedule(mu_tot, policy, p, T).squeeze()
-        _ = logger.log_array("policy", policy, timestep_dict, force=True)
-        _ = logger.log_array("mu", mu_sched, timestep_dict, force=True)
-        _ = logger.log_array("actions", new_sigmas, timestep_dict, force=True)
-        _ = logger.log_array("grads", grads, timestep_dict, force=True)
+        _ = logger.log_array("policy", policy, timestep_dict, force=True, plot=True)
+        _ = logger.log_array("mu", mu_sched, timestep_dict, force=True, plot=True)
+        _ = logger.log_array(
+            "actions", new_sigmas, timestep_dict, force=True, plot=True
+        )
+        _ = logger.log_array("grads", grads, timestep_dict, force=True, plot=True)
 
         print("WARNING: Error raised during training: ")
         print(e.args[0])
+
+        if not isinstance(e, KeyboardInterrupt):
+            raise e
 
     # Generate final results with lots of iterations
     sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()  # type: ignore
@@ -237,7 +239,11 @@ def main():
         )
 
     # Cleanup, finish wandb run
-    logger.multi_line_plots()
+    for multi_line_table_name in ["actions", "policy", "grads", "mu"]:
+        logger.line_plot(multi_line_table_name)
+    for bulk_line_table_name in ["losses", "accuracies"]:
+        logger.bulk_line_plots(bulk_line_table_name)
+
     logger.finish()
     run.finish()
 

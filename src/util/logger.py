@@ -192,7 +192,13 @@ class WandbTableLogger(eqx.Module):
         self.freqs = {name: freqs.get(name, 1) for name in schemas.keys()}
         self.counts = {name: 0 for name in schemas.keys()}
 
-    def log(self, name: str, data: dict[str, int | float], force: bool = False) -> bool:
+    def log(
+        self,
+        name: str,
+        data: dict[str, int | float],
+        force: bool = False,
+        plot: bool = False,
+    ) -> bool:
         assert name in self.tables, (
             f"Name '{name}' not found in set of tables: {list(self.tables.keys())}"
         )
@@ -203,6 +209,9 @@ class WandbTableLogger(eqx.Module):
 
             table.add_data(*data_ordered)
 
+            if plot:
+                self.line_plot(name, [data_ordered])
+
         self.counts[name] += 1
         return log_time or force
 
@@ -212,11 +221,12 @@ class WandbTableLogger(eqx.Module):
         arr: chex.Array,
         aux: dict[str, object] | None = None,
         force: bool = False,
+        plot: bool = False,
     ) -> bool:
         cols = {str(j): item for (j, item) in enumerate(arr)}
 
         aux = aux if isinstance(aux, dict) else dict()
-        return self.log(name, cols | aux, force=force)
+        return self.log(name, cols | aux, force=force, plot=plot)
 
     def commit(self, metrics: dict[str, int] | None = None):
         if metrics is None:
@@ -234,9 +244,31 @@ class WandbTableLogger(eqx.Module):
 
         wandb.log(final_tables)
 
-    def multi_line_plots(self):
-        for table_name in ["actions", "policy", "grads", "mu"]:
-            wandb_table = self.tables[table_name]
+    def line_plot(self, table_name: str, data: list | None = None):
+        wandb_table = self.tables[table_name]
+        if data is None:
             df = pd.DataFrame(columns=wandb_table.columns, data=wandb_table.data)
-            fig = multi_line_plotter(df, table_name)
-            wandb.log({f"{table_name}-plot": fig})
+        else:
+            df = pd.DataFrame(columns=wandb_table.columns, data=data)
+
+        # multi-line, but only plotting one line
+        fig = multi_line_plotter(df, table_name)
+        wandb.log({f"{table_name}-plot": fig})
+
+    def bulk_line_plots(self, table_name: str):
+        data = self.tables[table_name].data[-1]
+
+        # implicitly checks for square-ness
+        bulk_lines = jnp.asarray(data[-1])
+        num_cols = bulk_lines.shape[-1]
+
+        pd_compatible_data = []
+        for i, line in enumerate(bulk_lines):
+            pd_compatible_data.append([i, *[num.item() for num in line]])
+
+        cols = ["run no.", *map(str, range(num_cols))]
+        df = pd.DataFrame(columns=cols, data=pd_compatible_data)
+
+        # multi-line, but only plotting one line
+        fig = multi_line_plotter(df, table_name, color_indicator="run no.")
+        wandb.log({f"{table_name}-plot": fig})
