@@ -53,7 +53,6 @@ def clip_grads_abadi(grads: eqx.Module, C: float) -> eqx.Module:
             + gamma
         )
 
-
     batch_size = SingletonConfig.get_environment_config_instance().batch_size
     multipliers = jax.vmap(get_multiplier)(grads) / batch_size
     mean_clipped = jax.tree.map(
@@ -127,7 +126,6 @@ def reinit_model(model: eqx.Module, key: PRNGKeyArray) -> eqx.Module:
 def get_spherical_noise(
     grads: eqx.Module, action: float, key: PRNGKeyArray
 ) -> eqx.Module:
-
     batch_size = SingletonConfig.get_environment_config_instance().batch_size
 
     def f(g: eqx.Module | None, k: PRNGKeyArray):

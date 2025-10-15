@@ -13,7 +13,6 @@ from dataclasses import replace
 from networks.MLP import MLP
 
 
-
 class CNN(eqx.Module, Network):
     layers: list
 
@@ -32,13 +31,16 @@ class CNN(eqx.Module, Network):
         for _ in range(conf.nhidden_conv):
             key, _key = jr.split(key)
             new_layer = [
-                eqx.nn.Conv2d(in_channels, conf.hidden_channels, conf.kernel_size, key=_key),
+                eqx.nn.Conv2d(
+                    in_channels, conf.hidden_channels, conf.kernel_size, key=_key
+                ),
                 ReLU(),
                 eqx.nn.MaxPool2d(
                     kernel_size=conf.kernel_size,
-                )
+                ),
             ]
 
+            in_channels = conf.hidden_channels
             blocks.append(new_layer)
 
         blocks.append([CNN.__ravel()])
@@ -46,7 +48,9 @@ class CNN(eqx.Module, Network):
         in_channels = conf.hidden_channels
 
         cnn_wo_mlp = CNN(blocks)
-        assert conf.dummy_data is not None, "CNN Configuration's dummy data must be filled!"
+        assert conf.dummy_data is not None, (
+            "CNN Configuration's dummy data must be filled!"
+        )
         dummy_out = cnn_wo_mlp(conf.dummy_data)
 
         # Create final MLP
@@ -63,22 +67,22 @@ class CNN(eqx.Module, Network):
             new_block = []
             for layer in block:
                 key, _key = jr.split(key)
-                if isinstance(layer, eqx.nn.Conv2d): 
-                    new_block.append(eqx.nn.Conv2d(
-                        in_channels=layer.in_channels,
-                        out_channels=layer.out_channels,
-                        kernel_size=layer.kernel_size,
-                        key=_key,
-                    ))
-                elif isinstance(layer, MLP):
+                if isinstance(layer, eqx.nn.Conv2d):
                     new_block.append(
-                        layer.reinitialize(key)
+                        eqx.nn.Conv2d(
+                            in_channels=layer.in_channels,
+                            out_channels=layer.out_channels,
+                            kernel_size=layer.kernel_size,
+                            key=_key,
+                        )
                     )
+                elif isinstance(layer, MLP):
+                    new_block.append(layer.reinitialize(key))
                 else:
                     # relu, MaxPool2d, ravel
                     new_block.append(layer)
             new_blocks.append(new_block)
-        
+
         return CNN(new_blocks)
 
     def __call__(self, x: jnp.ndarray):
@@ -109,7 +113,9 @@ class CNN(eqx.Module, Network):
             return jax.lax.select(len(arr.shape) > 1, 0, arr.shape[0])
 
         model_arrays, _ = eqx.partition(self.layers, eqx.is_array)
-        hidden_dims = jax.tree.map(get_out_dim, model_arrays, is_leaf=lambda x: x is None)
+        hidden_dims = jax.tree.map(
+            get_out_dim, model_arrays, is_leaf=lambda x: x is None
+        )
         return jax.tree.reduce(lambda x, y: x + y, hidden_dims).item()
 
 
@@ -120,6 +126,7 @@ if __name__ == "__main__":
     y = jnp.ones((10, 1))
 
     from conf.singleton_conf import SingletonConfig
+
     model_conf = SingletonConfig.get_environment_config_instance().mlp
 
     model = MLP.from_config(model_conf)
