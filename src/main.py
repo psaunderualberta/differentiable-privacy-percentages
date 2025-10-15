@@ -31,35 +31,30 @@ from util.util import determine_optimal_num_devices, ensure_valid_pytree
 
 
 def main():
-    experiment_config = SingletonConfig.get_experiment_config_instance()
     sweep_config = SingletonConfig.get_sweep_config_instance()
     environment_config = SingletonConfig.get_environment_config_instance()
     wandb_config = SingletonConfig.get_wandb_config_instance()
 
-    total_timesteps = experiment_config.total_timesteps
-    env_prng_seed = experiment_config.env_prng_seed
+    total_timesteps = sweep_config.total_timesteps
+    env_prng_seed = sweep_config.env_prng_seed
 
     print("Starting...")
     run = wandb.init(
         project=wandb_config.project,
         entity=wandb_config.entity,
-        config={
-            "policy": sweep_config.policy.to_wandb(),
-            "env": sweep_config.env.to_wandb(),
-        },
+        id=wandb_config.restart_run_id,
         mode=wandb_config.mode,
+        resume="allow",
     )
 
     # Initialize dataset
-    X, y = DATALOADERS[experiment_config.dataset](experiment_config.dataset_poly_d)
+    X, y = DATALOADERS[sweep_config.dataset](sweep_config.dataset_poly_d)
     print(f"Dataset shape: {X.shape}, {y.shape}")
 
-    epsilon = experiment_config.sweep.env.eps
-    delta = experiment_config.sweep.env.delta
+    epsilon = sweep_config.env.eps
+    delta = sweep_config.env.delta
     mu_tot = approx_to_gdp(epsilon, delta)
-    p = (
-        experiment_config.sweep.env.batch_size / X.shape[0]
-    )  # Assuming MNIST dataset size
+    p = sweep_config.env.batch_size / X.shape[0]  # Assuming MNIST dataset size
     T = environment_config.max_steps_in_episode
     print("Privacy parameters:")
     print(f"\t(epsilon, delta)-DP: ({epsilon}, {delta})")
@@ -147,9 +142,7 @@ def main():
         # # derivatives = derivatives * dsigma_dweight(sigmas, mu, p, T)
         return final_loss, (losses, accuracies)
 
-    optimizer = optax.adamw(
-        learning_rate=experiment_config.sweep.policy.lr.sample(),
-    )
+    optimizer = optax.adamw(learning_rate=sweep_config.policy.lr)
     opt_state = optimizer.init(policy)  # type: ignore
 
     iterator = tqdm.tqdm(
@@ -225,7 +218,7 @@ def main():
     eval_key = jr.PRNGKey(0)
 
     # Generate baseline if directed
-    if experiment_config.sweep.with_baselines:
+    if sweep_config.with_baselines:
         baseline = Baseline(env_params, mu_tot, eval_num_iterations)
         _ = baseline.generate_baseline_data(eval_key)
         eval_df = baseline.generate_schedule_data(sigmas, "Learned Policy", eval_key)
@@ -246,15 +239,6 @@ def main():
 
     logger.finish()
     run.finish()
-
-    # sweep
-    # print(run_ids)
-    # wandb.sweep(
-    #     sweep_config.to_wandb(),
-    #     project=wandb_config.project,
-    #     entity=wandb_config.entity,
-    #     prior_runs=run_ids
-    # )
 
 
 if __name__ == "__main__":

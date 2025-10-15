@@ -8,7 +8,9 @@ from networks.CNN import CNN
 
 
 def net_factory(
-    input_shape: Tuple[int, ...], output_shape: Tuple[int, ...], conf: MLPConfig | CNNConfig
+    input_shape: Tuple[int, ...],
+    output_shape: Tuple[int, ...],
+    conf: MLPConfig | CNNConfig,
 ):
     assert len(input_shape) >= 2, "Input shape must have at least 2 dimensions"
     assert len(output_shape) >= 2, "Output shape must have at least 2 dimensions"
@@ -22,7 +24,7 @@ def net_factory(
             conf,
             nchannels=input_shape[1],
             dummy_data=jnp.zeros(input_shape[1:]),
-            mlp=replace(conf.mlp, nclasses=output_shape[1])
+            mlp=replace(conf.mlp, nclasses=output_shape[1]),
         )
 
         return CNN.from_config(conf)

@@ -73,8 +73,7 @@ def actions_plotter(
     batches = [df["batch_idx"].min()]
     num_training_steps = df["step"].max()
     plotting_freq = (
-        num_training_steps
-        // SingletonConfig.get_experiment_config_instance().sweep.plotting_steps
+        num_training_steps // SingletonConfig.get_sweep_config_instance().plotting_steps
     )
     steps_to_log = [i for i in range(0, num_training_steps, plotting_freq)] + [
         num_training_steps

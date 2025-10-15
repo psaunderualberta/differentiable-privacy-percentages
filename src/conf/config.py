@@ -25,7 +25,7 @@ class DistributionConfig:
 
         return np.random.uniform(low=self.min, high=self.min)
 
-    def to_wandb(self):
+    def to_wandb_sweep(self):
         if self.distribution == "constant":
             return {"distribution": self.distribution, "value": self.value}
 
@@ -65,7 +65,7 @@ class MLPConfig:
     initialization: Literal["glorot", "zeros"] = "glorot"
     key: int = 0  # Overridden as derivative from experiment.env_prng_key
 
-    def to_wandb(self) -> dict[str, object]:
+    def to_wandb_sweep(self) -> dict[str, object]:
         attrs = [
             "din",
             "dhidden",
@@ -92,7 +92,7 @@ class CNNConfig:
     # dummy item, used to determine MLP input shape
     dummy_data: jnp.ndarray | None = None
 
-    def to_wandb(self) -> dict[str, object]:
+    def to_wandb_sweep(self) -> dict[str, object]:
         attrs = [
             "nchannels",
             "kernel_size",
@@ -103,7 +103,7 @@ class CNNConfig:
         ]
         return {
             "parameters": {attr: {"value": getattr(self, attr)} for attr in attrs}
-            | {"mlp": self.mlp.to_wandb()}
+            | {"mlp": self.mlp.to_wandb_sweep()}
         }
 
 
@@ -118,10 +118,10 @@ class PolicyConfig:
     mlp: MLPConfig  # Configuration for the MLP policy
     network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to use as policy
     batch_size: int = 1  # Batch size for policy training
-    lr: DistributionConfig = dist_config_helper(
+    lr: float | DistributionConfig = dist_config_helper(
         value=0.01,
         distribution="constant",
-    )  # Learning rate of policy network
+    )  # Learning rate configuration of policy network
     max_sigma: float = 10.0
 
     @property
@@ -129,12 +129,14 @@ class PolicyConfig:
         """Get the actual network configuration."""
         return getattr(self, self.network_type)
 
-    def to_wandb(self) -> dict[str, object]:
+    def to_wandb_sweep(self) -> dict[str, object]:
+        assert isinstance(self.lr, DistributionConfig)
         return {
             "parameters": {
                 "network_type": {"value": self.network_type},
-                "network": self.network.to_wandb(),
-                "lr": self.lr.to_wandb(),
+                "mlp": self.mlp.to_wandb_sweep(),
+                "cnn": self.cnn.to_wandb_sweep(),
+                "lr": self.lr.to_wandb_sweep(),
             }
         }
 
@@ -151,7 +153,7 @@ class EnvConfig:
     mlp: MLPConfig  # Configuration for the MLP to privatize. Ignored if 'network_type' = cnn
     cnn: CNNConfig  # Configuration for the CNN to privatize. Ignored if 'network_type' = mlp
 
-    lr: DistributionConfig = dist_config_helper(
+    lr: float | DistributionConfig = dist_config_helper(
         value=0.1,
         distribution="constant",
     )  # Learning rate of private network
@@ -170,17 +172,19 @@ class EnvConfig:
     def network(self) -> MLPConfig | CNNConfig:
         return getattr(self, self.network_type)
 
-    def to_wandb(self) -> dict[str, object]:
+    def to_wandb_sweep(self) -> dict[str, object]:
+        assert isinstance(self.lr, DistributionConfig)
         return {
             "parameters": {
-                "lr": self.lr.to_wandb(),
+                "lr": self.lr.to_wandb_sweep(),
                 "eps": {"value": self.eps},
                 "delta": {"value": self.delta},
                 "batch_size": {"value": self.batch_size},
                 "max_steps_in_episode": {"value": self.max_steps_in_episode},
                 "C": {"value": self.C},
                 "network_type": {"value": self.network_type},
-                "network": self.network.to_wandb(),
+                "mlp": self.mlp.to_wandb_sweep(),
+                "cnn": self.cnn.to_wandb_sweep(),
             }
         }
 
@@ -192,12 +196,19 @@ class SweepConfig:
     method: str = "random"  # The wandb search method
     metric_name: str = "Mean Accuracy"  # The metric for wandb to optimize
     metric_goal: str = "maximize"  # The wandb optimization goal
-    plotting_steps: int = 25
+    plotting_steps: int = 1
     name: str | None = None  # The (optional) name of the wandb sweep
     description: str | None = None  # The (optional) description of the wandb sweep
     with_baselines: bool = False  # Flag to compute plots comparing against baseline (Expensive, default is False)
+    num_configs: int = 1  # Number of random agent configurations to run
+    dataset: Literal["mnist", "california"] = "mnist"  # Dataset on which to privatise
+    dataset_poly_d: int | None = None  # Degree of polynomial features to be generated
+    total_timesteps: int = 100  # Training steps of RL algorithm
+    cfg_prng_seed: int = 42  # RL Agent configuration seed
+    env_prng_seed: int = 42  # Environment configuration seed
+    log_dir: str = "logs"  # Relative directory in which to log results
 
-    def to_wandb(self) -> dict[str, object]:
+    def to_wandb_sweep(self) -> dict[str, object]:
         config = {
             "method": self.method,
             "metric": {
@@ -205,8 +216,17 @@ class SweepConfig:
                 "goal": self.metric_goal,
             },
             "parameters": {
-                "env": self.env.to_wandb(),
-                "policy": self.policy.to_wandb(),
+                "env": self.env.to_wandb_sweep(),
+                "policy": self.policy.to_wandb_sweep(),
+                "plotting_steps": {"value": self.plotting_steps},
+                "with_baselines": {"value": self.with_baselines},
+                "num_configs": {"value": self.num_configs},
+                "dataset": {"value": self.dataset},
+                "dataset_poly_d": {"value": self.dataset_poly_d},
+                "total_timesteps": {"value": self.total_timesteps},
+                "cfg_prng_seed": {"value": self.cfg_prng_seed},
+                "env_prng_seed": {"value": self.env_prng_seed},
+                "log_dir": {"value": self.log_dir},
             },
         }
 
@@ -219,30 +239,21 @@ class SweepConfig:
 
 
 @dataclass
-class ExperimentConfig:
-    sweep: SweepConfig
-    num_configs: int = 1  # Number of random agent configurations to run
-    dataset: Literal["mnist", "california"] = "mnist"  # Dataset on which to privatise
-    dataset_poly_d: int | None = None  # Degree of polynomial features to be generated
-    total_timesteps: int = 100  # Training steps of RL algorithm
-    cfg_prng_seed: int = 42  # RL Agent configuration seed
-    env_prng_seed: int = 42  # Environment configuration seed
-    log_dir: str = "logs"  # Relative directory in which to log results
-
-
-@dataclass
 class WandbConfig:
     """Wandb Configuration"""
 
     project: str | None = None  # The wandb project
     entity: str | None = None  # The wandb entity
     mode: Literal["disabled", "online", "offline"] = "disabled"  # The wandb mode
+    restart_run_id: str | None = (
+        None  # Run ID from which to download config, populate for script
+    )
 
 
 @dataclass
 class Config:
     wandb_conf: WandbConfig
-    experiment: ExperimentConfig
+    sweep: SweepConfig
     data_dir: str | None = None  # Used in log_wandb.py, ignored otherwise
 
 

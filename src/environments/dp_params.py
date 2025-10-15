@@ -21,7 +21,7 @@ class DP_RL_Params(eqx.Module):
         return DP_RL_Params(
             X=X,
             y=y,
-            lr=conf.lr.sample(),
+            lr=conf.lr,
             network=network_arch,
             dummy_batch=jnp.arange(conf.batch_size),
             C=conf.C,
