@@ -11,8 +11,15 @@ if __name__ == "__main__":
         entity=wandb_config.entity,
     )
 
+    ids = []
+
+    def starter():
+        run = wandb.init()
+        ids.append(run.id)
+        run.finish()
+
     wandb.agent(
         sweep_id,
-        function=lambda: wandb.init(),
-        count=1,
+        function=starter,
+        count=50,
     )

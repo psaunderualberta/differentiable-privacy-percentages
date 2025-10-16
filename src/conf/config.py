@@ -29,13 +29,11 @@ class DistributionConfig:
         if self.distribution == "constant":
             return {"distribution": self.distribution, "value": self.value}
 
-        return (
-            {
-                "min": self.min,
-                "max": self.max,
-                "distribution": self.distribution,
-            },
-        )
+        return {
+            "min": self.min,
+            "max": self.max,
+            "distribution": self.distribution,
+        }
 
 
 # wandb cannot create sweeps if any distribution has min >= max
@@ -119,8 +117,7 @@ class PolicyConfig:
     network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to use as policy
     batch_size: int = 1  # Batch size for policy training
     lr: float | DistributionConfig = dist_config_helper(
-        value=0.01,
-        distribution="constant",
+        max=0.01, min=0.00001, distribution="log_uniform_values"
     )  # Learning rate configuration of policy network
     max_sigma: float = 10.0
 
@@ -194,9 +191,9 @@ class SweepConfig:
     env: EnvConfig
     policy: PolicyConfig
     method: str = "random"  # The wandb search method
-    metric_name: str = "Mean Accuracy"  # The metric for wandb to optimize
+    metric_name: str = "accuracy"  # The metric for wandb to optimize
     metric_goal: str = "maximize"  # The wandb optimization goal
-    plotting_steps: int = 1
+    plotting_steps: int = 50
     name: str | None = None  # The (optional) name of the wandb sweep
     description: str | None = None  # The (optional) description of the wandb sweep
     with_baselines: bool = False  # Flag to compute plots comparing against baseline (Expensive, default is False)
