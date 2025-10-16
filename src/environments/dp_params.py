@@ -6,11 +6,11 @@ import jax.numpy as jnp
 
 
 class DP_RL_Params(eqx.Module):
-    X: Array = jnp.zeros((1, 1), dtype=jnp.float32)  # Dataset features
-    y: Array = jnp.zeros((1, 1))  # Dataset labels
+    X: Array # Dataset features
+    y: Array # Dataset labels
+    dummy_batch: Array # Batch size for training
     lr: float = 0.01  # Learning rate for the optimizer
     network: Network = Network()  # Network architecture for the environment
-    dummy_batch: Array = jnp.asarray(1)  # Batch size for training
     C: float = 1.0
     max_steps_in_episode: int = 500  # Maximum number of steps in an episode
 
