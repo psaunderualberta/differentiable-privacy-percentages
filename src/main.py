@@ -6,7 +6,12 @@ import equinox as eqx
 import optax
 import tqdm
 from jax import devices
-from jax.experimental import shard_map
+
+try:
+    from jax import shard_map
+except ImportError:
+    from jax.experimental.shard_map import shard_map
+
 from jax import numpy as jnp
 from jax import random as jr
 from jax import lax as jlax
