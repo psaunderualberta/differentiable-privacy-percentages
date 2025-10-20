@@ -113,6 +113,7 @@ def main():
         mesh=mesh,
         in_specs=(P(), P(), P(), P("x")),
         out_specs=(P(), (P("x"), P("x"))),
+        check_rep=False,
     )
     def get_policy_loss(
         policy: Array,
