@@ -5,13 +5,11 @@ Source:
 github.com/openai/gym/blob/master/gym/envs/classic_control/continuous_mountain_car.py
 """
 
-from typing import Tuple
-
 import chex
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import PyTree
+from jaxtyping import PyTree, PRNGKeyArray, Array
 import jax.random as jr
 import optax
 from util.util import (
@@ -33,26 +31,23 @@ def train_with_noise(
     mb_key: chex.PRNGKey,
     init_key: chex.PRNGKey,
     noise_key: chex.PRNGKey,
-) -> Tuple[eqx.Module, chex.Array, chex.Array]:
-    # Vary network arrays across devices
-    net_params, net_static = eqx.partition(params.network, eqx.is_array)
-    net_params = eqx.filter_jit(jax.lax.pvary)(net_params, "x")
-    varied_network = eqx.combine(net_params, net_static)
-
+) -> tuple[eqx.Module, chex.Array, chex.Array]:
     # Create network
-    network = reinit_model(varied_network, init_key)
-    net_params, net_static = eqx.partition(params.network, eqx.is_array)
+    network = reinit_model(params.network, init_key)
+    net_params, net_static = eqx.partition(network, eqx.is_array)
+    net_params = eqx.filter_jit(jax.lax.pvary)(net_params, "x")
+
     optimizer = optax.sgd(params.lr)
     opt_state = optimizer.init(network)
-
     opt_state_params, opt_state_static = eqx.partition(opt_state, eqx.is_array)
+    opt_state_params = eqx.filter_jit(jax.lax.pvary)(opt_state_params, "x")
 
     @jax.checkpoint  # type:ignore
     def training_step(
-        carry, noise
-    ) -> Tuple[
-        Tuple[PyTree, optax.OptState, chex.PRNGKey, chex.PRNGKey],  # Carry values
-        Tuple[chex.Array, chex.Array],  # Scan outputs
+        carry: tuple[PyTree, PyTree, PRNGKeyArray, PRNGKeyArray], noise: Array
+    ) -> tuple[
+        tuple[PyTree, optax.OptState, chex.PRNGKey, chex.PRNGKey],  # Carry values
+        tuple[chex.Array, chex.Array],  # Scan outputs
     ]:
         net_params, opt_state_params, mb_key, noise_key = carry
         model = eqx.combine(net_params, net_static)
@@ -93,11 +88,11 @@ def train_with_noise(
     )
 
     mb_key, batch_key = jr.split(mb_key)
-    network = eqx.combine(net_params, net_static)
+    network_final = eqx.combine(net_params, net_static)
     batch_x, batch_y = sample_batch_uniform(
         params.X, params.y, params.dummy_batch, batch_key
     )
-    final_loss, _ = loss(network, batch_x, batch_y)
+    final_loss, _ = loss(network_final, batch_x, batch_y)
 
     losses = jnp.concat([losses, jnp.asarray([final_loss])])
 
@@ -137,4 +132,4 @@ def train_with_noise(
     #     (derivatives, prod)
     # )
 
-    return network, losses, accuracies
+    return network_final, losses, accuracies

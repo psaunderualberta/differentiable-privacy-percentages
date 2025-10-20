@@ -5,6 +5,8 @@ from conf.config import (
     SweepConfig,
     WandbConfig,
     PolicyConfig,
+    DistributionConfig,
+    dist_config_helper,
 )
 from pprint import pprint
 from dataclasses import asdict, Field, replace
@@ -21,7 +23,12 @@ def get_wandb_run_conf(wandb_conf: WandbConfig) -> dict:
 
 def _populate_conf_from_dict(conf: Config, dictionary: dict) -> Config:
     for key, item in dictionary.items():
-        if isinstance(item, dict):
+        conf_type = type(getattr(conf, key))
+        if isinstance(conf_type, key), DistributionConfig):
+            conf = replace(
+                conf, **{key: dist_config_helper(value=item, distribution="constant")}
+            )
+        elif isinstance(item, dict):
             # nested configuration class
             conf = replace(
                 conf, **{key: _populate_conf_from_dict(getattr(conf, key), item)}

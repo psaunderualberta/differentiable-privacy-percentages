@@ -42,7 +42,6 @@ def clip_grads_abadi(grads: eqx.Module, C: float) -> eqx.Module:
     # sum_clipped, _ = per_example_global_norm_clip(grads_flat, C)
 
     # DP optimization as described in https://proceedings.neurips.cc/paper_files/paper/2023/file/8249b30d877c91611fd8c7aa6ac2b5fe-Paper-Conference.pdf
-    grads = ensure_valid_pytree(grads, "grads in clip_grads")
     gamma = 0.01
 
     def get_multiplier(grad: eqx.Module):

@@ -6,11 +6,7 @@ import equinox as eqx
 import optax
 import tqdm
 from jax import devices
-
-try:
-    from jax import shard_map
-except ImportError:
-    from jax.experimental.shard_map import shard_map
+from jax.experimental.shard_map import shard_map
 
 from jax import numpy as jnp
 from jax import random as jr
@@ -117,7 +113,6 @@ def main():
         mesh=mesh,
         in_specs=(P(), P(), P(), P("x")),
         out_specs=(P(), (P("x"), P("x"))),
-        check_vma=False,
     )
     def get_policy_loss(
         policy: Array,
@@ -148,7 +143,7 @@ def main():
         # # derivatives = derivatives * dsigma_dweight(sigmas, mu, p, T)
         return final_loss, (losses, accuracies)
 
-    optimizer = optax.adamw(learning_rate=sweep_config.policy.lr)
+    optimizer = optax.adamw(learning_rate=sweep_config.policy.lr.sample())
     opt_state = optimizer.init(policy)  # type: ignore
 
     iterator = tqdm.tqdm(
@@ -156,6 +151,7 @@ def main():
     )
 
     key = jr.PRNGKey(env_prng_seed)
+    key, init_key, mb_key = jr.split(key, 3)
     try:
         for timestep in iterator:
             timestep_dict = {"step": timestep}
@@ -170,7 +166,9 @@ def main():
             _ = logger.log_array("actions", new_sigmas, timestep_dict, plot=True)
 
             # Get policy loss
-            key, init_key, mb_key, noise_key = jr.split(key, 4)
+            key, mb_key, noise_key = jr.split(key, 3)
+            if not sweep_config.train_on_single_network:
+                key, init_key = jr.split(key)
             (loss, (losses, accuracies)), grads = get_policy_loss(
                 policy, mb_key, init_key, jr.split(noise_key, policy_batch_size)
             )

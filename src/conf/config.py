@@ -67,6 +67,8 @@ class MLPConfig:
         attrs = [
             "din",
             "dhidden",
+            "nhidden",
+            "initialization",
             "nclasses",
         ]
         return {"parameters": {attr: {"value": getattr(self, attr)} for attr in attrs}}
@@ -97,7 +99,6 @@ class CNNConfig:
             "pool_kernel_size",
             "hidden_channels",
             "nhidden_conv",
-            "key",
         ]
         return {
             "parameters": {attr: {"value": getattr(self, attr)} for attr in attrs}
@@ -116,8 +117,10 @@ class PolicyConfig:
     mlp: MLPConfig  # Configuration for the MLP policy
     network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to use as policy
     batch_size: int = 1  # Batch size for policy training
-    lr: float | DistributionConfig = dist_config_helper(
-        max=0.01, min=0.00001, distribution="log_uniform_values"
+    lr: DistributionConfig = dist_config_helper(
+        value=0.1,
+        distribution="constant",
+        # max=0.01, min=0.00001, distribution="log_uniform_values"
     )  # Learning rate configuration of policy network
     max_sigma: float = 10.0
 
@@ -134,6 +137,8 @@ class PolicyConfig:
                 "mlp": self.mlp.to_wandb_sweep(),
                 "cnn": self.cnn.to_wandb_sweep(),
                 "lr": self.lr.to_wandb_sweep(),
+                "batch_size": self.batch_size,
+                "max_sigma": self.max_sigma,
             }
         }
 
@@ -150,7 +155,7 @@ class EnvConfig:
     mlp: MLPConfig  # Configuration for the MLP to privatize. Ignored if 'network_type' = cnn
     cnn: CNNConfig  # Configuration for the CNN to privatize. Ignored if 'network_type' = mlp
 
-    lr: float | DistributionConfig = dist_config_helper(
+    lr: DistributionConfig = dist_config_helper(
         value=0.1,
         distribution="constant",
     )  # Learning rate of private network
@@ -173,15 +178,16 @@ class EnvConfig:
         assert isinstance(self.lr, DistributionConfig)
         return {
             "parameters": {
+                "mlp": self.mlp.to_wandb_sweep(),
+                "cnn": self.cnn.to_wandb_sweep(),
                 "lr": self.lr.to_wandb_sweep(),
+                "loss_type": {"value": self.loss_type},
                 "eps": {"value": self.eps},
                 "delta": {"value": self.delta},
                 "batch_size": {"value": self.batch_size},
                 "max_steps_in_episode": {"value": self.max_steps_in_episode},
                 "C": {"value": self.C},
                 "network_type": {"value": self.network_type},
-                "mlp": self.mlp.to_wandb_sweep(),
-                "cnn": self.cnn.to_wandb_sweep(),
             }
         }
 
@@ -197,13 +203,12 @@ class SweepConfig:
     name: str | None = None  # The (optional) name of the wandb sweep
     description: str | None = None  # The (optional) description of the wandb sweep
     with_baselines: bool = False  # Flag to compute plots comparing against baseline (Expensive, default is False)
-    num_configs: int = 1  # Number of random agent configurations to run
     dataset: Literal["mnist", "california"] = "mnist"  # Dataset on which to privatise
     dataset_poly_d: int | None = None  # Degree of polynomial features to be generated
     total_timesteps: int = 100  # Training steps of RL algorithm
     cfg_prng_seed: int = 42  # RL Agent configuration seed
     env_prng_seed: int = 42  # Environment configuration seed
-    log_dir: str = "logs"  # Relative directory in which to log results
+    train_on_single_network: bool = False  # Train the policy on only a single network (same initialization & minibatches)
 
     def to_wandb_sweep(self) -> dict[str, object]:
         config = {
@@ -217,13 +222,12 @@ class SweepConfig:
                 "policy": self.policy.to_wandb_sweep(),
                 "plotting_steps": {"value": self.plotting_steps},
                 "with_baselines": {"value": self.with_baselines},
-                "num_configs": {"value": self.num_configs},
                 "dataset": {"value": self.dataset},
                 "dataset_poly_d": {"value": self.dataset_poly_d},
                 "total_timesteps": {"value": self.total_timesteps},
                 "cfg_prng_seed": {"value": self.cfg_prng_seed},
                 "env_prng_seed": {"value": self.env_prng_seed},
-                "log_dir": {"value": self.log_dir},
+                "train_on_single_network": {"value": self.train_on_single_network},
             },
         }
 
@@ -243,7 +247,7 @@ class WandbConfig:
     entity: str | None = None  # The wandb entity
     mode: Literal["disabled", "online", "offline"] = "disabled"  # The wandb mode
     restart_run_id: str | None = (
-        None  # Run ID from which to download config, populate for script
+        None  # Wandb Run ID from which to download config, populate for script
     )
 
 
