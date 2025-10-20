@@ -105,12 +105,13 @@ if __name__ == "__main__":
 
         print(f"sbatch {f.name}")
         l = subprocess.run(f"sbatch {f.name}", shell=True, capture_output=True)
+        print(l)
+        exit()
         output = l.stdout.decode("utf-8").strip()
         print(output)
         slurm_job_id = output[-8:].strip()
-        os.makedirs(
-            f"{os.environ['PROJECT_ROOT']}/cc/logs/{slurm_job_id}", exist_ok=True
-        )
+        out_dir = os.path.abspath(os.path.dirname(conf.logfile.replace("%j", slurm_job_id)))
+        os.makedirs(out_dir, exist_ok=True)
 
 
 # python -c "import wandb; print('\n'.join(run.id for run in wandb.Api().sweep('<entity>/<project>/<sweep-name>').runs))" | while read -r id; do python <this-file> --run_id=$id; done
