@@ -118,8 +118,9 @@ class PolicyConfig:
     network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to use as policy
     batch_size: int = 1  # Batch size for policy training
     lr: DistributionConfig = dist_config_helper(
-        value=0.1,
-        distribution="constant",
+        max=1e-1,
+        min=1e-5,
+        distribution="log_uniform_values",
         # max=0.01, min=0.00001, distribution="log_uniform_values"
     )  # Learning rate configuration of policy network
     max_sigma: float = 10.0
@@ -137,8 +138,8 @@ class PolicyConfig:
                 "mlp": self.mlp.to_wandb_sweep(),
                 "cnn": self.cnn.to_wandb_sweep(),
                 "lr": self.lr.to_wandb_sweep(),
-                "batch_size": self.batch_size,
-                "max_sigma": self.max_sigma,
+                "batch_size": {"value": self.batch_size},
+                "max_sigma": {"value": self.max_sigma},
             }
         }
 

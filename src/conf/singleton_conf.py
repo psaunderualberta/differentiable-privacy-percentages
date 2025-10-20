@@ -23,8 +23,7 @@ def get_wandb_run_conf(wandb_conf: WandbConfig) -> dict:
 
 def _populate_conf_from_dict(conf: Config, dictionary: dict) -> Config:
     for key, item in dictionary.items():
-        conf_type = type(getattr(conf, key))
-        if isinstance(conf_type, key), DistributionConfig):
+        if isinstance(getattr(conf, key), DistributionConfig):
             conf = replace(
                 conf, **{key: dist_config_helper(value=item, distribution="constant")}
             )
