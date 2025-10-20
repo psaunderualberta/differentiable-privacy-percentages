@@ -40,12 +40,14 @@ class SlurmConfig:
     runtime: Runtime
     run_id: str
     jobname: str = "test"
-    logfile: str = "%x.%j.out"
-    account: str = "rrg-lelis"
+    logfile: str = os.path.join(
+        os.environ["PROJECT_ROOT"], "cc", "logs", "%j", "%x.log"
+    )
+    account: str = "def-nidhih"
     project_dir: str = os.environ["PROJECT_SOURCE_ROOT"]
     cpus_per_gpu: int = 1
-    gpus: int = 1
-    mem_per_gpu: str = "12G"
+    gpus: int = 3
+    mem_per_gpu: str = "6G"
 
     @property
     def main_args(self) -> str:
@@ -56,7 +58,7 @@ class SlurmConfig:
         return f"""
 #!/bin/bash
 #SBATCH --cpus-per-gpu={self.cpus_per_gpu}
-#SBATCH --gpus={self.gpus} # Remove this line to run using CPU only
+#SBATCH --gpus=h100:{self.gpus} # Remove this line to run using CPU only
 #SBATCH --mem-per-gpu={self.mem_per_gpu}
 #SBATCH --time={self.runtime.days}-{self.runtime.hours}:{self.runtime.minutes}:{self.runtime.seconds}
 #SBATCH --output={self.logfile}
@@ -69,7 +71,7 @@ echo "Current working directory: `pwd`"
 echo "Starting run at: `date`"
 echo
 
-module load python/3.11.5 cuda gcc mujoco arrow # Using Default Python version - Make sure to choose a version that suits your application
+module load python/3.10.12 cuda gcc arrow # Using Default Python version - Make sure to choose a version that suits your application
 
 virtualenv --no-download $SLURM_TMPDIR/env
 source $SLURM_TMPDIR/env/bin/activate
@@ -101,9 +103,11 @@ if __name__ == "__main__":
         f.write(conf.sbatch_file)
         f.flush()
 
+        print(f"sbatch {f.name}")
         l = subprocess.run(f"sbatch {f.name}", shell=True, capture_output=True)
         output = l.stdout.decode("utf-8").strip()
-        slurm_job_id = output[-8:]
+        print(output)
+        slurm_job_id = output[-8:].strip()
         os.makedirs(
             f"{os.environ['PROJECT_ROOT']}/cc/logs/{slurm_job_id}", exist_ok=True
         )
