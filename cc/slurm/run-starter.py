@@ -47,7 +47,7 @@ class SlurmConfig:
     project_dir: str = os.environ["PROJECT_SOURCE_ROOT"]
     cpus_per_gpu: int = 1
     gpus: int = 3
-    mem_per_gpu: str = "6G"
+    mem_per_gpu: str = "4G"
 
     @property
     def main_args(self) -> str:
