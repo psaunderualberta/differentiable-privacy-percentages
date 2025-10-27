@@ -43,11 +43,10 @@ class SlurmConfig:
     logfile: str = os.path.join(
         os.environ["PROJECT_ROOT"], "cc", "logs", "%j", "%x.log"
     )
-    account: str = "def-nidhih"
     project_dir: str = os.environ["PROJECT_SOURCE_ROOT"]
     cpus_per_gpu: int = 1
     gpus: int = 3
-    mem_per_gpu: str = "4G"
+    mem_per_gpu: str = "12G"
 
     @property
     def main_args(self) -> str:
@@ -55,15 +54,14 @@ class SlurmConfig:
 
     @property
     def sbatch_file(self) -> str:
-        return f"""
-#!/bin/bash
+        return f"""#!/bin/bash
 #SBATCH --cpus-per-gpu={self.cpus_per_gpu}
-#SBATCH --gpus=h100:{self.gpus} # Remove this line to run using CPU only
+#SBATCH --gpus={self.gpus} # Remove this line to run using CPU only
 #SBATCH --mem-per-gpu={self.mem_per_gpu}
 #SBATCH --time={self.runtime.days}-{self.runtime.hours}:{self.runtime.minutes}:{self.runtime.seconds}
 #SBATCH --output={self.logfile}
 #SBATCH --job-name={self.jobname}
-#SBATCH --account={self.account}
+#SBATCH --account=aip-lelis
 #SBATCH --chdir={self.project_dir}
 
 # Startup printing
@@ -71,28 +69,21 @@ echo "Current working directory: `pwd`"
 echo "Starting run at: `date`"
 echo
 
-module load python/3.10.12 cuda gcc arrow # Using Default Python version - Make sure to choose a version that suits your application
+module load python/3.10 cuda gcc arrow # Using Default Python version - Make sure to choose a version that suits your application
 
-virtualenv --no-download $SLURM_TMPDIR/env
-source $SLURM_TMPDIR/env/bin/activate
-pip install --upgrade --no-index pip
-pip install -r ../requirements-cc.txt
-pip install --no-index wandb
-echo "$CUDA_VISIBLE_DEVICES"
-
-
+source ../env/bin/activate
 which python
-echo "$CUDA_VISIBLE_DEVICES"
 
-cd ../src
+echo "$CUDA_VISIBLE_DEVICES"
 
 echo "starting training..."
-source $SLURM_TMPDIR/env/bin/activate;
+echo $SLURM_TMPDIR
+source ../env/bin/activate;
 python main.py {self.main_args}
 
 # End printing
 echo "Job finished with exit code $? at: `date`"
-        """.strip()
+""".strip()
 
 
 if __name__ == "__main__":
@@ -104,14 +95,18 @@ if __name__ == "__main__":
         f.flush()
 
         print(f"sbatch {f.name}")
-        l = subprocess.run(f"sbatch {f.name}", shell=True, capture_output=True)
-        print(l)
-        exit()
-        output = l.stdout.decode("utf-8").strip()
-        print(output)
+        process_out = subprocess.run(
+            f"sbatch {f.name}", shell=True, capture_output=True
+        )
+        process_stderr = process_out.stderr.decode("utf-8").strip()
+        if len(process_stderr) != 0:
+            raise Exception("Could not start job: " + process_stderr)
+        output = process_out.stdout.decode("utf-8").strip()
         slurm_job_id = output[-8:].strip()
-        out_dir = os.path.abspath(os.path.dirname(conf.logfile.replace("%j", slurm_job_id)))
+        out_dir = os.path.abspath(
+            os.path.dirname(conf.logfile.replace("%j", slurm_job_id))
+        )
         os.makedirs(out_dir, exist_ok=True)
 
 
-# python -c "import wandb; print('\n'.join(run.id for run in wandb.Api().sweep('<entity>/<project>/<sweep-name>').runs))" | while read -r id; do python <this-file> --run_id=$id; done
+# cat <sweep-file> | while read -r id; do python <this-file> --run_id=$id; done

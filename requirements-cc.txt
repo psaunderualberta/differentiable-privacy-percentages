@@ -19,7 +19,7 @@ debugpy==1.8.12+computecanada
 decorator==5.1.1+computecanada
 dill==0.4.0+computecanada
 docstring_parser==0.17.0+computecanada
-equinox==0.13.2
+equinox==0.13.0+computecanada
 executing==2.2.0+computecanada
 filelock==3.20.0+computecanada
 fonttools==4.55.8+computecanada
