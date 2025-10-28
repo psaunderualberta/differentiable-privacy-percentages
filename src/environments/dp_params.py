@@ -9,6 +9,7 @@ class DP_RL_Params(eqx.Module):
     X: Array  # Dataset features
     y: Array  # Dataset labels
     dummy_batch: Array  # Batch size for training
+    optimizer: str = "sgd"
     lr: float = 0.01  # Learning rate for the optimizer
     network: Network = Network()  # Network architecture for the environment
     C: float = 1.0
@@ -22,6 +23,7 @@ class DP_RL_Params(eqx.Module):
             X=X,
             y=y,
             lr=conf.lr.sample(),
+            optimizer=conf.optimizer,
             network=network_arch,
             dummy_batch=jnp.arange(conf.batch_size),
             C=conf.C,

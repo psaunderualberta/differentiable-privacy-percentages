@@ -160,6 +160,7 @@ class EnvConfig:
         value=0.1,
         distribution="constant",
     )  # Learning rate of private network
+    optimizer: Literal["sgd", "adam", "adamw"] = "sgd"
     loss_type: Literal["mse", "cce"] = "cce"  # The type of loss function to use
 
     # Privacy Parameters
@@ -182,6 +183,7 @@ class EnvConfig:
                 "mlp": self.mlp.to_wandb_sweep(),
                 "cnn": self.cnn.to_wandb_sweep(),
                 "lr": self.lr.to_wandb_sweep(),
+                "optimizer": {"value": self.optimizer},
                 "loss_type": {"value": self.loss_type},
                 "eps": {"value": self.eps},
                 "delta": {"value": self.delta},
