@@ -61,7 +61,6 @@ class SlurmConfig:
 #SBATCH --time={self.runtime.days}-{self.runtime.hours}:{self.runtime.minutes}:{self.runtime.seconds}
 #SBATCH --output={self.logfile}
 #SBATCH --job-name={self.jobname}
-#SBATCH --account=aip-lelis
 #SBATCH --chdir={self.project_dir}
 
 # Startup printing
@@ -69,17 +68,11 @@ echo "Current working directory: `pwd`"
 echo "Starting run at: `date`"
 echo
 
-module load python/3.10 cuda gcc arrow # Using Default Python version - Make sure to choose a version that suits your application
-
-source ../env/bin/activate
-which python
-
 echo "$CUDA_VISIBLE_DEVICES"
 
 echo "starting training..."
 echo $SLURM_TMPDIR
-source ../env/bin/activate;
-python main.py {self.main_args}
+uv run main.py {self.main_args}
 
 # End printing
 echo "Job finished with exit code $? at: `date`"
