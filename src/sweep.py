@@ -17,13 +17,9 @@ if __name__ == "__main__":
         entity=wandb_config.entity,
     )
 
-    # Clear file
-    with open(os.path.join(__CC_ROOT, "sweeps", f"{sweep_id}.txt", "w")) as f:
-        pass
-
     def starter():
         run = wandb.init()
-        with open(os.path.join(__CC_ROOT, "sweeps", f"{sweep_id}.txt", "a")) as f:
+        with open(os.path.join(__CC_ROOT, "sweeps", f"{sweep_id}.txt"), "a") as f:
             f.write(run.id + "\n")
         run.finish()
 
