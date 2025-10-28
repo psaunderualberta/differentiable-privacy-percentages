@@ -32,10 +32,12 @@ def train_with_noise(
     init_key: chex.PRNGKey,
     noise_key: chex.PRNGKey,
 ) -> tuple[eqx.Module, chex.Array, chex.Array]:
+    filtered_pvary = eqx.filter_jit(jax.lax.pvary)
+
     # Create network
     network = reinit_model(params.network, init_key)
     net_params, net_static = eqx.partition(network, eqx.is_array)
-    net_params = eqx.filter_jit(jax.lax.pvary)(net_params, "x")
+    net_params = filtered_pvary(net_params, "x")
 
     optimizer = getattr(optax, params.optimizer)(params.lr)
     opt_state = optimizer.init(network)

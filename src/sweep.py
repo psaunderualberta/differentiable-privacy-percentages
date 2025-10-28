@@ -1,5 +1,11 @@
 from conf.singleton_conf import SingletonConfig
 import wandb
+import os
+
+
+__CC_ROOT = os.environ["PROJECT_ROOT"] = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "cc")
+)
 
 
 if __name__ == "__main__":
@@ -11,11 +17,14 @@ if __name__ == "__main__":
         entity=wandb_config.entity,
     )
 
-    ids = []
+    # Clear file
+    with open(os.path.join(__CC_ROOT, "sweeps", f"{sweep_id}.txt", "w")) as f:
+        pass
 
     def starter():
         run = wandb.init()
-        ids.append(run.id)
+        with open(os.path.join(__CC_ROOT, "sweeps", f"{sweep_id}.txt", "a")) as f:
+            f.write(run.id + "\n")
         run.finish()
 
     wandb.agent(
