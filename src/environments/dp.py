@@ -40,7 +40,7 @@ def train_with_noise(
     net_params = filtered_pvary(net_params, "x")
 
     optimizer = getattr(optax, params.optimizer)(params.lr)
-    opt_state = optimizer.init(network)
+    opt_state = optimizer.init(net_params)
     opt_state_params, opt_state_static = eqx.partition(opt_state, eqx.is_array)
     opt_state_params = eqx.filter_jit(jax.lax.pvary)(opt_state_params, "x")
 
