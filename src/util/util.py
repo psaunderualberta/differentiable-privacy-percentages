@@ -123,7 +123,7 @@ def reinit_model(model: eqx.Module, key: PRNGKeyArray) -> eqx.Module:
 
 @eqx.filter_jit
 def get_spherical_noise(
-    grads: eqx.Module, action: float, key: PRNGKeyArray
+    grads: eqx.Module, action: float | Array, key: PRNGKeyArray
 ) -> eqx.Module:
     batch_size = SingletonConfig.get_environment_config_instance().batch_size
 
