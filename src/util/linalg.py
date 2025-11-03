@@ -56,7 +56,9 @@ def gnhvp(
 ) -> Callable[[chex.Array], chex.Array]:
     """
     Approximation of the Vector-Hessian product of f at x in the direction of v,
-    using the generalized Gauss-Newton approximation with loss function L.
+    using the generalized Gauss-Newton approximation with loss function L,
+    with the added benefit of positive semidefinite-ness and applicability to
+    non-twice-differentiable NNs (such as those with ReLUs)
      The generalized Gauss-Newton matrix is defined as J^T H J, where J is the Jacobian of f
      and H is the Hessian of L with respect to f.
     Args:

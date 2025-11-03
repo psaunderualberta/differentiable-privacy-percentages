@@ -45,7 +45,6 @@ class Linear(eqx.Module):
         return weight + self.bias
 
 
-
 def augment_image(
     image: chex.Array, key: chex.PRNGKey, patch_size: int = 24
 ) -> chex.Array:
@@ -82,4 +81,3 @@ def augment_image(
     image = jnp.clip(image, 0, 1)
 
     return image
-

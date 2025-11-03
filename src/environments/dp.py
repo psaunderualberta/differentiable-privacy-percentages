@@ -60,7 +60,7 @@ def training_step(
     mb_key, _key = jr.split(mb_key)
     accuracy = subset_classification_accuracy(new_model, params.X, params.y, 0.01, _key)
 
-    return (new_model, new_opt_state, mb_key, noise_key, new_loss, accuracy)
+    return new_model, new_opt_state, mb_key, noise_key, new_loss, accuracy
 
 
 @eqx.filter_jit
@@ -125,7 +125,7 @@ def get_noise_lookahead_grads(
     mb_key: PRNGKeyArray,
     init_key: PRNGKeyArray,
     noise_key: PRNGKeyArray,
-) -> tuple[eqx.Module, Array, Array]:
+) -> tuple[eqx.Module, Array, Array, Array]:
     filtered_pvary = eqx.filter_jit(jax.lax.pvary)
 
     # Create network
@@ -138,10 +138,100 @@ def get_noise_lookahead_grads(
     opt_state_params, opt_state_static = eqx.partition(opt_state, eqx.is_array)
     opt_state_params = eqx.filter_jit(jax.lax.pvary)(opt_state_params, "x")
 
-    def scanned_lookahead(
-        carry: tuple[PyTree, PyTree, PRNGKeyArray, PRNGKeyArray], noise: Array
+    def lookahead_step(model, opt_state, noise, subs_noises, mb_key, noise_key):
+        new_model, new_opt_state, mb_key, noise_key, onestep_loss, onestep_accuracy = (
+            training_step(model, optimizer, opt_state, mb_key, noise_key, noise, params)
+        )
+
+        def scan(
+            carry: tuple[PyTree, PyTree, PRNGKeyArray, PRNGKeyArray, Array],
+            noise: Array,
+        ) -> tuple[tuple[PyTree, PyTree, PRNGKeyArray, PRNGKeyArray, Array], None]:
+            sub_model, sub_opt_state, mb_key, noise_key, _ = carry
+            new_sub_model, new_sub_opt_state, mb_key, noise_key, sub_loss, _ = (
+                training_step(
+                    sub_model,
+                    optimizer,
+                    sub_opt_state,
+                    mb_key,
+                    noise_key,
+                    noise,
+                    params,
+                )
+            )
+
+            return (new_sub_model, new_sub_opt_state, mb_key, noise_key, sub_loss), None
+
+        initial_carry = (
+            new_model,
+            new_opt_state,
+            mb_key,
+            noise_key,
+            jnp.zeros_like(onestep_loss),
+        )
+        (_, _, _, _, lookahead_loss), _ = jax.lax.scan(
+            scan,
+            initial_carry,
+            xs=subs_noises,
+        )
+
+        return lookahead_loss, (
+            new_model,
+            new_opt_state,
+            mb_key,
+            noise_key,
+            onestep_loss,
+            onestep_accuracy,
+        )
+
+    def fori_lookahead(
+        carry: tuple[PyTree, PyTree, PRNGKeyArray, PRNGKeyArray], i: Array
     ) -> tuple[
         tuple[PyTree, optax.OptState, PRNGKeyArray, PRNGKeyArray],  # Carry values
-        tuple[Array, Array],  # Scan outputs
+        tuple[Array, Array, Array],  # Scan outputs
+    ]:
+        net_params, opt_state_params, mb_key, noise_key = carry
+        noise = noise_schedule[i]
+        subs_noises = noise_schedule[i + 1 : i + 2]
 
-    return network, jnp.zeros(1), jnp.zeros(1)
+        model = eqx.combine(net_params, net_static)
+        opt_state = eqx.combine(opt_state_params, opt_state_static)
+
+        (
+            lookahead_grad,
+            (
+                new_model,
+                new_opt_state,
+                mb_key,
+                noise_key,
+                onestep_loss,
+                onestep_accuracy,
+            ),
+        ) = lookahead_step(model, opt_state, noise, subs_noises, mb_key, noise_key)
+
+        new_net_params, _ = eqx.partition(new_model, eqx.is_array)
+        opt_state_params, _ = eqx.partition(new_opt_state, eqx.is_array)
+        return (new_net_params, new_opt_state, mb_key, noise_key), (
+            lookahead_grad,
+            onestep_loss,
+            onestep_accuracy,
+        )
+
+    (net_params, _, mb_key, noise_key), (lookahead_grads, losses, accuracies) = (
+        jax.lax.scan(
+            fori_lookahead,
+            (net_params, opt_state, mb_key, noise_key),
+            xs=jnp.arange(noise_schedule.size),
+        )
+    )
+
+    mb_key, batch_key = jr.split(mb_key)
+    network_final = eqx.combine(net_params, net_static)
+    batch_x, batch_y = sample_batch_uniform(
+        params.X, params.y, params.dummy_batch, batch_key
+    )
+    final_loss, _ = loss(network_final, batch_x, batch_y)
+
+    losses = jnp.concat([losses, jnp.asarray([final_loss])])
+
+    return network_final, lookahead_grads, losses, accuracies
