@@ -105,7 +105,7 @@ class Baseline:
         for _ in iterator:
             key, _key = jr.split(key)
             k1, k2, k3 = jr.split(_key, 3)
-            _, losses, accuracies = train_with_noise(
+            _, _, losses, accuracies = train_with_noise(
                 sigmas, self.env_params, k1, k2, k3
             )
             df.loc[len(df)] = {  # type: ignore

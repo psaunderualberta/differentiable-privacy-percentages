@@ -23,6 +23,7 @@ from environments.losses import vmapped_loss, loss
 from environments.dp_params import DP_RL_Params
 
 
+@eqx.filter_checkpoint
 def training_step(
     model: PyTree,
     optimizer: optax.GradientTransformation,
@@ -31,6 +32,7 @@ def training_step(
     noise_key: PRNGKeyArray,
     noise: Array,
     params: DP_RL_Params,
+    private: bool = True,
 ) -> tuple[
     PyTree,
     optax.OptState,
@@ -44,13 +46,18 @@ def training_step(
         params.X, params.y, params.dummy_batch, _key
     )
 
-    new_loss, grads = vmapped_loss(model, batch_x, batch_y)
-    clipped_grads = clip_grads_abadi(grads, params.C)
+ 
+    if private:
+        new_loss, grads = vmapped_loss(model, batch_x, batch_y)
+        clipped_grads = clip_grads_abadi(grads, params.C)
 
-    # # Add spherical noise to gradients
-    noise_key, _key = jr.split(noise_key)
-    noises = get_spherical_noise(clipped_grads, noise, _key)
-    noised_grads = eqx.apply_updates(clipped_grads, noises)
+        # # Add spherical noise to gradients
+        noise_key, _key = jr.split(noise_key)
+        noises = get_spherical_noise(clipped_grads, noise, _key)
+        noised_grads = eqx.apply_updates(clipped_grads, noises)
+    else:
+        new_loss, grads = loss(model, batch_x, batch_y)
+        noised_grads = grads
 
     # Add noisy gradients, update model and optimizer
     updates, new_opt_state = optimizer.update(noised_grads, opt_state, model)
@@ -70,7 +77,7 @@ def train_with_noise(
     mb_key: PRNGKeyArray,
     init_key: PRNGKeyArray,
     noise_key: PRNGKeyArray,
-) -> tuple[eqx.Module, Array, Array]:
+) -> tuple[eqx.Module, Array, Array, Array]:
     # Create network
     network = reinit_model(params.network, init_key)
     net_params, net_static = eqx.partition(network, eqx.is_array)
@@ -116,10 +123,10 @@ def train_with_noise(
 
     losses = jnp.concat([losses, jnp.asarray([final_loss])])
 
-    return network_final, losses, accuracies
+    return network_final, losses[-1], losses, accuracies
 
 
-def get_noise_lookahead_grads(
+def lookahead_train_with_noise(
     noise_schedule: jnp.ndarray,
     params: DP_RL_Params,
     mb_key: PRNGKeyArray,
@@ -138,41 +145,21 @@ def get_noise_lookahead_grads(
     opt_state_params, opt_state_static = eqx.partition(opt_state, eqx.is_array)
     opt_state_params = eqx.filter_jit(jax.lax.pvary)(opt_state_params, "x")
 
-    def lookahead_step(model, opt_state, noise, subs_noises, mb_key, noise_key):
+    def lookahead_step(noise, model, opt_state, mb_key, noise_key):
         new_model, new_opt_state, mb_key, noise_key, onestep_loss, onestep_accuracy = (
             training_step(model, optimizer, opt_state, mb_key, noise_key, noise, params)
         )
 
-        def scan(
-            carry: tuple[PyTree, PyTree, PRNGKeyArray, PRNGKeyArray, Array],
-            noise: Array,
-        ) -> tuple[tuple[PyTree, PyTree, PRNGKeyArray, PRNGKeyArray, Array], None]:
-            sub_model, sub_opt_state, mb_key, noise_key, _ = carry
-            new_sub_model, new_sub_opt_state, mb_key, noise_key, sub_loss, _ = (
-                training_step(
-                    sub_model,
-                    optimizer,
-                    sub_opt_state,
-                    mb_key,
-                    noise_key,
-                    noise,
-                    params,
-                )
-            )
-
-            return (new_sub_model, new_sub_opt_state, mb_key, noise_key, sub_loss), None
-
-        initial_carry = (
+        # Compute lookahead loss
+        _, _, _, _, lookahead_loss, _ = training_step(
             new_model,
+            optimizer,
             new_opt_state,
             mb_key,
             noise_key,
-            jnp.zeros_like(onestep_loss),
-        )
-        (_, _, _, _, lookahead_loss), _ = jax.lax.scan(
-            scan,
-            initial_carry,
-            xs=subs_noises,
+            jnp.zeros_like(noise),
+            params,
+            private=False,
         )
 
         return lookahead_loss, (
@@ -184,44 +171,44 @@ def get_noise_lookahead_grads(
             onestep_accuracy,
         )
 
-    def fori_lookahead(
-        carry: tuple[PyTree, PyTree, PRNGKeyArray, PRNGKeyArray], i: Array
+    def scan_fun(
+        carry: tuple[PyTree, PyTree, PRNGKeyArray, PRNGKeyArray], noise: Array
     ) -> tuple[
         tuple[PyTree, optax.OptState, PRNGKeyArray, PRNGKeyArray],  # Carry values
         tuple[Array, Array, Array],  # Scan outputs
     ]:
         net_params, opt_state_params, mb_key, noise_key = carry
-        noise = noise_schedule[i]
-        subs_noises = noise_schedule[i + 1 : i + 2]
 
         model = eqx.combine(net_params, net_static)
         opt_state = eqx.combine(opt_state_params, opt_state_static)
 
-        (
-            lookahead_grad,
-            (
-                new_model,
-                new_opt_state,
-                mb_key,
-                noise_key,
-                onestep_loss,
-                onestep_accuracy,
-            ),
-        ) = lookahead_step(model, opt_state, noise, subs_noises, mb_key, noise_key)
+        lookahead_loss, (
+            new_model,
+            new_opt_state,
+            mb_key,
+            noise_key,
+            onestep_loss,
+            onestep_accuracy,
+        ) = lookahead_step(noise, model, opt_state, mb_key, noise_key)
 
         new_net_params, _ = eqx.partition(new_model, eqx.is_array)
         opt_state_params, _ = eqx.partition(new_opt_state, eqx.is_array)
-        return (new_net_params, new_opt_state, mb_key, noise_key), (
-            lookahead_grad,
+        return jax.lax.stop_gradient((
+            new_net_params,
+            new_opt_state,
+            mb_key,
+            noise_key
+        )), (
+            lookahead_loss,
             onestep_loss,
             onestep_accuracy,
         )
 
-    (net_params, _, mb_key, noise_key), (lookahead_grads, losses, accuracies) = (
+    (net_params, _, mb_key, noise_key), (lookahead_losses, losses, accuracies) = (
         jax.lax.scan(
-            fori_lookahead,
+            scan_fun,
             (net_params, opt_state, mb_key, noise_key),
-            xs=jnp.arange(noise_schedule.size),
+            xs=noise_schedule,
         )
     )
 
@@ -234,4 +221,4 @@ def get_noise_lookahead_grads(
 
     losses = jnp.concat([losses, jnp.asarray([final_loss])])
 
-    return network_final, lookahead_grads, losses, accuracies
+    return network_final, lookahead_losses.mean(), losses, accuracies

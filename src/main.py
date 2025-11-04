@@ -17,7 +17,7 @@ from jaxtyping import Array, PRNGKeyArray
 
 import wandb
 from conf.singleton_conf import SingletonConfig
-from environments.dp import train_with_noise
+from environments.dp import train_with_noise, lookahead_train_with_noise
 from environments.dp_params import DP_RL_Params
 from networks.net_factory import net_factory
 from privacy.gdp_privacy import (
@@ -102,7 +102,7 @@ def main():
     _, num_gpus = determine_optimal_num_devices(devices("gpu"), policy_batch_size)
     mesh = Mesh(devices("gpu")[:num_gpus], "x")
     vmapped_train_with_noise = eqx.filter_vmap(
-        train_with_noise, in_axes=(None, None, None, None, 0)
+        lookahead_train_with_noise, in_axes=(None, None, None, None, 0)
     )
 
     # @partial(checkify.checkify, errors=checkify.nan_checks)
@@ -129,22 +129,22 @@ def main():
         sigmas = eqx.error_if(sigmas, jnp.any(sigmas <= 0), "Some sigmas are <= zero!")
 
         # Train all networks
-        _, losses, accuracies = vmapped_train_with_noise(
+        _, to_diff, losses, accuracies = vmapped_train_with_noise(
             sigmas, env_params, mb_key, init_key, noise_keys
         )
 
         # Average over all shard-mapped networks
-        final_loss = jnp.mean(losses[:, -1])
-        final_loss = jlax.pmean(final_loss, "x").squeeze()
+        to_diff = jnp.mean(to_diff)
+        to_diff = jlax.pmean(to_diff, "x").squeeze()
 
         # losses = losses.reshape(-1, T + 1)
         # accuracies = accuracies.reshape(-1, T)
 
         # derivatives = derivatives.reshape(-1, T)
         # # derivatives = derivatives * dsigma_dweight(sigmas, mu, p, T)
-        return final_loss, (losses, accuracies)
+        return to_diff, (losses, accuracies)
 
-    optimizer = optax.adamw(learning_rate=sweep_config.policy.lr.sample())
+    optimizer = optax.sgd(learning_rate=sweep_config.policy.lr.sample())
     opt_state = optimizer.init(policy)  # type: ignore
 
     iterator = tqdm.tqdm(

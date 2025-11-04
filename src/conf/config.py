@@ -118,9 +118,8 @@ class PolicyConfig:
     network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to use as policy
     batch_size: int = 1  # Batch size for policy training
     lr: DistributionConfig = dist_config_helper(
-        max=1e-1,
-        min=1e-5,
-        distribution="log_uniform_values",
+        value=0.01,
+        distribution="constant",
     )  # Learning rate configuration of policy network
     max_sigma: float = 10.0
 
@@ -156,7 +155,7 @@ class EnvConfig:
     cnn: CNNConfig  # Configuration for the CNN to privatize. Ignored if 'network_type' = mlp
 
     lr: DistributionConfig = dist_config_helper(
-        value=0.001,
+        value=0.1,
         distribution="constant",
     )  # Learning rate of private network
     optimizer: Literal["sgd", "adam", "adamw"] = "sgd"
@@ -201,7 +200,7 @@ class SweepConfig:
     method: str = "random"  # The wandb search method
     metric_name: str = "accuracy"  # The metric for wandb to optimize
     metric_goal: str = "maximize"  # The wandb optimization goal
-    plotting_steps: int = 5
+    plotting_steps: int = 30
     name: str | None = None  # The (optional) name of the wandb sweep
     description: str | None = None  # The (optional) description of the wandb sweep
     with_baselines: bool = False  # Flag to compute plots comparing against baseline (Expensive, default is False)
