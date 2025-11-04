@@ -85,7 +85,7 @@ def mu_schedule_to_weights(mu: float, schedule: Array, p: float, T: int) -> Arra
         A 1D array representing the adjusted schedule.
     """
 
-    mu_0 = jnp.sqrt(jnp.log(mu**2 / (p**2 * T) + 1))
+    mu_0 = compute_mu_0(mu, p, T)
     return (jnp.exp(schedule**2) - 1) / (jnp.exp(mu_0**2) - 1)
 
 

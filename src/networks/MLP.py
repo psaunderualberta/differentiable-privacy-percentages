@@ -22,9 +22,10 @@ class MLP(eqx.Module, Network):
         key = jr.PRNGKey(conf.key)
         key, _key = jr.split(key)
         layer_out = conf.dhidden if conf.nhidden > 0 else conf.nclasses
-        layers: list[list[ReLU | Linear]] = [
+        layers: list[list[ReLU | Linear | eqx.nn.LayerNorm]] = [
             [
                 Linear(conf.din, layer_out, key=_key, initialization=conf.initialization),
+                eqx.nn.LayerNorm(layer_out)
             ]
         ]
 
@@ -35,6 +36,7 @@ class MLP(eqx.Module, Network):
                     [
                         ReLU(),
                         Linear(conf.dhidden, conf.dhidden, key=_key, initialization=conf.initialization),
+                        eqx.nn.LayerNorm(conf.dhidden)
                     ]
                 )
 

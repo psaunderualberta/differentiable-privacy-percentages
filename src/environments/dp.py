@@ -23,7 +23,6 @@ from environments.losses import vmapped_loss, loss
 from environments.dp_params import DP_RL_Params
 
 
-@eqx.filter_checkpoint
 def training_step(
     model: PyTree,
     optimizer: optax.GradientTransformation,
@@ -144,6 +143,9 @@ def lookahead_train_with_noise(
     opt_state = optimizer.init(net_params)
     opt_state_params, opt_state_static = eqx.partition(opt_state, eqx.is_array)
     opt_state_params = eqx.filter_jit(jax.lax.pvary)(opt_state_params, "x")
+    
+    # Checkpoint each call to training step
+    training_step = eqx.filter_checkpoint(training_step)
 
     def lookahead_step(noise, model, opt_state, mb_key, noise_key):
         new_model, new_opt_state, mb_key, noise_key, onestep_loss, onestep_accuracy = (

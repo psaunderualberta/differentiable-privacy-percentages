@@ -25,6 +25,7 @@ from privacy.gdp_privacy import (
     project_weights,
     weights_to_sigma_schedule,
     weights_to_mu_schedule,
+    sigma_schedule_to_weights
 )
 from util.baselines import Baseline
 from util.dataloaders import DATALOADERS
@@ -102,7 +103,7 @@ def main():
     _, num_gpus = determine_optimal_num_devices(devices("gpu"), policy_batch_size)
     mesh = Mesh(devices("gpu")[:num_gpus], "x")
     vmapped_train_with_noise = eqx.filter_vmap(
-        lookahead_train_with_noise, in_axes=(None, None, None, None, 0)
+        train_with_noise, in_axes=(None, None, None, None, 0)
     )
 
     # @partial(checkify.checkify, errors=checkify.nan_checks)
@@ -116,14 +117,12 @@ def main():
         check_rep=False,
     )
     def get_policy_loss(
-        policy: Array,
+        sigmas: Array,
         mb_key: PRNGKeyArray,
         init_key: PRNGKeyArray,
         noise_keys: PRNGKeyArray,
     ) -> tuple[chex.Array, tuple[chex.Array, chex.Array]]:
         """Calculate the policy loss."""
-
-        sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()
 
         # Ensure privacy loss on each iteration is a real number (i.e. \sigma > 0)
         sigmas = eqx.error_if(sigmas, jnp.any(sigmas <= 0), "Some sigmas are <= zero!")
@@ -144,8 +143,9 @@ def main():
         # # derivatives = derivatives * dsigma_dweight(sigmas, mu, p, T)
         return to_diff, (losses, accuracies)
 
-    optimizer = optax.sgd(learning_rate=sweep_config.policy.lr.sample())
-    opt_state = optimizer.init(policy)  # type: ignore
+    optimizer = optax.sign_sgd(learning_rate=sweep_config.policy.lr.sample())
+    sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()  # type: ignore
+    opt_state = optimizer.init(sigmas)  # type: ignore
 
     iterator = tqdm.tqdm(
         range(total_timesteps), desc="Training Progress", total=total_timesteps
@@ -160,18 +160,18 @@ def main():
             key, _ = jr.split(key)
 
             # Log policy & sigmas for this iteration
-            mu_sched = weights_to_mu_schedule(mu_tot, policy, p, T).squeeze()
-            new_sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()  # type: ignore
-            _ = logger.log_array("policy", policy, timestep_dict, plot=True)
-            _ = logger.log_array("mu", mu_sched, timestep_dict, plot=True)
-            _ = logger.log_array("actions", new_sigmas, timestep_dict, plot=True)
+            # mu_sched = weights_to_mu_schedule(mu_tot, policy, p, T).squeeze()
+            # sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()  # type: ignore
+            # _ = logger.log_array("policy", policy, timestep_dict, plot=True)
+            # _ = logger.log_array("mu", mu_sched, timestep_dict, plot=True)
+            _ = logger.log_array("actions", sigmas, timestep_dict, plot=True)
 
             # Get policy loss
             key, mb_key, noise_key = jr.split(key, 3)
             if not sweep_config.train_on_single_network:
                 key, init_key = jr.split(key)
             (loss, (losses, accuracies)), grads = get_policy_loss(
-                policy, mb_key, init_key, jr.split(noise_key, policy_batch_size)
+                sigmas, mb_key, init_key, jr.split(noise_key, policy_batch_size)
             )
 
             # log grads
@@ -189,15 +189,16 @@ def main():
             grads = ensure_valid_pytree(grads, "grads in main")
 
             # Update policy
-            updates, opt_state = optimizer.update(grads, opt_state, policy)
-            policy = optax.apply_updates(policy, updates)
-            assert isinstance(policy, jnp.ndarray), "Policy is not an array"
-            policy = ensure_valid_pytree(policy, "policy in main")
-            policy = project_weights(policy, mu_tot, p, T)
+            updates, opt_state = optimizer.update(grads, opt_state, sigmas)
+            sigmas = optax.apply_updates(sigmas, updates)
+
+            # Ensure privacy constraints hold
+            # policy = sigma_schedule_to_weights(sigmas, mu_tot, p, T)
+            # policy = ensure_valid_pytree(policy, "policy in main")
 
             # Get new sigmas, ensure still valid
-            new_sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()  # type: ignore
-            new_sigmas = ensure_valid_pytree(new_sigmas, "sigmas in main")
+            # new_sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()  # type: ignore
+            # new_sigmas = ensure_valid_pytree(new_sigmas, "sigmas in main")
 
             # self-explanatory
             iterator.set_description(f"Training Progress - Loss: {loss:.4f}")
