@@ -9,7 +9,7 @@ from environments.dp_params import DP_RL_Params
 from networks.net_factory import net_factory
 import os
 import equinox as eqx
-from privacy.schedules import PolicyNoiseSchedule
+from privacy.schedules import LinearInterpSigmaNoiseSchedule
 
 
 
@@ -43,6 +43,8 @@ def main():
 
     num_grid_points_per_dim = 20
     grid_points = jnp.linspace(0, 3, num_grid_points_per_dim, dtype=jnp.float32)
+    keypoints = jnp.linspace(0, T, num_grid_points_per_dim + 2, dtype=jnp.int32)
+    base_sigma = 1.5
 
     mb_key, init_key, noise_key = jr.split(jr.PRNGKey(sweep_config.env_prng_seed), 3)
     mb_keys = jr.split(mb_key, sweep_config.policy.batch_size)
@@ -53,15 +55,13 @@ def main():
     losses = []
     start_sigmas = []
     end_sigmas = []
-    for start_i in range(num_grid_points_per_dim):
+    for keypoint in keypoints:
         for end_i in range(num_grid_points_per_dim):
-            start_sigma = grid_points[start_i]
-            end_sigma = grid_points[end_i]
-            sigmas = jnp.linspace(
-                start_sigma, end_sigma, T, dtype=jnp.float32
-            )
+            values = jnp.full(keypoints.shape, base_sigma)
+            values = values.at[keypoints == keypoint].set(grid_points[end_i])
+            sigmas = LinearInterpSigmaNoiseSchedule(keypoints, values).get_sigmas(T)
             
-            print(f"Training with start sigma {round(start_sigma, 3)}, end sigma {round(end_sigma, 3)}...")
+            print(f"Training with Sigma Schedule Keypoint {keypoint}, New Sigma {grid_points[end_i]}")
             _, loss, _, _ = vmapped_train_with_noise(sigmas, env_params, mb_keys, init_keys, noise_keys)
 
             losses.append(loss.mean())
@@ -87,7 +87,7 @@ def main():
     )
 
     current_dir = os.getcwd()
-    filepath = os.path.join(current_dir, "plots", "linear-noise-schedule-non-private.html")
+    filepath = os.path.join(current_dir, "plots", "linear-interp-sigma-non-private.html")
     fig.write_html(filepath)
 
 

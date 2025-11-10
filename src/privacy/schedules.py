@@ -51,7 +51,27 @@ class PolicyNoiseSchedule(AbstractNoiseSchedule):
         return proj_weights
 
 
-class LinearInterpNoiseSchedule(AbstractNoiseSchedule):
+class LinearInterpPolicyNoiseSchedule(AbstractNoiseSchedule):
+    keypoints: Array
+    values: Array
+
+    def __init__(self, keypoints: Array, values: Array, eps: float = 1e-6):
+        self.keypoints = keypoints
+        self.values = values
+    
+    def get_private_sigmas(self, mu: Array, p: Array, T: Array) -> Array:
+        schedule = jnp.interp(jnp.arange(T), self.keypoints, self.values)
+        proj_weights = project_weights(schedule, mu, p, T)
+        private_sigmas = weights_to_sigma_schedule(proj_weights, mu, p, T)
+        return private_sigmas
+    
+    def get_private_schedule(self, mu: Array, p: Array, T: Array) -> Array:
+        schedule = jnp.interp(jnp.arange(T), self.keypoints, self.values)
+        proj_weights = project_weights(schedule, mu, p, T)
+        return proj_weights
+    
+
+class LinearInterpSigmaNoiseSchedule(AbstractNoiseSchedule):
     keypoints: Array
     values: Array
     eps: float = 1e-6
@@ -62,14 +82,18 @@ class LinearInterpNoiseSchedule(AbstractNoiseSchedule):
         self.eps = eps
     
     def get_private_sigmas(self, mu: Array, p: Array, T: Array) -> Array:
-        values = jnp.clip(self.values, min=self.eps, max=1-self.eps)
-        schedule = jnp.interp(jnp.arange(T), self.keypoints, values)
-        proj_weights = project_weights(schedule, mu, p, T)
+        sigmas = self.get_sigmas(T)
+        weights = sigma_schedule_to_weights(sigmas, mu, p, T)
+        proj_weights = project_weights(weights, mu, p, T)
         private_sigmas = weights_to_sigma_schedule(proj_weights, mu, p, T)
         return private_sigmas
     
     def get_private_schedule(self, mu: Array, p: Array, T: Array) -> Array:
         schedule = jnp.interp(jnp.arange(T), self.keypoints, self.values)
-        proj_weights = project_weights(schedule, mu, p, T)
+        weights = sigma_schedule_to_weights(schedule, mu, p, T)
+        proj_weights = project_weights(weights, mu, p, T)
         return proj_weights
-    
+
+    def get_sigmas(self, T) -> Array:
+        clipped_values = jnp.clip(self.values, min=self.eps)
+        return jnp.interp(jnp.arange(T), self.keypoints, clipped_values)
