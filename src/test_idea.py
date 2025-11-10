@@ -77,7 +77,6 @@ def main():
     )
 
     fig.update_traces(contours_z=dict(show=True, usecolormap=True, highlightcolor="limegreen", project_z=True))
-
     fig.update_layout(
         title="Loss Landscape over Start and End Sigmas",
         scene=dict(
