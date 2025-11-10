@@ -9,6 +9,7 @@ from environments.dp_params import DP_RL_Params
 from networks.net_factory import net_factory
 import os
 import equinox as eqx
+from privacy.schedules import PolicyNoiseSchedule
 
 
 
@@ -40,21 +41,18 @@ def main():
     print(f"\t(epsilon, delta)-DP: ({epsilon}, {delta})")
     print(f"\tmu-GDP: {mu_tot}")
 
-    # Initialize Policy model
-    policy = project_weights(jnp.ones((T,), dtype=jnp.float32), mu_tot, p, T)
-
     num_grid_points_per_dim = 20
-    sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()  # type: ignore
     grid_points = jnp.linspace(0, 3, num_grid_points_per_dim, dtype=jnp.float32)
-    losses = []
-    start_sigmas = []
-    end_sigmas = []
 
     mb_key, init_key, noise_key = jr.split(jr.PRNGKey(sweep_config.env_prng_seed), 3)
     mb_keys = jr.split(mb_key, sweep_config.policy.batch_size)
     init_keys = jr.split(init_key, sweep_config.policy.batch_size)
     noise_keys = jr.split(noise_key, sweep_config.policy.batch_size)
     vmapped_train_with_noise = eqx.filter_vmap(train_with_noise, in_axes=(None, None, 0, 0, 0))
+
+    losses = []
+    start_sigmas = []
+    end_sigmas = []
     for start_i in range(num_grid_points_per_dim):
         for end_i in range(num_grid_points_per_dim):
             start_sigma = grid_points[start_i]
@@ -62,16 +60,6 @@ def main():
             sigmas = jnp.linspace(
                 start_sigma, end_sigma, T, dtype=jnp.float32
             )
-            try:
-                weights = sigma_schedule_to_weights(sigmas, mu_tot, p, T)
-                weights = project_weights(weights, mu_tot, p, T)  # Project to valid mu-GDP schedule
-                sigmas = weights_to_sigma_schedule(weights, mu_tot, p, T).squeeze()  # type: ignore
-            except Exception:
-                print(f"Invalid sigma schedule with start sigma {round(start_sigma, 3)} and end sigma {round(end_sigma, 3)}, skipping...")
-                losses.append(jnp.nan)
-                start_sigmas.append(start_sigma)
-                end_sigmas.append(end_sigma)
-                continue
             
             print(f"Training with start sigma {round(start_sigma, 3)}, end sigma {round(end_sigma, 3)}...")
             _, loss, _, _ = vmapped_train_with_noise(sigmas, env_params, mb_keys, init_keys, noise_keys)

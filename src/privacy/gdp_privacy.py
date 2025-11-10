@@ -116,7 +116,7 @@ def dsigma_dweight(sigmas: Array, mu, p, T) -> Array:
     return numerator / (2 * denominator_pt1 * denominator_pt2)
 
 
-def weights_to_sigma_schedule(weights: Array, mu: float, p: float, T: int) -> Array:
+def weights_to_sigma_schedule(weights: Array, mu: Array, p: Array, T: Array) -> Array:
     """Convert a vector of non-negative weights summing to T to a sigma schedule for G-DP.
 
     Args:
@@ -157,7 +157,7 @@ def sigma_schedule_to_weights(schedule: Array, mu, p, T):
 
 
 # TODO: Move projection into the gradient computation
-def project_weights(weights: Array, mu: float, p: float, T: int) -> Array:
+def project_weights(weights: Array, mu: Array, p: Array, T: Array) -> Array:
     """
     W: in the form w**2 + eps
     """
