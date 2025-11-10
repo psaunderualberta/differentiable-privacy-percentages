@@ -212,3 +212,5 @@ data/
 logs/
 logging/
 wandb/
+*.html
+*.pdf

@@ -43,14 +43,18 @@ def main():
     # Initialize Policy model
     policy = project_weights(jnp.ones((T,), dtype=jnp.float32), mu_tot, p, T)
 
-    num_grid_points_per_dim = 10
+    num_grid_points_per_dim = 20
     sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()  # type: ignore
-    grid_points = jnp.linspace(0.1, 2 * sigmas.min(), num_grid_points_per_dim, dtype=jnp.float32)
+    grid_points = jnp.linspace(0, 3, num_grid_points_per_dim, dtype=jnp.float32)
     losses = []
     start_sigmas = []
     end_sigmas = []
 
     mb_key, init_key, noise_key = jr.split(jr.PRNGKey(sweep_config.env_prng_seed), 3)
+    mb_keys = jr.split(mb_key, sweep_config.policy.batch_size)
+    init_keys = jr.split(init_key, sweep_config.policy.batch_size)
+    noise_keys = jr.split(noise_key, sweep_config.policy.batch_size)
+    vmapped_train_with_noise = eqx.filter_vmap(train_with_noise, in_axes=(None, None, 0, 0, 0))
     for start_i in range(num_grid_points_per_dim):
         for end_i in range(num_grid_points_per_dim):
             start_sigma = grid_points[start_i]
@@ -62,19 +66,19 @@ def main():
                 weights = sigma_schedule_to_weights(sigmas, mu_tot, p, T)
                 weights = project_weights(weights, mu_tot, p, T)  # Project to valid mu-GDP schedule
                 sigmas = weights_to_sigma_schedule(weights, mu_tot, p, T).squeeze()  # type: ignore
-            except eqx.EquinoxRuntimeError:
+            except Exception:
                 print(f"Invalid sigma schedule with start sigma {round(start_sigma, 3)} and end sigma {round(end_sigma, 3)}, skipping...")
                 losses.append(jnp.nan)
                 start_sigmas.append(start_sigma)
                 end_sigmas.append(end_sigma)
                 continue
-
+            
             print(f"Training with start sigma {round(start_sigma, 3)}, end sigma {round(end_sigma, 3)}...")
-            _, loss, _, _ = train_with_noise(sigmas, env_params, mb_key, init_key, noise_key)
+            _, loss, _, _ = vmapped_train_with_noise(sigmas, env_params, mb_keys, init_keys, noise_keys)
 
-            losses.append(loss)
-            start_sigmas.append(start_sigma)
-            end_sigmas.append(end_sigma)
+            losses.append(loss.mean())
+            start_sigmas.append(sigmas[0])
+            end_sigmas.append(sigmas[-1])
     
     fig = go.Figure(
         data=go.Surface(
@@ -93,12 +97,11 @@ def main():
             yaxis_title="End Sigma",
             zaxis_title="Loss",
         ),
-        width=500, height=500, autosize=False,
     )
 
     current_dir = os.getcwd()
-    filepath = os.path.join(current_dir, "plots", "loss_landscape.pdf")
-    fig.write_image(filepath)
+    filepath = os.path.join(current_dir, "plots", "linear-noise-schedule-non-private.html")
+    fig.write_html(filepath)
 
 
 if __name__ == "__main__":
