@@ -9,7 +9,7 @@ from environments.dp_params import DP_RL_Params
 from networks.net_factory import net_factory
 import os
 import equinox as eqx
-from privacy.schedules import LinearInterpSigmaNoiseSchedule
+from privacy.schedules import LinearInterpSigmaNoiseSchedule, LinearInterpPolicyNoiseSchedule
 
 
 
@@ -41,10 +41,10 @@ def main():
     print(f"\t(epsilon, delta)-DP: ({epsilon}, {delta})")
     print(f"\tmu-GDP: {mu_tot}")
 
-    num_grid_points_per_dim = 20
+    num_grid_points_per_dim = 2
     grid_points = jnp.linspace(0, 3, num_grid_points_per_dim, dtype=jnp.float32)
     keypoints = jnp.linspace(0, T, num_grid_points_per_dim + 2, dtype=jnp.int32)
-    base_sigma = 1.5
+    base_sigma = 1 / T
 
     mb_key, init_key, noise_key = jr.split(jr.PRNGKey(sweep_config.env_prng_seed), 3)
     mb_keys = jr.split(mb_key, sweep_config.policy.batch_size)
@@ -53,26 +53,26 @@ def main():
     vmapped_train_with_noise = eqx.filter_vmap(train_with_noise, in_axes=(None, None, 0, 0, 0))
 
     losses = []
-    start_sigmas = []
-    end_sigmas = []
+    x_axis = []
+    y_axis = []
     for keypoint in keypoints:
         for end_i in range(num_grid_points_per_dim):
             values = jnp.full(keypoints.shape, base_sigma)
             values = values.at[keypoints == keypoint].set(grid_points[end_i])
-            sigmas = LinearInterpSigmaNoiseSchedule(keypoints, values).get_sigmas(T)
+            sigmas = LinearInterpPolicyNoiseSchedule(keypoints, values).get_private_sigmas(mu_tot, p, T)
             
             print(f"Training with Sigma Schedule Keypoint {keypoint}, New Sigma {grid_points[end_i]}")
             _, loss, _, _ = vmapped_train_with_noise(sigmas, env_params, mb_keys, init_keys, noise_keys)
 
             losses.append(loss.mean())
-            start_sigmas.append(sigmas[0])
-            end_sigmas.append(sigmas[-1])
+            x_axis.append(keypoint)
+            y_axis.append(grid_points[end_i])
     
     fig = go.Figure(
         data=go.Surface(
-            z=jnp.array(losses).reshape(num_grid_points_per_dim, num_grid_points_per_dim),
-            x=jnp.asarray(start_sigmas).reshape(num_grid_points_per_dim, num_grid_points_per_dim),
-            y=jnp.asarray(end_sigmas).reshape(num_grid_points_per_dim, num_grid_points_per_dim),
+            z=jnp.asarray(losses).reshape(num_grid_points_per_dim, -1),
+            x=jnp.asarray(x_axis).reshape(num_grid_points_per_dim, -1),
+            y=jnp.asarray(y_axis).reshape(num_grid_points_per_dim, -1),
         )
     )
 
@@ -80,14 +80,14 @@ def main():
     fig.update_layout(
         title="Loss Landscape over Start and End Sigmas",
         scene=dict(
-            xaxis_title="Start Sigma",
-            yaxis_title="End Sigma",
+            xaxis_title="Keypoint",
+            yaxis_title="New Sigma Value",
             zaxis_title="Loss",
         ),
     )
 
     current_dir = os.getcwd()
-    filepath = os.path.join(current_dir, "plots", "linear-interp-sigma-non-private.html")
+    filepath = os.path.join(current_dir, "plots", "linear-interp-sigma-non-private-10.html")
     fig.write_html(filepath)
 
 
