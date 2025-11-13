@@ -54,46 +54,53 @@ class PolicyNoiseSchedule(AbstractNoiseSchedule):
 class LinearInterpPolicyNoiseSchedule(AbstractNoiseSchedule):
     keypoints: Array
     values: Array
+    points: Array
 
-    def __init__(self, keypoints: Array, values: Array, eps: float = 1e-6):
+    def __init__(self, keypoints: Array, values: Array, T: Array):
         self.keypoints = keypoints
         self.values = values
+        self.points = jnp.arange(T)
     
     def get_private_sigmas(self, mu: Array, p: Array, T: Array) -> Array:
-        schedule = jnp.interp(jnp.arange(T), self.keypoints, self.values)
+        schedule = jnp.interp(self.points, self.keypoints, self.values)
         proj_weights = project_weights(schedule, mu, p, T)
         private_sigmas = weights_to_sigma_schedule(proj_weights, mu, p, T)
         return private_sigmas
     
     def get_private_schedule(self, mu: Array, p: Array, T: Array) -> Array:
-        schedule = jnp.interp(jnp.arange(T), self.keypoints, self.values)
+        schedule = jnp.interp(self.points, self.keypoints, self.values)
         proj_weights = project_weights(schedule, mu, p, T)
         return proj_weights
+
+    def get_schedule(self) -> Array:
+        return jnp.interp(self.points, self.keypoints, self.values)
     
 
 class LinearInterpSigmaNoiseSchedule(AbstractNoiseSchedule):
     keypoints: Array
     values: Array
+    points: Array
     eps: float = 1e-6
 
-    def __init__(self, keypoints: Array, values: Array, eps: float = 1e-6):
+    def __init__(self, keypoints: Array, values: Array, T: Array, eps: float = 1e-6):
         self.keypoints = keypoints
         self.values = values
+        self.points = jnp.arange(T)
         self.eps = eps
     
     def get_private_sigmas(self, mu: Array, p: Array, T: Array) -> Array:
-        sigmas = self.get_sigmas(T)
+        sigmas = self.get_sigmas()
         weights = sigma_schedule_to_weights(sigmas, mu, p, T)
         proj_weights = project_weights(weights, mu, p, T)
         private_sigmas = weights_to_sigma_schedule(proj_weights, mu, p, T)
         return private_sigmas
     
     def get_private_schedule(self, mu: Array, p: Array, T: Array) -> Array:
-        schedule = jnp.interp(jnp.arange(T), self.keypoints, self.values)
+        schedule = jnp.interp(self.points, self.keypoints, self.values)
         weights = sigma_schedule_to_weights(schedule, mu, p, T)
         proj_weights = project_weights(weights, mu, p, T)
         return proj_weights
 
-    def get_sigmas(self, T) -> Array:
+    def get_sigmas(self) -> Array:
         clipped_values = jnp.clip(self.values, min=self.eps)
-        return jnp.interp(jnp.arange(T), self.keypoints, clipped_values)
+        return jnp.interp(self.points, self.keypoints, clipped_values)

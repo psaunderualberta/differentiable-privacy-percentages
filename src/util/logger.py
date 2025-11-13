@@ -1,6 +1,6 @@
 import os
 import pickle
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, List, Tuple, Mapping
 
 import chex
 import jax.numpy as jnp
@@ -74,13 +74,13 @@ class ExperimentLogger(eqx.Module):
 
         return obj
 
-    def log(self, pos: int, data: Dict[str, Any]):
+    def log(self, pos: int, data: Mapping[str, Any]):
         fname = self.get_data_file(pos)
         with open(fname, "a") as f:
             organized_data = [self.obj_to_str(data[col]) for col in self.columns]
             f.write(",".join(organized_data) + "\n")
 
-    def log_multiple(self, pos: int, data: List[Dict[str, Any]]) -> None:
+    def log_multiple(self, pos: int, data: List[Mapping[str, Any]]) -> None:
         fname = self.get_data_file(pos)
         with open(fname, "a") as f:
             for d in data:
@@ -105,7 +105,7 @@ class ExperimentLogger(eqx.Module):
         return_aggregates=False,
         baseline: Optional[Baseline] = None,
         show: bool = False,
-    ) -> Dict[str, go.Figure]:
+    ) -> Mapping[str, go.Figure]:
         if len(aggregators) == 0:
             aggregators = self.aggregators
 
@@ -176,12 +176,12 @@ class ExperimentLogger(eqx.Module):
 
 
 class WandbTableLogger(eqx.Module):
-    tables: dict[str, wandb.Table]
-    cols: dict[str, list[str]]
-    freqs: dict[str, int]
-    counts: dict[str, int]
+    tables: Mapping[str, wandb.Table]
+    cols: Mapping[str, list[str]]
+    freqs: Mapping[str, int]
+    counts: Mapping[str, int]
 
-    def __init__(self, schemas: dict[str, list[str]], freqs: dict[str, int]):
+    def __init__(self, schemas: Mapping[str, list[str]], freqs: Mapping[str, int]):
         super().__init__()
         self.tables = {}
         self.cols = {}
@@ -195,7 +195,7 @@ class WandbTableLogger(eqx.Module):
     def log(
         self,
         name: str,
-        data: dict[str, int | float],
+        data: Mapping[str, int | float],
         force: bool = False,
         plot: bool = False,
     ) -> bool:
@@ -219,7 +219,7 @@ class WandbTableLogger(eqx.Module):
         self,
         name: str,
         arr: chex.Array,
-        aux: dict[str, object] | None = None,
+        aux: Mapping[str, object] | None = None,
         force: bool = False,
         plot: bool = False,
     ) -> bool:
@@ -228,10 +228,13 @@ class WandbTableLogger(eqx.Module):
         aux = aux if isinstance(aux, dict) else dict()
         return self.log(name, cols | aux, force=force, plot=plot)
 
-    def commit(self, metrics: dict[str, int] | None = None):
+    def commit(self, metrics: Mapping[str, int] | None = None):
         if metrics is None:
             metrics = dict()
         assert len(self.tables.keys() & metrics) == 0, "Name Overlap"
+
+        # For type checker
+        assert isinstance(metrics, dict)
         wandb.log(metrics)
 
     def finish(self):

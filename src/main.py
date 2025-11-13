@@ -27,6 +27,7 @@ from privacy.gdp_privacy import (
     weights_to_mu_schedule,
     sigma_schedule_to_weights
 )
+from privacy.schedules import LinearInterpPolicyNoiseSchedule, AbstractNoiseSchedule
 from util.baselines import Baseline
 from util.dataloaders import DATALOADERS
 from util.logger import WandbTableLogger
@@ -64,7 +65,9 @@ def main():
     print(f"\tmu-GDP: {mu_tot}")
 
     # Initialize Policy model
-    policy = project_weights(jnp.ones((T,), dtype=jnp.float32), mu_tot, p, T)
+    keypoints = jnp.arange(0, T + 1, step=T // 100, dtype=jnp.int32)
+    values = jnp.ones_like(keypoints, dtype=jnp.float32) 
+    policy = LinearInterpPolicyNoiseSchedule(keypoints=keypoints, values=values, T=T)
     policy_batch_size = sweep_config.policy.batch_size
 
     private_network_arch = net_factory(
@@ -84,19 +87,15 @@ def main():
     logger = WandbTableLogger(
         {
             "policy": ["step", *(str(step) for step in range(T))],
-            "mu": ["step", *(str(step) for step in range(T))],
             "losses": ["step", "losses"],
             "accuracies": ["step", "accuracies"],
             "actions": ["step", *(str(step) for step in range(T))],
-            "grads": ["step", *(str(step) for step in range(T))],
         },
         {
             "policy": total_timesteps // sweep_config.plotting_steps,
-            "mu": total_timesteps // sweep_config.plotting_steps,
             "actions": total_timesteps // sweep_config.plotting_steps,
             "losses": total_timesteps // sweep_config.plotting_steps,
             "accuracies": total_timesteps // sweep_config.plotting_steps,
-            "grads": total_timesteps // sweep_config.plotting_steps,
         },
     )
 
@@ -117,15 +116,17 @@ def main():
         check_rep=False,
     )
     def get_policy_loss(
-        sigmas: Array,
+        schedule: AbstractNoiseSchedule,
         mb_key: PRNGKeyArray,
         init_key: PRNGKeyArray,
         noise_keys: PRNGKeyArray,
     ) -> tuple[chex.Array, tuple[chex.Array, chex.Array]]:
         """Calculate the policy loss."""
+        sigmas = schedule.get_private_sigmas(mu_tot, p, T)
 
         # Ensure privacy loss on each iteration is a real number (i.e. \sigma > 0)
         sigmas = eqx.error_if(sigmas, jnp.any(sigmas <= 0), "Some sigmas are <= zero!")
+        sigmas = ensure_valid_pytree(sigmas, "sigmas in get_policy_loss")
 
         # Train all networks
         _, to_diff, losses, accuracies = vmapped_train_with_noise(
@@ -144,8 +145,7 @@ def main():
         return to_diff, (losses, accuracies)
 
     optimizer = optax.sign_sgd(learning_rate=sweep_config.policy.lr.sample())
-    sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()  # type: ignore
-    opt_state = optimizer.init(sigmas)  # type: ignore
+    opt_state = optimizer.init(policy)  # type: ignore
 
     iterator = tqdm.tqdm(
         range(total_timesteps), desc="Training Progress", total=total_timesteps
@@ -160,10 +160,9 @@ def main():
             key, _ = jr.split(key)
 
             # Log policy & sigmas for this iteration
-            # mu_sched = weights_to_mu_schedule(mu_tot, policy, p, T).squeeze()
-            # sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()  # type: ignore
-            # _ = logger.log_array("policy", policy, timestep_dict, plot=True)
-            # _ = logger.log_array("mu", mu_sched, timestep_dict, plot=True)
+            sigmas = policy.get_private_sigmas(mu_tot, p, T)
+            schedule = policy.get_schedule()
+            _ = logger.log_array("policy", schedule, timestep_dict, plot=True)
             _ = logger.log_array("actions", sigmas, timestep_dict, plot=True)
 
             # Get policy loss
@@ -171,11 +170,8 @@ def main():
             if not sweep_config.train_on_single_network:
                 key, init_key = jr.split(key)
             (loss, (losses, accuracies)), grads = get_policy_loss(
-                sigmas, mb_key, init_key, jr.split(noise_key, policy_batch_size)
+                policy, mb_key, init_key, jr.split(noise_key, policy_batch_size)
             )
-
-            # log grads
-            _ = logger.log_array("grads", grads, timestep_dict, plot=True)
 
             # Log iteration results to file
             _ = logger.log("losses", timestep_dict | {"losses": losses})
@@ -186,31 +182,24 @@ def main():
 
             # Ensure gradients are real numbers
             loss = ensure_valid_pytree(loss, "loss in main")
-            grads = ensure_valid_pytree(grads, "grads in main")
 
             # Update policy
-            updates, opt_state = optimizer.update(grads, opt_state, sigmas)
-            sigmas = optax.apply_updates(sigmas, updates)
+            updates, opt_state = optimizer.update(grads, opt_state, policy)
+            policy = eqx.apply_updates(policy, updates)
 
-            # Ensure privacy constraints hold
-            # policy = sigma_schedule_to_weights(sigmas, mu_tot, p, T)
-            # policy = ensure_valid_pytree(policy, "policy in main")
-
-            # Get new sigmas, ensure still valid
-            # new_sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()  # type: ignore
-            # new_sigmas = ensure_valid_pytree(new_sigmas, "sigmas in main")
+            # Ensure no Infs or NaNs were introduced
+            policy = ensure_valid_pytree(policy, "policy in main")
 
             # self-explanatory
             iterator.set_description(f"Training Progress - Loss: {loss:.4f}")
 
     except Exception as e:
-        mu_sched = weights_to_mu_schedule(mu_tot, policy, p, T).squeeze()
-        _ = logger.log_array("policy", policy, timestep_dict, force=True, plot=True)
-        _ = logger.log_array("mu", mu_sched, timestep_dict, force=True, plot=True)
+        sigmas = policy.get_private_sigmas(mu_tot, p, T)
+        schedule = policy.get_private_schedule(mu_tot, p, T)
+        _ = logger.log_array("policy", schedule, timestep_dict, force=True, plot=True)
         _ = logger.log_array(
-            "actions", new_sigmas, timestep_dict, force=True, plot=True
+            "actions", sigmas, timestep_dict, force=True, plot=True
         )
-        _ = logger.log_array("grads", grads, timestep_dict, force=True, plot=True)
 
         print("WARNING: Error raised during training: ")
         print(e.args[0])
@@ -219,7 +208,6 @@ def main():
             raise e
 
     # Generate final results with lots of iterations
-    sigmas = weights_to_sigma_schedule(policy, mu_tot, p, T).squeeze()  # type: ignore
     eval_num_iterations = 100
     eval_key = jr.PRNGKey(0)
 
@@ -227,6 +215,7 @@ def main():
     if sweep_config.with_baselines:
         baseline = Baseline(env_params, mu_tot, eval_num_iterations)
         _ = baseline.generate_baseline_data(eval_key)
+        sigmas = policy.get_private_sigmas(mu_tot, p, T)
         eval_df = baseline.generate_schedule_data(sigmas, "Learned Policy", eval_key)
         final_loss_fig = baseline.baseline_comparison_final_loss_plotter(eval_df)
         accuracy_fig = baseline.baseline_comparison_accuracy_plotter(eval_df)
@@ -238,7 +227,7 @@ def main():
         )
 
     # Cleanup, finish wandb run
-    for multi_line_table_name in ["actions", "policy", "grads", "mu"]:
+    for multi_line_table_name in ["actions", "policy"]:
         logger.line_plot(multi_line_table_name)
     for bulk_line_table_name in ["losses", "accuracies"]:
         logger.bulk_line_plots(bulk_line_table_name)

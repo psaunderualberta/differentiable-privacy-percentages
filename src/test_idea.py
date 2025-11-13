@@ -41,7 +41,7 @@ def main():
     print(f"\t(epsilon, delta)-DP: ({epsilon}, {delta})")
     print(f"\tmu-GDP: {mu_tot}")
 
-    num_grid_points_per_dim = 2
+    num_grid_points_per_dim = 7
     grid_points = jnp.linspace(0, 3, num_grid_points_per_dim, dtype=jnp.float32)
     keypoints = jnp.linspace(0, T, num_grid_points_per_dim + 2, dtype=jnp.int32)
     base_sigma = 1 / T
@@ -59,7 +59,7 @@ def main():
         for end_i in range(num_grid_points_per_dim):
             values = jnp.full(keypoints.shape, base_sigma)
             values = values.at[keypoints == keypoint].set(grid_points[end_i])
-            sigmas = LinearInterpPolicyNoiseSchedule(keypoints, values).get_private_sigmas(mu_tot, p, T)
+            sigmas = LinearInterpPolicyNoiseSchedule(keypoints, values, T).get_private_sigmas(mu_tot, p, T)
             
             print(f"Training with Sigma Schedule Keypoint {keypoint}, New Sigma {grid_points[end_i]}")
             _, loss, _, _ = vmapped_train_with_noise(sigmas, env_params, mb_keys, init_keys, noise_keys)
@@ -87,7 +87,7 @@ def main():
     )
 
     current_dir = os.getcwd()
-    filepath = os.path.join(current_dir, "plots", "linear-interp-sigma-non-private-10.html")
+    filepath = os.path.join(current_dir, "plots", "linear-interp-policy-private.html")
     fig.write_html(filepath)
 
 
