@@ -27,7 +27,7 @@ from privacy.gdp_privacy import (
     weights_to_mu_schedule,
     sigma_schedule_to_weights
 )
-from privacy.schedules import LinearInterpPolicyNoiseSchedule, AbstractNoiseSchedule
+from privacy.schedules import AbstractNoiseSchedule, LinearInterpSigmaNoiseSchedule, LinearInterpPolicyNoiseSchedule
 from util.baselines import Baseline
 from util.dataloaders import DATALOADERS
 from util.logger import WandbTableLogger
@@ -66,7 +66,7 @@ def main():
 
     # Initialize Policy model
     keypoints = jnp.arange(0, T + 1, step=T // 100, dtype=jnp.int32)
-    values = jnp.ones_like(keypoints, dtype=jnp.float32) 
+    values = jnp.ones_like(keypoints, dtype=jnp.float32) * 2.0
     policy = LinearInterpPolicyNoiseSchedule(keypoints=keypoints, values=values, T=T)
     policy_batch_size = sweep_config.policy.batch_size
 
@@ -144,7 +144,7 @@ def main():
         # # derivatives = derivatives * dsigma_dweight(sigmas, mu, p, T)
         return to_diff, (losses, accuracies)
 
-    optimizer = optax.sign_sgd(learning_rate=sweep_config.policy.lr.sample())
+    optimizer = optax.sgd(learning_rate=sweep_config.policy.lr.sample())
     opt_state = optimizer.init(policy)  # type: ignore
 
     iterator = tqdm.tqdm(
@@ -161,7 +161,7 @@ def main():
 
             # Log policy & sigmas for this iteration
             sigmas = policy.get_private_sigmas(mu_tot, p, T)
-            schedule = policy.get_schedule()
+            schedule = policy.get_private_schedule(mu_tot, p, T)
             _ = logger.log_array("policy", schedule, timestep_dict, plot=True)
             _ = logger.log_array("actions", sigmas, timestep_dict, plot=True)
 

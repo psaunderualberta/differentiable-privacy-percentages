@@ -62,12 +62,9 @@ def weights_to_mu_schedule(mu: float, schedule: Array, p: float, T: int) -> Arra
     """
 
     eps = compute_eps(mu, p, T)
-    schedule = schedule**2 + eps
-
     mu_0 = compute_mu_0(mu, p, T)
-    schedule = eqx.error_if(
-        schedule, (schedule == 0).any(axis=None), "Schedule has zeroes"
-    )
+
+    schedule = schedule**2 + eps
     return jnp.sqrt(jnp.log(schedule * (jnp.exp(mu_0**2) - 1) + 1))
 
 
@@ -168,5 +165,4 @@ def project_weights(weights: Array, mu: Array, p: Array, T: Array) -> Array:
         weights, scale=l2_ball_radius
     )
 
-    # reshift to ensure no mu is 0
     return projected_weights

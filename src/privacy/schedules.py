@@ -104,3 +104,8 @@ class LinearInterpSigmaNoiseSchedule(AbstractNoiseSchedule):
     def get_sigmas(self) -> Array:
         clipped_values = jnp.clip(self.values, min=self.eps)
         return jnp.interp(self.points, self.keypoints, clipped_values)
+
+    def get_schedule(self, mu: Array, p: Array, T: Array) -> Array:
+        sigmas = self.get_sigmas()
+        weights = sigma_schedule_to_weights(sigmas, mu, p, T)
+        return weights

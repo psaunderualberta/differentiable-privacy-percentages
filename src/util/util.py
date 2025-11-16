@@ -42,15 +42,13 @@ def clip_grads_abadi(grads: eqx.Module, C: float) -> eqx.Module:
     # sum_clipped, _ = per_example_global_norm_clip(grads_flat, C)
 
     # DP optimization as described in https://proceedings.neurips.cc/paper_files/paper/2023/file/8249b30d877c91611fd8c7aa6ac2b5fe-Paper-Conference.pdf
-    gamma = 0.01
+    C = SingletonConfig.get_environment_config_instance().C
 
     def get_multiplier(grad: eqx.Module):
-        return 1 / (
-            jnp.sqrt(
-                1e-8 + sum(jnp.sum(jnp.abs(x) ** 2) for x in jax.tree.leaves(grad))
-            )
-            + gamma
+        l22_norm = jnp.sqrt(
+            1e-8 + sum(jnp.sum(jnp.abs(x) ** 2) for x in jax.tree.leaves(grad))
         )
+        return jnp.minimum(1, C / l22_norm)
 
     batch_size = SingletonConfig.get_environment_config_instance().batch_size
     multipliers = jax.vmap(get_multiplier)(grads) / batch_size

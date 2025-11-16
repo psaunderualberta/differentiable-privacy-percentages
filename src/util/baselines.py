@@ -102,11 +102,11 @@ class Baseline:
         if with_progress_bar:
             iterator = tqdm.tqdm(iterator, desc=name, total=self.num_repetitions)
 
+        mb_key, init_key, key = jr.split(key, 3)
         for _ in iterator:
-            key, _key = jr.split(key)
-            k1, k2, k3 = jr.split(_key, 3)
+            key, noise_key = jr.split(key)
             _, _, losses, accuracies = train_with_noise(
-                sigmas, self.env_params, k1, k2, k3
+                sigmas, self.env_params, mb_key, init_key, noise_key
             )
             df.loc[len(df)] = {  # type: ignore
                 "type": name,
