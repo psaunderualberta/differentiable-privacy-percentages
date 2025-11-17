@@ -8,6 +8,8 @@ import jax.numpy as jnp
 class DP_RL_Params(eqx.Module):
     X: Array  # Dataset features
     y: Array  # Dataset labels
+    valX: Array  # Validation dataset features
+    valy: Array  # Validation dataset labels
     dummy_batch: Array  # Batch size for training
     optimizer: str = "sgd"
     lr: float = 0.01  # Learning rate for the optimizer
@@ -17,11 +19,13 @@ class DP_RL_Params(eqx.Module):
 
     @classmethod
     def create(
-        cls, conf: EnvConfig, network_arch: Network, X: Array, y: Array
+        cls, conf: EnvConfig, network_arch: Network, X: Array, y: Array, valX: Array, valy: Array
     ) -> "DP_RL_Params":
         return DP_RL_Params(
             X=X,
             y=y,
+            valX=valX,
+            valy=valy,
             lr=conf.lr.sample(),
             optimizer=conf.optimizer,
             network=network_arch,

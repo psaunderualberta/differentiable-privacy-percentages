@@ -81,9 +81,9 @@ def mu_schedule_to_weights(mu: float, schedule: Array, p: float, T: int) -> Arra
     Returns:
         A 1D array representing the adjusted schedule.
     """
-
+    eps = compute_eps(mu, p, T)
     mu_0 = compute_mu_0(mu, p, T)
-    return (jnp.exp(schedule**2) - 1) / (jnp.exp(mu_0**2) - 1)
+    return jnp.sqrt((jnp.exp(schedule**2) - 1) / (jnp.exp(mu_0**2) - 1) - eps)
 
 
 def gdp_to_sigma(mu: Array) -> Array:

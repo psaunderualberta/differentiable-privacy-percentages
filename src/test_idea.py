@@ -18,6 +18,7 @@ def main():
     environment_config = SingletonConfig.get_environment_config_instance() 
     
     X, y = DATALOADERS[sweep_config.dataset](sweep_config.dataset_poly_d)
+    X_test, y_test = DATALOADERS[sweep_config.dataset](sweep_config.dataset_poly_d, test=True)
     print(f"Dataset shape: {X.shape}, {y.shape}")
 
     private_network_arch = net_factory(
@@ -30,6 +31,8 @@ def main():
         network_arch=private_network_arch,
         X=X,
         y=y,
+        valX=X_test,
+        valy=y_test,
     )
 
     epsilon = sweep_config.env.eps
@@ -62,7 +65,7 @@ def main():
             sigmas = LinearInterpPolicyNoiseSchedule(keypoints, values, T).get_private_sigmas(mu_tot, p, T)
             
             print(f"Training with Sigma Schedule Keypoint {keypoint}, New Sigma {grid_points[end_i]}")
-            _, loss, _, _ = vmapped_train_with_noise(sigmas, env_params, mb_keys, init_keys, noise_keys)
+            _, loss, _, _, _ = vmapped_train_with_noise(sigmas, env_params, mb_keys, init_keys, noise_keys)
 
             losses.append(loss.mean())
             x_axis.append(keypoint)

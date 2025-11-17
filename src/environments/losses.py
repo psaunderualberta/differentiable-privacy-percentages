@@ -2,7 +2,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jax.experimental import checkify
-import chex
+from jaxtyping import PyTree, Array
 from typing import Callable
 from functools import partial
 from conf.singleton_conf import SingletonConfig
@@ -11,7 +11,7 @@ from optax import softmax_cross_entropy
 from util.util import pytree_has_inf
 
 
-def __py_y_loss(pred_y: jnp.ndarray, y: jnp.ndarray) -> chex.Array:
+def __py_y_loss(pred_y: jnp.ndarray, y: jnp.ndarray) -> Array:
     """
     Actually compute the losses between predicted 'y' values, and 'y' values
 
@@ -35,7 +35,7 @@ def __py_y_loss(pred_y: jnp.ndarray, y: jnp.ndarray) -> chex.Array:
 
 @eqx.filter_value_and_grad
 @eqx.filter_jit
-def __loss_helper(model, x, y, to_vmap: bool = True) -> tuple[chex.Array, chex.Array]:
+def __loss_helper(model, x, y, to_vmap: bool = True) -> Array:
     """
     Compute the loss and gradients for a given model and data.
     Args:
@@ -55,7 +55,7 @@ def __loss_helper(model, x, y, to_vmap: bool = True) -> tuple[chex.Array, chex.A
 
 # See page 16 of https://www.cs.toronto.edu/~rgrosse/courses/csc2541_2022/readings/L02_Taylor_approximations.pdf
 def neural_net_gnhvp(
-    model: Callable[..., chex.Array],
+    model: Callable[..., Array],
     x: jnp.ndarray,
     y: jnp.ndarray,
     v: eqx.Module,
@@ -69,7 +69,7 @@ def neural_net_gnhvp(
 
 
 @eqx.filter_jit
-def loss(model: Callable[[chex.Array], jnp.ndarray], x: chex.Array, y: chex.Array):
+def loss(model: Callable[[Array], jnp.ndarray], x: Array, y: Array):
     """
     Compute the loss and gradients for a given model and data.
     Args:
@@ -84,7 +84,7 @@ def loss(model: Callable[[chex.Array], jnp.ndarray], x: chex.Array, y: chex.Arra
 
 @eqx.filter_jit
 def vmapped_loss(
-    model: Callable[[chex.Array], jnp.ndarray], x: chex.Array, y: chex.Array
+    model: Callable[[Array], jnp.ndarray], x: Array, y: Array
 ):
     """
     Compute the loss and gradients using vmap across the model, producing per-example gradients.

@@ -1,7 +1,6 @@
 import os
 from functools import partial
 
-import chex
 import equinox as eqx
 import optax
 import tqdm
@@ -11,7 +10,6 @@ from jax.experimental.shard_map import shard_map
 from jax import numpy as jnp
 from jax import random as jr
 from jax import lax as jlax
-from jax.experimental import checkify
 from jax.sharding import Mesh, PartitionSpec as P
 from jaxtyping import Array, PRNGKeyArray
 
@@ -42,18 +40,13 @@ def main():
     total_timesteps = sweep_config.total_timesteps
     env_prng_seed = sweep_config.env_prng_seed
 
-    print("Starting...")
-    run = wandb.init(
-        project=wandb_config.project,
-        entity=wandb_config.entity,
-        id=wandb_config.restart_run_id,
-        mode=wandb_config.mode,
-        resume="allow",
-    )
+
 
     # Initialize dataset
     X, y = DATALOADERS[sweep_config.dataset](sweep_config.dataset_poly_d)
+    X_test, y_test = DATALOADERS[sweep_config.dataset](sweep_config.dataset_poly_d, test=True)
     print(f"Dataset shape: {X.shape}, {y.shape}")
+    print(f"Test Dataset shape: {X_test.shape}, {y_test.shape}")
 
     epsilon = sweep_config.env.eps
     delta = sweep_config.env.delta
@@ -66,8 +59,8 @@ def main():
 
     # Initialize Policy model
     keypoints = jnp.arange(0, T + 1, step=T // 100, dtype=jnp.int32)
-    values = jnp.ones_like(keypoints, dtype=jnp.float32) * 2.0
-    policy = LinearInterpPolicyNoiseSchedule(keypoints=keypoints, values=values, T=T)
+    values = jnp.ones_like(keypoints, dtype=jnp.float32)
+    policy = LinearInterpSigmaNoiseSchedule(keypoints=keypoints, values=values, T=T)
     policy_batch_size = sweep_config.policy.batch_size
 
     private_network_arch = net_factory(
@@ -82,6 +75,8 @@ def main():
         network_arch=private_network_arch,
         X=X,
         y=y,
+        valX=X_test,
+        valy=y_test,
     )
 
     logger = WandbTableLogger(
@@ -105,6 +100,15 @@ def main():
         train_with_noise, in_axes=(None, None, None, None, 0)
     )
 
+    print("Starting...")
+    run = wandb.init(
+        project=wandb_config.project,
+        entity=wandb_config.entity,
+        id=wandb_config.restart_run_id,
+        mode=wandb_config.mode,
+        resume="allow",
+    )
+
     # @partial(checkify.checkify, errors=checkify.nan_checks)
     @eqx.filter_jit
     @partial(eqx.filter_value_and_grad, has_aux=True)
@@ -112,7 +116,7 @@ def main():
         shard_map,
         mesh=mesh,
         in_specs=(P(), P(), P(), P("x")),
-        out_specs=(P(), (P("x"), P("x"))),
+        out_specs=(P(), (P("x"), P("x"), P("x"))),
         check_rep=False,
     )
     def get_policy_loss(
@@ -120,7 +124,7 @@ def main():
         mb_key: PRNGKeyArray,
         init_key: PRNGKeyArray,
         noise_keys: PRNGKeyArray,
-    ) -> tuple[chex.Array, tuple[chex.Array, chex.Array]]:
+    ) -> tuple[Array, tuple[Array, Array, Array]]:
         """Calculate the policy loss."""
         sigmas = schedule.get_private_sigmas(mu_tot, p, T)
 
@@ -129,7 +133,7 @@ def main():
         sigmas = ensure_valid_pytree(sigmas, "sigmas in get_policy_loss")
 
         # Train all networks
-        _, to_diff, losses, accuracies = vmapped_train_with_noise(
+        _, to_diff, losses, accuracies, val_acc = vmapped_train_with_noise(
             sigmas, env_params, mb_key, init_key, noise_keys
         )
 
@@ -142,7 +146,7 @@ def main():
 
         # derivatives = derivatives.reshape(-1, T)
         # # derivatives = derivatives * dsigma_dweight(sigmas, mu, p, T)
-        return to_diff, (losses, accuracies)
+        return to_diff, (losses, accuracies, val_acc)
 
     optimizer = optax.sgd(learning_rate=sweep_config.policy.lr.sample())
     opt_state = optimizer.init(policy)  # type: ignore
@@ -169,7 +173,7 @@ def main():
             key, mb_key, noise_key = jr.split(key, 3)
             if not sweep_config.train_on_single_network:
                 key, init_key = jr.split(key)
-            (loss, (losses, accuracies)), grads = get_policy_loss(
+            (loss, (losses, accuracies, val_accs)), grads = get_policy_loss(
                 policy, mb_key, init_key, jr.split(noise_key, policy_batch_size)
             )
 
@@ -178,7 +182,7 @@ def main():
             _ = logger.log("accuracies", timestep_dict | {"accuracies": accuracies})
 
             # Log metrics for monitoring run
-            wandb.log({"loss": loss, "accuracy": accuracies[:, -1].mean()})
+            wandb.log({"loss": loss, "accuracy": val_accs.mean()})
 
             # Ensure gradients are real numbers
             loss = ensure_valid_pytree(loss, "loss in main")

@@ -102,17 +102,17 @@ class Baseline:
         if with_progress_bar:
             iterator = tqdm.tqdm(iterator, desc=name, total=self.num_repetitions)
 
-        mb_key, init_key, key = jr.split(key, 3)
+        key, mb_key, init_key = jr.split(key, 3)
         for _ in iterator:
             key, noise_key = jr.split(key)
-            _, _, losses, accuracies = train_with_noise(
+            _, val_loss, losses, accuracies, val_acc = train_with_noise(
                 sigmas, self.env_params, mb_key, init_key, noise_key
             )
             df.loc[len(df)] = {  # type: ignore
                 "type": name,
                 "step": 0,  # only recording one step for these
-                "loss": losses[-1],
-                "accuracy": accuracies[-1],
+                "loss": val_loss,
+                "accuracy": val_acc,
                 "losses": losses,
                 "accuracies": accuracies,
                 "actions": sigmas,

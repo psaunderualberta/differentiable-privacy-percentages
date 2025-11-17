@@ -17,6 +17,7 @@ from util.util import (
     sample_batch_uniform,
     get_spherical_noise,
     subset_classification_accuracy,
+    classification_accuracy
 )
 from environments.losses import vmapped_loss, loss
 
@@ -76,7 +77,7 @@ def train_with_noise(
     mb_key: PRNGKeyArray,
     init_key: PRNGKeyArray,
     noise_key: PRNGKeyArray,
-) -> tuple[eqx.Module, Array, Array, Array]:
+) -> tuple[eqx.Module, Array, Array, Array, Array]:
     # Create network
     network = reinit_model(params.network, init_key)
     net_params, net_static = eqx.partition(network, eqx.is_array)
@@ -119,10 +120,11 @@ def train_with_noise(
         params.X, params.y, params.dummy_batch, batch_key
     )
     final_loss, _ = loss(network_final, batch_x, batch_y)
-
     losses = jnp.concat([losses, jnp.asarray([final_loss])])
 
-    return network_final, losses[-1], losses, accuracies
+    val_loss, _ = loss(network_final, params.valX, params.valy)
+    val_accuracy = classification_accuracy(network_final, params.valX, params.valy)
+    return network_final, val_loss, losses, accuracies, val_accuracy
 
 
 def lookahead_train_with_noise(
@@ -145,15 +147,15 @@ def lookahead_train_with_noise(
     opt_state_params = eqx.filter_jit(jax.lax.pvary)(opt_state_params, "x")
     
     # Checkpoint each call to training step
-    training_step = eqx.filter_checkpoint(training_step)
+    ckpt_training_step = eqx.filter_checkpoint(training_step)
 
     def lookahead_step(noise, model, opt_state, mb_key, noise_key):
         new_model, new_opt_state, mb_key, noise_key, onestep_loss, onestep_accuracy = (
-            training_step(model, optimizer, opt_state, mb_key, noise_key, noise, params)
+            ckpt_training_step(model, optimizer, opt_state, mb_key, noise_key, noise, params)
         )
 
         # Compute lookahead loss
-        _, _, _, _, lookahead_loss, _ = training_step(
+        _, _, _, _, lookahead_loss, _ = ckpt_training_step(
             new_model,
             optimizer,
             new_opt_state,

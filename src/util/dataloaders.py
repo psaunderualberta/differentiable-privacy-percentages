@@ -23,13 +23,8 @@ def _dataloader_california(degree=1):
     return jnp.asarray(X), jnp.asarray(y)
 
 
-def _dataloader_mnist(_=None) -> Tuple[chex.Array, chex.Array]:
-    mnist_datadir = os.path.join(__DATA_DIR, "mnist")
-    os.makedirs(mnist_datadir, exist_ok=True)
-    image_file = os.path.join(mnist_datadir, "images.npy")
-    label_file = os.path.join(mnist_datadir, "labels.npy")
-    if not os.path.exists(image_file) or not os.path.exists(label_file):
-        ds = load_dataset("ylecun/mnist", split="train")
+def _dataloader_mnist(_=None, test=False) -> Tuple[chex.Array, chex.Array]:
+    def ds_saver(ds, x_file, y_file):
         # https://huggingface.co/docs/datasets/en/use_with_jax
         dds = ds.with_format("jax")
         images = dds["image"]
@@ -37,11 +32,30 @@ def _dataloader_mnist(_=None) -> Tuple[chex.Array, chex.Array]:
         pd_labels = pd.Series(labels).astype(int) # type: ignore
         labels = jnp.asarray(pd.get_dummies(pd_labels).values).astype(jnp.float32)
 
-        jnp.save(image_file, images)  # type: ignore
-        jnp.save(label_file, labels)
+        jnp.save(x_file, images)  # type: ignore
+        jnp.save(y_file, labels)  # type: ignore
 
-    images = jnp.load(image_file)
-    labels = jnp.load(label_file)
+    mnist_datadir = os.path.join(__DATA_DIR, "mnist")
+    os.makedirs(mnist_datadir, exist_ok=True)
+    image_train_file = os.path.join(mnist_datadir, "images-train.npy")
+    label_train_file = os.path.join(mnist_datadir, "labels-train.npy")
+    image_test_file = os.path.join(mnist_datadir, "images-test.npy")
+    label_test_file = os.path.join(mnist_datadir, "labels-test.npy")
+    if not os.path.exists(image_train_file) or not os.path.exists(label_train_file):
+        print("Downloading MNIST dataset...")
+        ds = load_dataset("ylecun/mnist", split="train")
+        ds_saver(ds, image_train_file, label_train_file)
+    
+    if not os.path.exists(image_test_file) or not os.path.exists(label_test_file):
+        print("Downloading MNIST test dataset...")
+        ds = load_dataset("ylecun/mnist", split="test")
+        ds_saver(ds, image_test_file, label_test_file)
+    if test:
+        image_train_file = image_test_file
+        label_train_file = label_test_file
+
+    images = jnp.load(image_train_file)
+    labels = jnp.load(label_train_file)
     # convert 'labels' to one-hot encoding
 
     # normalize & flatten images
