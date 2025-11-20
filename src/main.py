@@ -58,7 +58,7 @@ def main():
     print(f"\tmu-GDP: {mu_tot}")
 
     # Initialize Policy model
-    keypoints = jnp.arange(0, T + 1, step=T // 100, dtype=jnp.int32)
+    keypoints = jnp.arange(0, T + 1, step=50, dtype=jnp.int32)
     values = jnp.ones_like(keypoints, dtype=jnp.float32)
     policy = LinearInterpSigmaNoiseSchedule(keypoints=keypoints, values=values, T=T)
     policy_batch_size = sweep_config.policy.batch_size

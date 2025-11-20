@@ -20,7 +20,7 @@ from util.util import (
     classification_accuracy
 )
 from environments.losses import vmapped_loss, loss
-
+from functools import partial
 from environments.dp_params import DP_RL_Params
 
 
@@ -88,7 +88,8 @@ def train_with_noise(
     opt_state_params, opt_state_static = eqx.partition(opt_state, eqx.is_array)
     opt_state_params = eqx.filter_jit(jax.lax.pvary)(opt_state_params, "x")
 
-    @jax.checkpoint  # type:ignore
+    @partial(jax.checkpoint,
+         policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable)
     def scanned_training_step(
         carry: tuple[PyTree, PyTree, PRNGKeyArray, PRNGKeyArray], noise: Array
     ) -> tuple[
