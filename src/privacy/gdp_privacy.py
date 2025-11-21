@@ -10,6 +10,9 @@ from jax.nn import softmax
 import optax
 
 
+# TODO: Add PrivacyParameters Class to encapsulate eps, delta, mu, p, T
+
+
 def approx_to_gdp(eps: float, delta: float, tol: float = 1e-6) -> float:
     """Convert (eps, delta)-DP to GDP.
 

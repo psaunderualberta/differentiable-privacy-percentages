@@ -25,7 +25,7 @@ from privacy.gdp_privacy import (
     weights_to_mu_schedule,
     sigma_schedule_to_weights
 )
-from privacy.schedules import AbstractNoiseSchedule, LinearInterpSigmaNoiseSchedule, LinearInterpPolicyNoiseSchedule
+from privacy.noise_schedules import AbstractNoiseSchedule, LinearInterpSigmaNoiseSchedule, LinearInterpPolicyNoiseSchedule
 from util.baselines import Baseline
 from util.dataloaders import DATALOADERS
 from util.logger import WandbTableLogger
@@ -39,8 +39,6 @@ def main():
 
     total_timesteps = sweep_config.total_timesteps
     env_prng_seed = sweep_config.env_prng_seed
-
-
 
     # Initialize dataset
     X, y = DATALOADERS[sweep_config.dataset](sweep_config.dataset_poly_d)
