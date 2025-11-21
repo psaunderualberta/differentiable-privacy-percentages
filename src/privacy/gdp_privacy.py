@@ -10,10 +10,7 @@ from jax.nn import softmax
 import optax
 
 
-# TODO: Add PrivacyParameters Class to encapsulate eps, delta, mu, p, T
-
-
-def approx_to_gdp(eps: float, delta: float, tol: float = 1e-6) -> float:
+def approx_to_gdp(eps, delta, tol=1e-12) -> float:
     """Convert (eps, delta)-DP to GDP.
 
     Args:
@@ -38,134 +35,127 @@ def approx_to_gdp(eps: float, delta: float, tol: float = 1e-6) -> float:
     return optimize.root_scalar(f, bracket=[tol, 100], method="brentq").root
 
 
-def compute_mu_0(mu: float, p: float, T: int) -> Array:
-    return jnp.sqrt(jnp.log(mu**2 / (p**2 * T) + 1))
+class GDPPrivacyParameters(eqx.Module):
+    eps: float
+    delta: float
+    mu: float
+    p: float
+    T: int
+
+    def __init__(self, eps: float, delta: float, p: float, T: int):
+        self.eps = eps
+        self.delta = delta
+        self.mu = approx_to_gdp(eps, delta)
+        self.p = p
+        self.T = T
+        self.mu_0 = self.compute_mu_0()
+    
+    def compute_mu_0(self) -> Array:
+        return jnp.sqrt(jnp.log(self.mu**2 / (self.p**2 * self.T) + 1))
+
+    def compute_eps(self, max_sigma: float | None = None) -> Array:
+        mu_0 = self.compute_mu_0()
+
+        if max_sigma is None:
+            max_sigma = SingletonConfig.get_policy_config_instance().max_sigma
+
+        return (jnp.exp(1 / max_sigma**2) - 1) / (jnp.exp(mu_0**2) - 1)
+    
+    def weights_to_mu_schedule(self, schedule: Array) -> Array:
+        """Convert a GDP mu parameter to a Poisson subsampling schedule.
+
+        Args:
+            schedule: A 1D array representing the initial schedule (e.g., learning rates). Assumed to be non-negative and sum to T.
+
+        Returns:
+            A 1D array representing the adjusted schedule.
+        """
+
+        eps = self.compute_eps()
+        mu_0 = self.compute_mu_0()
+
+        schedule = schedule**2 + eps
+        return jnp.sqrt(jnp.log(schedule * (jnp.exp(mu_0**2) - 1) + 1))
 
 
-def compute_eps(mu: float, p: float, T: int, max_sigma: float | None = None) -> Array:
-    mu_0 = compute_mu_0(mu, p, T)
+    def mu_schedule_to_weights(self, schedule: Array) -> Array:
+        """Convert to a Poisson subsampling schedule to vector of non-negative weights summing to T.
+        Inverse of `mu_to_poisson_subsampling_shedule`
 
-    if max_sigma is None:
-        max_sigma = SingletonConfig.get_policy_config_instance().max_sigma
+        Args:
+            mu: The mu parameter of GDP. Assumed to be a non-negative scalar.
+            schedule: A 1D array representing the initial schedule (e.g., learning rates). Assumed to be non-negative and sum to T.
+            p: The subsampling probability. Assumed to be in (0, 1).
+            T: The total number of steps. Assumed to be a positive integer.
 
-    return (jnp.exp(1 / max_sigma**2) - 1) / (jnp.exp(mu_0**2) - 1)
-
-
-def weights_to_mu_schedule(mu: float, schedule: Array, p: float, T: int) -> Array:
-    """Convert a GDP mu parameter to a Poisson subsampling schedule.
-
-    Args:
-        mu: The mu parameter of GDP. Assumed to be a non-negative scalar.
-        schedule: A 1D array representing the initial schedule (e.g., learning rates). Assumed to be non-negative and sum to T.
-        p: The subsampling probability. Assumed to be in (0, 1).
-        T: The total number of steps. Assumed to be a positive integer.
-
-    Returns:
-        A 1D array representing the adjusted schedule.
-    """
-
-    eps = compute_eps(mu, p, T)
-    mu_0 = compute_mu_0(mu, p, T)
-
-    schedule = schedule**2 + eps
-    return jnp.sqrt(jnp.log(schedule * (jnp.exp(mu_0**2) - 1) + 1))
+        Returns:
+            A 1D array representing the adjusted schedule.
+        """
+        eps = self.compute_eps()
+        mu_0 = self.compute_mu_0()
+        return jnp.sqrt((jnp.exp(schedule**2) - 1) / (jnp.exp(mu_0**2) - 1) - eps)
 
 
-def mu_schedule_to_weights(mu: float, schedule: Array, p: float, T: int) -> Array:
-    """Convert to a Poisson subsampling schedule to vector of non-negative weights summing to T.
-    Inverse of `mu_to_poisson_subsampling_shedule`
+    def gdp_to_sigma(self, C: Array, mu: Array) -> Array:
+        """Convert GDP mu parameter to Gaussian noise scale sigma.
 
-    Args:
-        mu: The mu parameter of GDP. Assumed to be a non-negative scalar.
-        schedule: A 1D array representing the initial schedule (e.g., learning rates). Assumed to be non-negative and sum to T.
-        p: The subsampling probability. Assumed to be in (0, 1).
-        T: The total number of steps. Assumed to be a positive integer.
+        Args:
+            mu: The mu parameter of GDP. Assumed to be a non-negative array.
 
-    Returns:
-        A 1D array representing the adjusted schedule.
-    """
-    eps = compute_eps(mu, p, T)
-    mu_0 = compute_mu_0(mu, p, T)
-    return jnp.sqrt((jnp.exp(schedule**2) - 1) / (jnp.exp(mu_0**2) - 1) - eps)
+        Returns:
+            The Gaussian noise scale sigma.
+        """
 
+        return C / mu
 
-def gdp_to_sigma(mu: Array) -> Array:
-    """Convert GDP mu parameter to Gaussian noise scale sigma.
+    def weights_to_sigma_schedule(self, C: Array, weights: Array) -> Array:
+        """Convert a vector of non-negative weights summing to T to a sigma schedule for G-DP.
 
-    Args:
-        mu: The mu parameter of GDP. Assumed to be a non-negative array.
+        Args:
+            schedule: A 1D array representing the weights. Assumed to be non-negative and sum to T.
+            mu: The mu parameter of GDP. Assumed to be a non-negative float or array.
+            p: The sampling probability for poisson sampling
+            T: The number of training iterations
 
-    Returns:
-        The Gaussian noise scale sigma.
-    """
-
-    C = SingletonConfig.get_environment_config_instance().C
-    return C / mu
-
-
-def dsigma_dweight(sigmas: Array, mu, p, T) -> Array:
-    """
-    Compute ds / dp, where 's' is sigma and 'p' is the policy
-    """
-
-    mu_0 = jnp.sqrt(jnp.log(mu**2 / (p**2 * T) + 1))
-    numerator = jnp.exp(mu_0**2) - 1
-    denominator_pt1 = numerator * sigmas + 1
-    denominator_pt2 = jnp.log(denominator_pt1) ** (3 / 2)
-
-    return numerator / (2 * denominator_pt1 * denominator_pt2)
+        Returns:
+            The Gaussian noise scale sigma.
+        """
+        mu_schedule = self.weights_to_mu_schedule(weights)
+        mu_schedule = eqx.error_if(
+            mu_schedule, pytree_has_inf(mu_schedule), "New Sigmas has Inf!"
+        )
+        mu_schedule = eqx.error_if(mu_schedule, (mu_schedule == 0).any(), "Some mus are 0!")
+        return self.gdp_to_sigma(C, mu_schedule)
 
 
-def weights_to_sigma_schedule(weights: Array, mu: Array, p: Array, T: Array) -> Array:
-    """Convert a vector of non-negative weights summing to T to a sigma schedule for G-DP.
+    def sigma_schedule_to_weights(self, C: Array, schedule: Array):
+        """Convert a sigma schedule vector to a vector of non-negative weights summing to T for G-DP.
+        Inverse of `weights_to_sigma_schedule`
 
-    Args:
-        schedule: A 1D array representing the weights. Assumed to be non-negative and sum to T.
-        mu: The mu parameter of GDP. Assumed to be a non-negative float or array.
-        p: The sampling probability for poisson sampling
-        T: The number of training iterations
+        Args:
+            schedule: sigma schedule vector. Assumed to be non-negative.
+            mu: The mu parameter of GDP. Assumed to be a non-negative float or array.
+            p: The sampling probability for poisson sampling
+            T: The number of training iterations
 
-    Returns:
-        The Gaussian noise scale sigma.
-    """
-    mu_schedule = weights_to_mu_schedule(mu, weights, p, T)
-    mu_schedule = eqx.error_if(
-        mu_schedule, pytree_has_inf(mu_schedule), "New Sigmas has Inf!"
-    )
-    mu_schedule = eqx.error_if(mu_schedule, (mu_schedule == 0).any(), "Some mus are 0!")
-    return gdp_to_sigma(mu_schedule)
+        Returns:
+            The Gaussian noise scale sigma.
+        """
+        return self.mu_schedule_to_weights(C / schedule)
 
 
-def sigma_schedule_to_weights(schedule: Array, mu, p, T):
-    """Convert a sigma schedule vector to a vector of non-negative weights summing to T for G-DP.
-    Inverse of `weights_to_sigma_schedule`
+    # TODO: Move projection into the gradient computation
+    def project_weights(self, weights: Array) -> Array:
+        """
+        W: in the form w**2 + eps
+        """
+        eps = self.compute_eps()
 
-    Args:
-        schedule: sigma schedule vector. Assumed to be non-negative.
-        mu: The mu parameter of GDP. Assumed to be a non-negative float or array.
-        p: The sampling probability for poisson sampling
-        T: The number of training iterations
+        # project to l2 ball
+        mu_0 = self.compute_mu_0()
+        l2_ball_radius = jnp.sqrt(self.mu**2 / (self.p**2 * (jnp.exp(mu_0**2) - 1)) - self.T * eps)
+        projected_weights = optax.projections.projection_l2_ball(
+            weights, scale=l2_ball_radius
+        )
 
-    Returns:
-        The Gaussian noise scale sigma.
-    """
-    C = SingletonConfig.get_environment_config_instance().C
-    mus = C / schedule
-    return mu_schedule_to_weights(mu, mus, p, T)
-
-
-# TODO: Move projection into the gradient computation
-def project_weights(weights: Array, mu: Array, p: Array, T: Array) -> Array:
-    """
-    W: in the form w**2 + eps
-    """
-    eps = compute_eps(mu, p, T)
-
-    # project to l2 ball
-    mu_0 = compute_mu_0(mu, p, T)
-    l2_ball_radius = jnp.sqrt(mu**2 / (p**2 * (jnp.exp(mu_0**2) - 1)) - T * eps)
-    projected_weights = optax.projections.projection_l2_ball(
-        weights, scale=l2_ball_radius
-    )
-
-    return projected_weights
+        return projected_weights

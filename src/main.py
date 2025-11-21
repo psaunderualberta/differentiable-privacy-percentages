@@ -18,13 +18,7 @@ from conf.singleton_conf import SingletonConfig
 from environments.dp import train_with_noise, lookahead_train_with_noise
 from environments.dp_params import DP_RL_Params
 from networks.net_factory import net_factory
-from privacy.gdp_privacy import (
-    approx_to_gdp,
-    project_weights,
-    weights_to_sigma_schedule,
-    weights_to_mu_schedule,
-    sigma_schedule_to_weights
-)
+from privacy.gdp_privacy import GDPPrivacyParameters
 from privacy.noise_schedules import AbstractNoiseSchedule, LinearInterpSigmaNoiseSchedule, LinearInterpPolicyNoiseSchedule
 from util.baselines import Baseline
 from util.dataloaders import DATALOADERS
@@ -48,9 +42,11 @@ def main():
 
     epsilon = sweep_config.env.eps
     delta = sweep_config.env.delta
-    mu_tot = approx_to_gdp(epsilon, delta)
     p = sweep_config.env.batch_size / X.shape[0]  # Assuming MNIST dataset size
     T = environment_config.max_steps_in_episode
+    gdp_params = GDPPrivacyParameters(epsilon, delta, p, T)
+    mu_tot = gdp_params.mu
+
     print("Privacy parameters:")
     print(f"\t(epsilon, delta)-DP: ({epsilon}, {delta})")
     print(f"\tmu-GDP: {mu_tot}")
