@@ -19,7 +19,8 @@ from environments.dp import train_with_noise, lookahead_train_with_noise
 from environments.dp_params import DP_RL_Params
 from networks.net_factory import net_factory
 from privacy.gdp_privacy import GDPPrivacyParameters
-from privacy.noise_schedules import AbstractNoiseSchedule, LinearInterpSigmaNoiseSchedule, LinearInterpPolicyNoiseSchedule
+from privacy.base_schedules import ClippedSchedule, ExponentialSchedule, InterpolatedClippedSchedule, InterpolatedExponentialSchedule
+from privacy.schedules import SigmaAndClipSchedule, PolicyAndClipSchedule, AbstractNoiseAndClipSchedule
 from util.baselines import Baseline
 from util.dataloaders import DATALOADERS
 from util.logger import WandbTableLogger
@@ -54,7 +55,13 @@ def main():
     # Initialize Policy model
     keypoints = jnp.arange(0, T + 1, step=50, dtype=jnp.int32)
     values = jnp.ones_like(keypoints, dtype=jnp.float32)
-    policy = LinearInterpSigmaNoiseSchedule(keypoints=keypoints, values=values, T=T)
+    policy_schedule = InterpolatedClippedSchedule(keypoints=keypoints.copy(), values=values.copy(), T=T)
+    clip_schedule = InterpolatedExponentialSchedule(keypoints=keypoints.copy(), values=jnp.zeros_like(values), T=T)
+    schedule = PolicyAndClipSchedule(
+        policy_schedule=policy_schedule,
+        clip_schedule=clip_schedule,
+        privacy_params=gdp_params,
+    )
     policy_batch_size = sweep_config.policy.batch_size
 
     private_network_arch = net_factory(
@@ -79,12 +86,14 @@ def main():
             "losses": ["step", "losses"],
             "accuracies": ["step", "accuracies"],
             "actions": ["step", *(str(step) for step in range(T))],
+            "clips": ["step", *(str(step) for step in range(T))],
         },
         {
             "policy": total_timesteps // sweep_config.plotting_steps,
             "actions": total_timesteps // sweep_config.plotting_steps,
             "losses": total_timesteps // sweep_config.plotting_steps,
             "accuracies": total_timesteps // sweep_config.plotting_steps,
+            "clips": total_timesteps // sweep_config.plotting_steps,
         },
     )
 
@@ -114,21 +123,16 @@ def main():
         check_rep=False,
     )
     def get_policy_loss(
-        schedule: AbstractNoiseSchedule,
+        schedule: AbstractNoiseAndClipSchedule,
         mb_key: PRNGKeyArray,
         init_key: PRNGKeyArray,
         noise_keys: PRNGKeyArray,
     ) -> tuple[Array, tuple[Array, Array, Array]]:
         """Calculate the policy loss."""
-        sigmas = schedule.get_private_sigmas(mu_tot, p, T)
-
-        # Ensure privacy loss on each iteration is a real number (i.e. \sigma > 0)
-        sigmas = eqx.error_if(sigmas, jnp.any(sigmas <= 0), "Some sigmas are <= zero!")
-        sigmas = ensure_valid_pytree(sigmas, "sigmas in get_policy_loss")
 
         # Train all networks
         _, to_diff, losses, accuracies, val_acc = vmapped_train_with_noise(
-            sigmas, env_params, mb_key, init_key, noise_keys
+            schedule, env_params, mb_key, init_key, noise_keys
         )
 
         # Average over all shard-mapped networks
@@ -143,7 +147,7 @@ def main():
         return to_diff, (losses, accuracies, val_acc)
 
     optimizer = optax.sgd(learning_rate=sweep_config.policy.lr.sample())
-    opt_state = optimizer.init(policy)  # type: ignore
+    opt_state = optimizer.init(schedule)  # type: ignore
 
     iterator = tqdm.tqdm(
         range(total_timesteps), desc="Training Progress", total=total_timesteps
@@ -158,17 +162,19 @@ def main():
             key, _ = jr.split(key)
 
             # Log policy & sigmas for this iteration
-            sigmas = policy.get_private_sigmas(mu_tot, p, T)
-            schedule = policy.get_private_schedule(mu_tot, p, T)
-            _ = logger.log_array("policy", schedule, timestep_dict, plot=True)
+            sigmas = schedule.get_private_sigmas()
+            clips = schedule.get_private_clips()
+            policy = schedule.get_private_weights()
+            _ = logger.log_array("policy", policy, timestep_dict, plot=True)
             _ = logger.log_array("actions", sigmas, timestep_dict, plot=True)
+            _ = logger.log_array("clips", clips, timestep_dict, plot=True)
 
             # Get policy loss
             key, mb_key, noise_key = jr.split(key, 3)
             if not sweep_config.train_on_single_network:
                 key, init_key = jr.split(key)
             (loss, (losses, accuracies, val_accs)), grads = get_policy_loss(
-                policy, mb_key, init_key, jr.split(noise_key, policy_batch_size)
+                schedule, mb_key, init_key, jr.split(noise_key, policy_batch_size)
             )
 
             # Log iteration results to file
@@ -182,21 +188,25 @@ def main():
             loss = ensure_valid_pytree(loss, "loss in main")
 
             # Update policy
-            updates, opt_state = optimizer.update(grads, opt_state, policy)
-            policy = eqx.apply_updates(policy, updates)
+            updates, opt_state = optimizer.update(grads, opt_state, schedule)
+            schedule = eqx.apply_updates(schedule, updates)
 
             # Ensure no Infs or NaNs were introduced
-            policy = ensure_valid_pytree(policy, "policy in main")
+            schedule = ensure_valid_pytree(schedule, "policy in main")
 
             # self-explanatory
             iterator.set_description(f"Training Progress - Loss: {loss:.4f}")
 
     except Exception as e:
-        sigmas = policy.get_private_sigmas(mu_tot, p, T)
-        schedule = policy.get_private_schedule(mu_tot, p, T)
-        _ = logger.log_array("policy", schedule, timestep_dict, force=True, plot=True)
+        sigmas = schedule.get_private_sigmas()
+        clips = schedule.get_private_clips()
+        policy = schedule.get_private_weights()
+        _ = logger.log_array("policy", policy, timestep_dict, force=True, plot=True)
         _ = logger.log_array(
             "actions", sigmas, timestep_dict, force=True, plot=True
+        )
+        _ = logger.log_array(
+            "clips", clips, timestep_dict, force=True, plot=True
         )
 
         print("WARNING: Error raised during training: ")
@@ -211,10 +221,10 @@ def main():
 
     # Generate baseline if directed
     if sweep_config.with_baselines:
-        baseline = Baseline(env_params, mu_tot, eval_num_iterations)
+        baseline = Baseline(env_params, gdp_params, eval_num_iterations)
         _ = baseline.generate_baseline_data(eval_key)
-        sigmas = policy.get_private_sigmas(mu_tot, p, T)
-        eval_df = baseline.generate_schedule_data(sigmas, "Learned Policy", eval_key)
+        sigmas = schedule.get_private_sigmas()
+        eval_df = baseline.generate_schedule_data(schedule, "Learned Policy", eval_key)
         final_loss_fig = baseline.baseline_comparison_final_loss_plotter(eval_df)
         accuracy_fig = baseline.baseline_comparison_accuracy_plotter(eval_df)
         wandb.log(
@@ -225,7 +235,7 @@ def main():
         )
 
     # Cleanup, finish wandb run
-    for multi_line_table_name in ["actions", "policy"]:
+    for multi_line_table_name in ["actions", "policy", "clips"]:
         logger.line_plot(multi_line_table_name)
     for bulk_line_table_name in ["losses", "accuracies"]:
         logger.bulk_line_plots(bulk_line_table_name)

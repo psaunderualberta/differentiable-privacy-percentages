@@ -9,16 +9,18 @@ import tqdm
 import equinox as eqx
 
 from environments.dp import DP_RL_Params
+from privacy.schedules import AbstractNoiseAndClipSchedule, PolicyAndClipSchedule
+from privacy.base_schedules import ClippedSchedule, ExponentialSchedule
+from privacy.gdp_privacy import GDPPrivacyParameters
 from environments.dp import train_with_noise
-from privacy.gdp_privacy import weights_to_sigma_schedule
 
 
 file_location = os.path.abspath(os.path.dirname(__file__))
 
 
 class Baseline:
-    def __init__(self, env_params: DP_RL_Params, mu: float, num_reps: int = 8):
-        self.mu: float = mu
+    def __init__(self, env_params: DP_RL_Params, privacy_params: GDPPrivacyParameters, num_reps: int = 8):
+        self.privacy_params = privacy_params
         assert len(env_params.X.shape) >= 1
         self.p: float = env_params.dummy_batch.size / env_params.X.shape[0]
         self.env_params: DP_RL_Params = env_params
@@ -30,6 +32,8 @@ class Baseline:
             "accuracy",
             "losses",
             "accuracies",
+            "actions",
+            "clips",
         ]
 
     def delete_non_baseline_data(self):
@@ -91,7 +95,7 @@ class Baseline:
 
     def generate_schedule_data(
         self,
-        sigmas: Array,
+        schedule: AbstractNoiseAndClipSchedule,
         name: str,
         key: PRNGKeyArray,
         with_progress_bar: bool = True,
@@ -106,7 +110,7 @@ class Baseline:
             key, mb_key, init_key = jr.split(key, 3)
             key, noise_key = jr.split(key)
             _, val_loss, losses, accuracies, val_acc = train_with_noise(
-                sigmas, self.env_params, mb_key, init_key, noise_key
+                schedule, self.env_params, mb_key, init_key, noise_key
             )
             df.loc[len(df)] = {  # type: ignore
                 "type": name,
@@ -115,7 +119,8 @@ class Baseline:
                 "accuracy": val_acc,
                 "losses": losses,
                 "accuracies": accuracies,
-                "actions": sigmas,
+                "actions": schedule.get_private_sigmas(),
+                "clips": schedule.get_private_clips(),
             }
 
         # Create a copy of baseline data, then another to be modified
@@ -134,12 +139,18 @@ class Baseline:
             ),
             dtype=jnp.float32,
         )
-        sigmas = weights_to_sigma_schedule(weights, self.mu, self.p, T).squeeze()
-        sigma = float(sigmas[0])
+        
+        policy_schedule = ClippedSchedule(weights.copy(), min_value=-jnp.inf)
+        clip_schedule = ClippedSchedule(weights.copy(), min_value=-jnp.inf)
+        schedule = PolicyAndClipSchedule(
+            policy_schedule, clip_schedule, self.privacy_params
+        )
+
+        sigma = float(schedule.get_private_sigmas().mean())
         name = f"Constant Noise ({round(sigma, 2)})"
 
         df = self.generate_schedule_data(
-            sigmas, name, key, with_progress_bar=with_progress_bar
+            schedule, name, key, with_progress_bar=with_progress_bar
         )
 
         self.original_df = df

@@ -32,7 +32,7 @@ def sample_batch_uniform(
 
 
 @eqx.filter_jit
-def clip_grads_abadi(grads: eqx.Module, C: float) -> eqx.Module:
+def clip_grads_abadi(grads: eqx.Module, C: Array) -> eqx.Module:
     # https://github.com/google-deepmind/optax/blob/main/optax/contrib/_privacy.py#L35#L87
     grads_flat, grads_treedef = jax.tree.flatten(grads)
 
@@ -120,14 +120,14 @@ def reinit_model(model: eqx.Module, key: PRNGKeyArray) -> eqx.Module:
 
 @eqx.filter_jit
 def get_spherical_noise(
-    grads: eqx.Module, action: float | Array, key: PRNGKeyArray
+    grads: eqx.Module, action: float | Array, clip: float | Array, key: PRNGKeyArray
 ) -> eqx.Module:
     batch_size = SingletonConfig.get_environment_config_instance().batch_size
 
     def f(g: eqx.Module | None, k: PRNGKeyArray):
         if g is None:
             return g
-        return action * jax.random.normal(k, g.shape, g.dtype) / batch_size
+        return clip * action * jax.random.normal(k, g.shape, g.dtype) / batch_size
 
     return jt.map(f, grads, pytree_keys(grads, key))
 
