@@ -9,7 +9,7 @@ import tqdm
 import equinox as eqx
 
 from environments.dp import DP_RL_Params
-from privacy.schedules import AbstractNoiseAndClipSchedule, PolicyAndClipSchedule
+from privacy.schedules import AbstractNoiseAndClipSchedule, PolicyAndClipSchedule, NonPrivateSchedule
 from privacy.base_schedules import ClippedSchedule, ExponentialSchedule
 from privacy.gdp_privacy import GDPPrivacyParameters
 from environments.dp import train_with_noise
@@ -19,7 +19,12 @@ file_location = os.path.abspath(os.path.dirname(__file__))
 
 
 class Baseline:
-    def __init__(self, env_params: DP_RL_Params, privacy_params: GDPPrivacyParameters, num_reps: int = 8):
+    def __init__(
+        self,
+        env_params: DP_RL_Params,
+        privacy_params: GDPPrivacyParameters,
+        num_reps: int = 8,
+    ):
         self.privacy_params = privacy_params
         assert len(env_params.X.shape) >= 1
         self.p: float = env_params.dummy_batch.size / env_params.X.shape[0]
@@ -56,18 +61,24 @@ class Baseline:
 
     def baseline_comparison_final_loss_plotter(self, df=None):
         df = self.combine_dataset(df)
-        return px.violin(
+        return px.box(
             df,
             x="type",
             y="loss",
             title="Final Loss Violin Plot",
-            box=True,
+            points="all",
+            notched=True,
         )
 
     def baseline_comparison_accuracy_plotter(self, df=None):
         df = self.combine_dataset(df)
-        return px.violin(
-            df, x="type", y="accuracy", title="Accuracy Violin Plot", box=True
+        return px.box(
+            df,
+            x="type",
+            y="accuracy",
+            title="Accuracy Violin Plot",
+            points="all",
+            notched=True,
         )
 
     def create_baseline_figures(self, save_figs=False):
@@ -139,7 +150,7 @@ class Baseline:
             ),
             dtype=jnp.float32,
         )
-        
+
         policy_schedule = ClippedSchedule(weights.copy(), min_value=-jnp.inf)
         clip_schedule = ClippedSchedule(weights.copy(), min_value=-jnp.inf)
         schedule = PolicyAndClipSchedule(

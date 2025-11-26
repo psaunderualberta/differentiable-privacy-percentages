@@ -53,10 +53,10 @@ def main():
     print(f"\tmu-GDP: {mu_tot}")
 
     # Initialize Policy model
-    keypoints = jnp.arange(0, T + 1, step=50, dtype=jnp.int32)
-    values = jnp.ones_like(keypoints, dtype=jnp.float32)
-    policy_schedule = InterpolatedClippedSchedule(keypoints=keypoints.copy(), values=values.copy(), T=T)
-    clip_schedule = InterpolatedExponentialSchedule(keypoints=keypoints.copy(), values=jnp.zeros_like(values), T=T)
+    keypoints = jnp.arange(0, T + 1, step=T // 50, dtype=jnp.int32)
+    values = jnp.ones_like(keypoints, dtype=jnp.float32) * 5.0
+    policy_schedule = InterpolatedClippedSchedule(keypoints.copy(), values=values.copy(), T=T)
+    clip_schedule = InterpolatedClippedSchedule(keypoints=keypoints.copy(), values=values.copy(), T=T)
     schedule = PolicyAndClipSchedule(
         policy_schedule=policy_schedule,
         clip_schedule=clip_schedule,
