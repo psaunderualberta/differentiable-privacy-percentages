@@ -166,10 +166,10 @@ class GDPPrivacyParameters(eqx.Module):
         """
         eps = self.compute_eps()
 
-        # project to l2 ball
-        l2_ball_radius = jnp.sqrt(self.mu**2 / (self.p**2 * (jnp.exp(self.mu_0**2) - 1)) - self.T * eps)
-        projected_weights = optax.projections.projection_l2_ball(
-            weights, scale=l2_ball_radius
+        # project to l2 sphere
+        l2_sphere_radius = jnp.sqrt(self.mu**2 / (self.p**2 * (jnp.exp(self.mu_0**2) - 1)) - self.T * eps)
+        projected_weights = optax.projections.projection_l2_sphere(
+            weights, scale=l2_sphere_radius
         )
 
         return projected_weights

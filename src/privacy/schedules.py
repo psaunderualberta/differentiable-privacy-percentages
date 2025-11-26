@@ -12,9 +12,11 @@ class AbstractNoiseAndClipSchedule(eqx.Module):
             "Subclasses must implement get_private_sigmas method."
         )
 
+    @abstractmethod
     def get_private_clips(self) -> Array:
         raise NotImplementedError("Subclasses must implement get_private_clips method.")
 
+    @abstractmethod
     def get_private_weights(self) -> Array:
         raise NotImplementedError(
             "Subclasses must implement get_private_weights method."

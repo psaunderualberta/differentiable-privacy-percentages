@@ -9,7 +9,7 @@ import tqdm
 import equinox as eqx
 
 from environments.dp import DP_RL_Params
-from privacy.schedules import AbstractNoiseAndClipSchedule, PolicyAndClipSchedule, NonPrivateSchedule
+from privacy.schedules import AbstractNoiseAndClipSchedule, PolicyAndClipSchedule 
 from privacy.base_schedules import ClippedSchedule, ExponentialSchedule
 from privacy.gdp_privacy import GDPPrivacyParameters
 from environments.dp import train_with_noise

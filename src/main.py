@@ -54,9 +54,9 @@ def main():
 
     # Initialize Policy model
     keypoints = jnp.arange(0, T + 1, step=T // 50, dtype=jnp.int32)
-    values = jnp.ones_like(keypoints, dtype=jnp.float32) * 5.0
-    policy_schedule = InterpolatedClippedSchedule(keypoints.copy(), values=values.copy(), T=T)
-    clip_schedule = InterpolatedClippedSchedule(keypoints=keypoints.copy(), values=values.copy(), T=T)
+    values = jnp.zeros_like(keypoints, dtype=jnp.float32)
+    policy_schedule = InterpolatedExponentialSchedule(keypoints.copy(), values=values.copy(), T=T)
+    clip_schedule = InterpolatedExponentialSchedule(keypoints=keypoints.copy(), values=values.copy(), T=T)
     schedule = PolicyAndClipSchedule(
         policy_schedule=policy_schedule,
         clip_schedule=clip_schedule,
@@ -198,22 +198,21 @@ def main():
             iterator.set_description(f"Training Progress - Loss: {loss:.4f}")
 
     except Exception as e:
-        sigmas = schedule.get_private_sigmas()
-        clips = schedule.get_private_clips()
-        policy = schedule.get_private_weights()
-        _ = logger.log_array("policy", policy, timestep_dict, force=True, plot=True)
-        _ = logger.log_array(
-            "actions", sigmas, timestep_dict, force=True, plot=True
-        )
-        _ = logger.log_array(
-            "clips", clips, timestep_dict, force=True, plot=True
-        )
-
-        print("WARNING: Error raised during training: ")
-        print(e.args[0])
+        print("WARNING: Error raised during training: ", e.args[0])
 
         if not isinstance(e, KeyboardInterrupt):
             raise e
+
+    sigmas = schedule.get_private_sigmas()
+    clips = schedule.get_private_clips()
+    policy = schedule.get_private_weights()
+    _ = logger.log_array("policy", policy, timestep_dict, force=True, plot=True)
+    _ = logger.log_array(
+        "actions", sigmas, timestep_dict, force=True, plot=True
+    )
+    _ = logger.log_array(
+        "clips", clips, timestep_dict, force=True, plot=True
+    )
 
     # Generate final results with lots of iterations
     eval_num_iterations = 100
