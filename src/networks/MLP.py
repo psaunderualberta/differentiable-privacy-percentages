@@ -8,7 +8,7 @@ import jax.random as jr
 import optax
 
 from conf.config import MLPConfig
-from networks.util import Network, ReLU, Linear
+from networks.util import Network, Linear
 
 
 class MLP(eqx.Module, Network):
@@ -21,30 +21,34 @@ class MLP(eqx.Module, Network):
     def from_config(cls, conf: MLPConfig) -> "MLP":
         key = jr.PRNGKey(conf.key)
         key, _key = jr.split(key)
-        layer_out = conf.dhidden if conf.nhidden > 0 else conf.nclasses
-        layers: list[list[ReLU | Linear | eqx.nn.LayerNorm]] = [
+        has_hidden = len(conf.hidden_sizes) > 0
+        layer_out = conf.hidden_sizes[0] if has_hidden else conf.nclasses
+        layers = [
             [
                 Linear(conf.din, layer_out, key=_key, initialization=conf.initialization),
                 eqx.nn.LayerNorm(layer_out)
             ]
         ]
 
-        if conf.nhidden > 0:
-            for _ in range(conf.nhidden - 1):
+        layer_in = layer_out
+        if has_hidden:
+            for layer_out in conf.hidden_sizes[1:]:
                 key, _key = jr.split(key)
                 layers.append(
                     [
-                        ReLU(),
-                        Linear(conf.dhidden, conf.dhidden, key=_key, initialization=conf.initialization),
-                        eqx.nn.LayerNorm(conf.dhidden)
+                        jax.nn.tanh,
+                        Linear(layer_in, layer_out, key=_key, initialization=conf.initialization),
+                        eqx.nn.LayerNorm(layer_out)
                     ]
                 )
+
+                layer_in = layer_out
 
             key, _key = jr.split(key)
             layers.append(
                 [
-                    ReLU(),
-                    Linear(conf.dhidden, conf.nclasses, key=_key, initialization=conf.initialization),
+                    jax.nn.tanh,
+                    Linear(layer_out, conf.nclasses, key=_key, initialization=conf.initialization),
                 ]
             )
 

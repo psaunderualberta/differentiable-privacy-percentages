@@ -57,8 +57,7 @@ class MLPConfig:
     """Configuration for Multi-Layer Perceptron"""
 
     din: int = -1  # Value is derived from data
-    dhidden: int = 32  # Size of hidden layers
-    nhidden: int = 1  # Number of hidden layers
+    hidden_sizes: tuple[int, ...] = (32,)  # Size of hidden layers
     nclasses: int = -1  # Value is derived from data
     initialization: Literal["glorot", "zeros"] = "glorot"
     key: int = 0  # Overridden as derivative from experiment.env_prng_key
@@ -82,11 +81,12 @@ class CNNConfig:
     mlp: MLPConfig
 
     # conv config params
+    channels: tuple[int, ...] = (16, 32)  # Number of channels in each conv layer
     nchannels: int = -1  # Number of input channels, derived from data
-    kernel_size: int = 3  # Edge Length of kernel
+    kernel_sizes: tuple[int, ...] = (8, 4)  # Kernel sizes for each conv layer
+    paddings: tuple[int, ...] = (2, 0)  # Padding for each conv layer
+    strides: tuple[int, ...] = (2, 2)  # Stride
     pool_kernel_size: int = 2  # Edge length of pooling kernel
-    hidden_channels: int = 3  # Number of hidden channels
-    nhidden_conv: int = 1  # Number of hidden convolution layers
     key: int = 0  # Overridden as derivative from experiment.env_prng_key
 
     # dummy item, used to determine MLP input shape

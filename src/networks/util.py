@@ -6,15 +6,9 @@ import jax.random as jr
 from typing import Sequence
 from jaxtyping import Array, PRNGKeyArray
 from jax.experimental import checkify
-from jax import vmap, jit
 
 class Network:
     pass
-
-
-class ReLU(eqx.Module):
-    def __call__(self, x: chex.Array):
-        return jnp.maximum(x, 0.0)
 
 
 class Flatten(eqx.Module):

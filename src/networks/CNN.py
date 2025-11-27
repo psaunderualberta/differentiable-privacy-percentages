@@ -8,7 +8,7 @@ import jax.random as jr
 import optax
 
 from conf.config import CNNConfig
-from networks.util import Network, ReLU
+from networks.util import Network 
 from dataclasses import replace
 from networks.MLP import MLP
 
@@ -28,24 +28,36 @@ class CNN(eqx.Module, Network):
         key = jr.PRNGKey(conf.key)
         in_channels = conf.nchannels
         blocks = []
-        for _ in range(conf.nhidden_conv):
+        assert (
+            len(conf.channels)
+            == len(conf.kernel_sizes)
+            == len(conf.paddings)
+            == len(conf.strides)
+        ), "channels and kernel_sizes must have the same length!"
+
+        for out_channels, kernel_size, padding, stride in zip(
+            conf.channels, conf.kernel_sizes, conf.paddings, conf.strides
+        ):
             key, _key = jr.split(key)
             new_layer = [
                 eqx.nn.Conv2d(
-                    in_channels, conf.hidden_channels, conf.kernel_size, key=_key
+                    in_channels,
+                    out_channels,
+                    kernel_size,
+                    padding=padding,
+                    stride=stride,
+                    key=_key,
                 ),
-                ReLU(),
+                jax.nn.tanh,
                 eqx.nn.MaxPool2d(
-                    kernel_size=conf.kernel_size,
+                    kernel_size=conf.pool_kernel_size,
                 ),
             ]
 
-            in_channels = conf.hidden_channels
+            in_channels = out_channels
             blocks.append(new_layer)
 
         blocks.append([CNN.__ravel()])
-
-        in_channels = conf.hidden_channels
 
         cnn_wo_mlp = CNN(blocks)
         assert conf.dummy_data is not None, (
@@ -74,6 +86,8 @@ class CNN(eqx.Module, Network):
                             out_channels=layer.out_channels,
                             kernel_size=layer.kernel_size,
                             key=_key,
+                            padding=layer.padding,
+                            stride=layer.stride,
                         )
                     )
                 elif isinstance(layer, MLP):
