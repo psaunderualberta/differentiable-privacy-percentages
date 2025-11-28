@@ -16,10 +16,6 @@ from networks.MLP import MLP
 class CNN(eqx.Module, Network):
     layers: list
 
-    class __ravel(eqx.Module):
-        def __call__(self, x):
-            return jnp.ravel(x)
-
     def __init__(self, layers: List[Any]):
         self.layers = layers
 
@@ -57,7 +53,8 @@ class CNN(eqx.Module, Network):
             in_channels = out_channels
             blocks.append(new_layer)
 
-        blocks.append([CNN.__ravel()])
+        # Flatten into vector for MLP
+        blocks.append([jnp.ravel])
 
         cnn_wo_mlp = CNN(blocks)
         assert conf.dummy_data is not None, (

@@ -1,5 +1,4 @@
 from dataclasses import replace
-from typing import Tuple
 from jax import numpy as jnp
 
 from conf.config import CNNConfig, MLPConfig
@@ -8,8 +7,8 @@ from networks.CNN import CNN
 
 
 def net_factory(
-    input_shape: Tuple[int, ...],
-    output_shape: Tuple[int, ...],
+    input_shape: tuple[int, ...],
+    output_shape: tuple[int, ...],
     conf: MLPConfig | CNNConfig,
 ):
     assert len(input_shape) >= 2, "Input shape must have at least 2 dimensions"

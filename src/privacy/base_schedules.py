@@ -15,7 +15,16 @@ class AbstractSchedule(eqx.Module):
     @abc.abstractmethod
     def get_raw_schedule(self) -> Array:
         raise NotImplementedError(
-            "Subclasses must implement get_private_schedule method."
+            "Subclasses must implement get_raw_schedule method."
+        )
+
+    @classmethod
+    @abc.abstractmethod
+    def from_projection(
+        cls, schedule: "AbstractSchedule", projection: Array
+    ) -> "AbstractSchedule":
+        raise NotImplementedError(
+            "Subclasses must implement 'from_projection' class method."
         )
 
 
@@ -33,6 +42,12 @@ class ClippedSchedule(AbstractSchedule):
     def get_raw_schedule(self) -> Array:
         return self.schedule
 
+    @classmethod
+    def from_projection(
+        cls, schedule: "ClippedSchedule", projection: Array
+    ) -> "ClippedSchedule":
+        return ClippedSchedule(schedule=projection, min_value=schedule.min_value)
+
 
 class ExponentialSchedule(AbstractSchedule):
     schedule: Array
@@ -41,10 +56,17 @@ class ExponentialSchedule(AbstractSchedule):
         self.schedule = schedule
 
     def get_valid_schedule(self) -> Array:
-        return jnp.exp(self.schedule)
+        return jnp.log(jnp.exp(self.schedule) + 1)
 
     def get_raw_schedule(self) -> Array:
         return self.schedule
+
+    @classmethod
+    def from_projection(
+        cls, schedule: "ExponentialSchedule", projection: Array
+    ) -> "ExponentialSchedule":
+        reset_projection = jnp.log(jnp.exp(projection) - 1 + 1e-6)
+        return ExponentialSchedule(schedule=reset_projection)
 
 
 class InterpolatedClippedSchedule(AbstractSchedule):
@@ -68,6 +90,17 @@ class InterpolatedClippedSchedule(AbstractSchedule):
     def get_raw_schedule(self) -> Array:
         return jnp.interp(self.points, jlax.stop_gradient(self.keypoints), self.values)
 
+    @classmethod
+    def from_projection(
+        cls, schedule: "InterpolatedClippedSchedule", projection: Array
+    ) -> "InterpolatedClippedSchedule":
+        return InterpolatedClippedSchedule(
+            keypoints=schedule.keypoints,
+            values=projection[schedule.keypoints.astype(int)],
+            T=len(schedule.points),
+            eps=schedule.eps,
+        )
+
 
 class InterpolatedExponentialSchedule(AbstractSchedule):
     keypoints: Array
@@ -81,8 +114,19 @@ class InterpolatedExponentialSchedule(AbstractSchedule):
 
     def get_valid_schedule(self) -> Array:
         return jnp.interp(
-            self.points, jlax.stop_gradient(self.keypoints), jnp.exp(self.values)
+            self.points, jlax.stop_gradient(self.keypoints), jnp.log(jnp.exp(self.values) + 1)
         )
 
     def get_raw_schedule(self) -> Array:
         return jnp.interp(self.points, jlax.stop_gradient(self.keypoints), self.values)
+
+    @classmethod
+    def from_projection(
+        cls, schedule: "InterpolatedExponentialSchedule", projection: Array
+    ) -> "InterpolatedExponentialSchedule":
+        reset_projection = jnp.log(jnp.exp(projection) - 1 + 1e-6)
+        return InterpolatedExponentialSchedule(
+            keypoints=schedule.keypoints,
+            values=reset_projection[schedule.keypoints.astype(int)],
+            T=len(schedule.points),
+        )

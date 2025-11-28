@@ -22,6 +22,12 @@ class AbstractNoiseAndClipSchedule(eqx.Module):
             "Subclasses must implement get_private_weights method."
         )
 
+    @classmethod
+    @abstractmethod
+    def project(cls, schedule: "AbstractNoiseAndClipSchedule") -> "AbstractNoiseAndClipSchedule":
+        raise NotImplementedError(
+            "Subclasses must implement 'project' class method."
+        )
 
 class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
     noise_schedule: AbstractSchedule
@@ -39,15 +45,7 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         self.privacy_params = privacy_params
 
     def get_private_sigmas(self) -> Array:
-        clips = self.clip_schedule.get_valid_schedule()
-        noises = self.noise_schedule.get_valid_schedule()
-
-        weights = self.privacy_params.sigma_schedule_to_weights(clips, noises)
-        proj_weights = self.privacy_params.project_weights(weights)
-        private_sigmas = self.privacy_params.weights_to_sigma_schedule(
-            clips, proj_weights
-        )
-        return private_sigmas.squeeze()
+        return self.noise_schedule.get_valid_schedule().squeeze()
 
     def get_private_clips(self) -> Array:
         return self.clip_schedule.get_valid_schedule().squeeze()
@@ -57,7 +55,33 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         clips = self.get_private_clips()
 
         weights = self.privacy_params.sigma_schedule_to_weights(clips, private_sigmas)
-        return weights.squeeze()
+        proj_weights = self.privacy_params.project_weights(weights)
+        return proj_weights.squeeze()
+
+    @classmethod
+    def project(
+        cls, schedule: "SigmaAndClipSchedule"
+    ) -> "SigmaAndClipSchedule":
+        if not isinstance(schedule, SigmaAndClipSchedule):
+            raise ValueError(
+                "Input schedule must be an instance of SigmaAndClipSchedule."
+            )
+        private_weights = schedule.get_private_weights()
+        private_clips = schedule.get_private_clips()
+
+        new_noises = schedule.privacy_params.weights_to_sigma_schedule(
+            private_clips, private_weights
+        )
+
+        new_noise_schedule = schedule.noise_schedule.__class__.from_projection(
+            schedule.noise_schedule, new_noises
+        )
+
+        return SigmaAndClipSchedule(
+            noise_schedule=new_noise_schedule,
+            clip_schedule=schedule.clip_schedule,
+            privacy_params=schedule.privacy_params,
+        )
 
 
 class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
@@ -79,9 +103,8 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
         clips = self.clip_schedule.get_valid_schedule()
         policies = self.policy_schedule.get_valid_schedule()
 
-        proj_weights = self.privacy_params.project_weights(policies)
         private_sigmas = self.privacy_params.weights_to_sigma_schedule(
-            clips, proj_weights
+            clips, policies
         )
         return private_sigmas.squeeze()
 
@@ -92,3 +115,23 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
         weights = self.policy_schedule.get_valid_schedule()
         proj_weights = self.privacy_params.project_weights(weights)
         return proj_weights.squeeze()
+
+    @classmethod
+    def project(
+        cls, schedule: "PolicyAndClipSchedule"
+    ) -> "PolicyAndClipSchedule":
+        if not isinstance(schedule, PolicyAndClipSchedule):
+            raise ValueError(
+                "Input schedule must be an instance of PolicyAndClipSchedule."
+            )
+
+        private_weights = schedule.get_private_weights()
+        new_policy_schedule = schedule.policy_schedule.__class__.from_projection(
+            schedule.policy_schedule, private_weights
+        )
+
+        return PolicyAndClipSchedule(
+            policy_schedule=new_policy_schedule,
+            clip_schedule=schedule.clip_schedule,
+            privacy_params=schedule.privacy_params,
+        )
