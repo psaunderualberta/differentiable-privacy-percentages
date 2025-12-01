@@ -211,6 +211,10 @@ class SweepConfig:
     env_prng_seed: int = 42  # Environment configuration seed
     train_on_single_network: bool = False  # Train the policy on only a single network (same initialization & minibatches)
 
+    @property
+    def plotting_interval(self) -> int:
+        return max(1, self.total_timesteps // self.plotting_steps)
+
     def to_wandb_sweep(self) -> dict[str, object]:
         config = {
             "method": self.method,

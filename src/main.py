@@ -15,7 +15,7 @@ from jaxtyping import Array, PRNGKeyArray
 
 import wandb
 from conf.singleton_conf import SingletonConfig
-from environments.dp import train_with_noise, lookahead_train_with_noise
+from environments.dp import train_with_noise, lookahead_train_with_noise, get_private_model_training_schemas
 from environments.dp_params import DP_RL_Params
 from privacy.gdp_privacy import get_privacy_params
 from privacy.base_schedules import (
@@ -31,7 +31,7 @@ from privacy.schedules import (
 )
 from util.baselines import Baseline
 from util.dataloaders import get_dataset_shapes
-from util.logger import WandbTableLogger
+from util.logger import WandbTableLogger, Loggable
 from util.util import determine_optimal_num_devices, ensure_valid_pytree
 
 
@@ -73,7 +73,10 @@ def main():
     policy_batch_size = sweep_config.policy.batch_size
 
     # Initialize private environment
-    env_params = DP_RL_Params.create_direct_from_config()
+    # env_params = DP_RL_Params.create_direct_from_config()
+    # logger = WandbTableLogger()
+    # for schema in schedule.get_logging_schemas() + get_private_model_training_schemas():
+    #     logger.add_schema(schema)
 
     logger = WandbTableLogger(
         {
@@ -92,6 +95,7 @@ def main():
         },
     )
 
+    # TODO: Util function for mesh setup
     _, num_gpus = determine_optimal_num_devices(devices("gpu"), policy_batch_size)
     mesh = Mesh(devices("gpu")[:num_gpus], "x")
     vmapped_train_with_noise = eqx.filter_vmap(
@@ -122,7 +126,7 @@ def main():
         mb_key: PRNGKeyArray,
         init_key: PRNGKeyArray,
         noise_keys: PRNGKeyArray,
-    ) -> tuple[Array, tuple[Array, Array, Array]]:
+    ) -> tuple[Array, tuple[Loggable, Loggable, Array]]:
         """Calculate the policy loss."""
 
         # Train all networks
@@ -151,18 +155,13 @@ def main():
     key = jr.PRNGKey(env_prng_seed)
     key, init_key, mb_key = jr.split(key, 3)
     try:
-        for timestep in iterator:
-            timestep_dict = {"step": timestep}
+        for _ in iterator:
             # Generate random key for the current timestep
             key, _ = jr.split(key)
 
             # Log policy & sigmas for this iteration
-            sigmas = schedule.get_private_sigmas()
-            clips = schedule.get_private_clips()
-            policy = schedule.get_private_weights()
-            _ = logger.log_array("policy", policy, timestep_dict, plot=True)
-            _ = logger.log_array("actions", sigmas, timestep_dict, plot=True)
-            _ = logger.log_array("clips", clips, timestep_dict, plot=True)
+            for loggable_item in schedule.get_loggables():
+                _ = logger.log(loggable_item)
 
             # Get policy loss
             key, mb_key, noise_key = jr.split(key, 3)
@@ -173,8 +172,8 @@ def main():
             )
 
             # Log iteration results to file
-            _ = logger.log("losses", timestep_dict | {"losses": losses})
-            _ = logger.log("accuracies", timestep_dict | {"accuracies": accuracies})
+            _ = logger.log(losses)
+            _ = logger.log(accuracies)
 
             # Log metrics for monitoring run
             wandb.log({"loss": loss, "accuracy": val_accs.mean()})
@@ -201,12 +200,9 @@ def main():
         if not isinstance(e, KeyboardInterrupt):
             raise e
 
-    sigmas = schedule.get_private_sigmas()
-    clips = schedule.get_private_clips()
-    policy = schedule.get_private_weights()
-    _ = logger.log_array("policy", policy, timestep_dict, force=True, plot=True)
-    _ = logger.log_array("actions", sigmas, timestep_dict, force=True, plot=True)
-    _ = logger.log_array("clips", clips, timestep_dict, force=True, plot=True)
+    # Plot final learnables
+    for loggable_item in schedule.get_loggables(force=True):
+        _ = logger.log(loggable_item)
 
     # Generate final results with lots of iterations
     eval_num_iterations = 100
@@ -216,7 +212,6 @@ def main():
     if sweep_config.with_baselines:
         baseline = Baseline(env_params, gdp_params, eval_num_iterations)
         _ = baseline.generate_baseline_data(eval_key)
-        sigmas = schedule.get_private_sigmas()
         eval_df = baseline.generate_schedule_data(schedule, "Learned Policy", eval_key)
         final_loss_fig = baseline.baseline_comparison_final_loss_plotter(eval_df)
         accuracy_fig = baseline.baseline_comparison_accuracy_plotter(eval_df)

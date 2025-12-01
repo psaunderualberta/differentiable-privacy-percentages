@@ -23,6 +23,20 @@ from environments.losses import vmapped_loss, loss
 from privacy.schedules import AbstractNoiseAndClipSchedule
 from functools import partial
 from environments.dp_params import DP_RL_Params
+from util.logger import Loggable, LoggingSchema
+
+
+def get_private_model_training_schemas() -> list[LoggingSchema]:
+    return [
+        LoggingSchema(
+            table_name="train_loss",
+            cols=["losses"],
+        ),
+        LoggingSchema(
+            table_name="accuracy",
+            cols=["accuracies"],
+        ),
+    ]
 
 
 def training_step(
@@ -78,7 +92,7 @@ def train_with_noise(
     mb_key: PRNGKeyArray,
     init_key: PRNGKeyArray,
     noise_key: PRNGKeyArray,
-) -> tuple[eqx.Module, Array, Array, Array, Array]:
+) -> tuple[eqx.Module, Array, Loggable, Loggable, Array]:
     # Get noise and clip schedules
     noise_schedule = schedule.get_private_sigmas()
     clip_schedule = schedule.get_private_clips()
@@ -132,7 +146,17 @@ def train_with_noise(
 
     val_loss, _ = loss(network_final, params.valX, params.valy)
     val_accuracy = classification_accuracy(network_final, params.valX, params.valy)
-    return network_final, val_loss, losses, accuracies, val_accuracy
+
+    loggable_losses = Loggable(
+        table_name="train_loss",
+        data={"losses": losses},
+    )
+    loggable_accuracies = Loggable(
+        table_name="accuracy",
+        data={"accuracies": accuracies},
+    )
+
+    return network_final, val_loss, loggable_losses, loggable_accuracies, val_accuracy
 
 
 def lookahead_train_with_noise(

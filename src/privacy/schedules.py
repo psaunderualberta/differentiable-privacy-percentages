@@ -3,6 +3,8 @@ import equinox as eqx
 from jaxtyping import Array
 from privacy.gdp_privacy import GDPPrivacyParameters
 from privacy.base_schedules import AbstractSchedule
+from util.logger import Loggable, LoggableArray, LoggingSchema
+from conf.singleton_conf import SingletonConfig
 
 
 class AbstractNoiseAndClipSchedule(eqx.Module):
@@ -24,10 +26,21 @@ class AbstractNoiseAndClipSchedule(eqx.Module):
 
     @classmethod
     @abstractmethod
-    def project(cls, schedule: "AbstractNoiseAndClipSchedule") -> "AbstractNoiseAndClipSchedule":
+    def project(
+        cls, schedule: "AbstractNoiseAndClipSchedule"
+    ) -> "AbstractNoiseAndClipSchedule":
+        raise NotImplementedError("Subclasses must implement 'project' class method.")
+
+    @abstractmethod
+    def get_logging_schemas(self) -> list[LoggingSchema]:
         raise NotImplementedError(
-            "Subclasses must implement 'project' class method."
+            "Subclasses must implement get_logging_schemas method."
         )
+
+    @abstractmethod
+    def get_loggables(self, force=False) -> list[Loggable | LoggableArray]:
+        raise NotImplementedError("Subclasses must implement get_loggables method.")
+
 
 class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
     noise_schedule: AbstractSchedule
@@ -59,9 +72,7 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         return proj_weights.squeeze()
 
     @classmethod
-    def project(
-        cls, schedule: "SigmaAndClipSchedule"
-    ) -> "SigmaAndClipSchedule":
+    def project(cls, schedule: "SigmaAndClipSchedule") -> "SigmaAndClipSchedule":
         if not isinstance(schedule, SigmaAndClipSchedule):
             raise ValueError(
                 "Input schedule must be an instance of SigmaAndClipSchedule."
@@ -83,6 +94,48 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
             privacy_params=schedule.privacy_params,
         )
 
+    def get_logging_schemas(self) -> list[LoggingSchema]:
+        plot_interval = SingletonConfig.get_sweep_config_instance().plotting_interval
+        return [
+            LoggingSchema(
+                table_name="sigmas",
+                cols=[str(step) for step in range(len(self.get_private_sigmas()))],
+                freq=plot_interval,
+            ),
+            LoggingSchema(
+                table_name="clips",
+                cols=[str(step) for step in range(len(self.get_private_clips()))],
+                freq=plot_interval,
+            ),
+            LoggingSchema(
+                table_name="weights",
+                cols=[str(step) for step in range(len(self.get_private_weights()))],
+                freq=plot_interval,
+            ),
+        ]
+
+    def get_loggables(self, force=False) -> list[Loggable | LoggableArray]:
+        return [
+            LoggableArray(
+                table_name="sigmas",
+                array=self.get_private_sigmas(),
+                plot=True,
+                force=force,
+            ),
+            LoggableArray(
+                table_name="clips",
+                array=self.get_private_clips(),
+                plot=True,
+                force=force,
+            ),
+            LoggableArray(
+                table_name="weights",
+                array=self.get_private_weights(),
+                plot=True,
+                force=force,
+            ),
+        ]
+
 
 class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
     policy_schedule: AbstractSchedule
@@ -103,9 +156,7 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
         clips = self.clip_schedule.get_valid_schedule()
         policies = self.policy_schedule.get_valid_schedule()
 
-        private_sigmas = self.privacy_params.weights_to_sigma_schedule(
-            clips, policies
-        )
+        private_sigmas = self.privacy_params.weights_to_sigma_schedule(clips, policies)
         return private_sigmas.squeeze()
 
     def get_private_clips(self) -> Array:
@@ -117,9 +168,7 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
         return proj_weights.squeeze()
 
     @classmethod
-    def project(
-        cls, schedule: "PolicyAndClipSchedule"
-    ) -> "PolicyAndClipSchedule":
+    def project(cls, schedule: "PolicyAndClipSchedule") -> "PolicyAndClipSchedule":
         if not isinstance(schedule, PolicyAndClipSchedule):
             raise ValueError(
                 "Input schedule must be an instance of PolicyAndClipSchedule."
@@ -135,3 +184,41 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
             clip_schedule=schedule.clip_schedule,
             privacy_params=schedule.privacy_params,
         )
+    
+    def get_logging_schemas(self) -> list[LoggingSchema]:
+        return [
+            LoggingSchema(
+                table_name="sigmas",
+                cols=[str(step) for step in range(len(self.get_private_sigmas()))],
+            ),
+            LoggingSchema(
+                table_name="clips",
+                cols=[str(step) for step in range(len(self.get_private_clips()))],
+            ),
+            LoggingSchema(
+                table_name="weights",
+                cols=[str(step) for step in range(len(self.get_private_weights()))],
+             ),
+        ]
+
+    def get_loggables(self, force=False) -> list[Loggable | LoggableArray]:
+        return [
+            LoggableArray(
+                table_name="sigmas",
+                array=self.get_private_sigmas(),
+                plot=True,
+                force=force,
+            ),
+            LoggableArray(
+                table_name="clips",
+                array=self.get_private_clips(),
+                plot=True,
+                force=force,
+            ),
+            LoggableArray(
+                table_name="weights",
+                array=self.get_private_weights(),
+                plot=True,
+                force=force,
+            ),
+        ]
