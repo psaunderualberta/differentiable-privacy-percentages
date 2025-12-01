@@ -13,17 +13,19 @@ from conf.singleton_conf import SingletonConfig
 
 __DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
 
+
 def image_ds_saver(ds, x_file, y_file):
     # https://huggingface.co/docs/datasets/en/use_with_jax
     dds = ds.with_format("jax")
     image_key = "image" if "image" in dds.features else "img"
     images = dds[image_key]
     labels = dds["label"]
-    pd_labels = pd.Series(labels).astype(int) # type: ignore
+    pd_labels = pd.Series(labels).astype(int)  # type: ignore
     labels = jnp.asarray(pd.get_dummies(pd_labels).values).astype(jnp.float32)
 
     jnp.save(x_file, images)  # type: ignore
     jnp.save(y_file, labels)  # type: ignore
+
 
 def _dataloader_california(degree=1):
     X, y = fetch_california_housing(return_X_y=True)
@@ -47,7 +49,7 @@ def _dataloader_mnist(_=None, test=False) -> Tuple[chex.Array, chex.Array]:
         print("Downloading MNIST dataset...")
         ds = load_dataset("ylecun/mnist", split="train")
         image_ds_saver(ds, image_train_file, label_train_file)
-    
+
     if not os.path.exists(image_test_file) or not os.path.exists(label_test_file):
         print("Downloading MNIST test dataset...")
         ds = load_dataset("ylecun/mnist", split="test")
@@ -83,7 +85,7 @@ def _dataloader_cifar_10(_=None, test=False) -> Tuple[chex.Array, chex.Array]:
         print("Downloading CIFAR-10 dataset...")
         ds = load_dataset("uoft-cs/cifar10", split="train")
         image_ds_saver(ds, image_train_file, label_train_file)
-    
+
     if not os.path.exists(image_test_file) or not os.path.exists(label_test_file):
         print("Downloading CIFAR-10 test dataset...")
         ds = load_dataset("uoft-cs/cifar10", split="test")
@@ -115,7 +117,7 @@ def _dataloader_fashion_mnist(_=None, test=False) -> Tuple[chex.Array, chex.Arra
         print("Downloading fashion MNIST dataset...")
         ds = load_dataset("zalando-datasets/fashion_mnist", split="train")
         image_ds_saver(ds, image_train_file, label_train_file)
-    
+
     if not os.path.exists(image_test_file) or not os.path.exists(label_test_file):
         print("Downloading fashion MNIST test dataset...")
         ds = load_dataset("zalando-datasets/fashion_mnist", split="test")
@@ -138,7 +140,6 @@ def _dataloader_fashion_mnist(_=None, test=False) -> Tuple[chex.Array, chex.Arra
     return images, labels
 
 
-
 DATALOADERS = {
     "california": _dataloader_california,
     "mnist": _dataloader_mnist,
@@ -150,8 +151,15 @@ DATALOADERS = {
 def get_datasets():
     sweep_config = SingletonConfig.get_sweep_config_instance()
     X, y = DATALOADERS[sweep_config.dataset](sweep_config.dataset_poly_d)
-    X_test, y_test = DATALOADERS[sweep_config.dataset](sweep_config.dataset_poly_d, test=True)
+    X_test, y_test = DATALOADERS[sweep_config.dataset](
+        sweep_config.dataset_poly_d, test=True
+    )
     return X, y, X_test, y_test
+
+
+def get_dataset_shapes():
+    X, y, valX, valy = get_datasets()
+    return X.shape, y.shape, valX.shape, valy.shape
 
 
 if __name__ == "__main__":

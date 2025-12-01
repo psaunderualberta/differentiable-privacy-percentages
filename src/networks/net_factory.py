@@ -2,6 +2,8 @@ from dataclasses import replace
 from jax import numpy as jnp
 
 from conf.config import CNNConfig, MLPConfig
+from conf.singleton_conf import SingletonConfig
+from util.dataloaders import get_datasets
 from networks.MLP import MLP
 from networks.CNN import CNN
 
@@ -29,3 +31,14 @@ def net_factory(
         return CNN.from_config(conf)
 
     raise ValueError(f"Network config of type '{type(conf)}' is not recognized!")
+
+
+def net_factory_from_config():
+    X, y, _, _ = get_datasets()
+    network_conf = SingletonConfig.get_environment_config_instance().network
+
+    return net_factory(
+        input_shape=X.shape,
+        output_shape=y.shape,
+        conf=network_conf,
+    )

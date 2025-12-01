@@ -17,44 +17,53 @@ import wandb
 from conf.singleton_conf import SingletonConfig
 from environments.dp import train_with_noise, lookahead_train_with_noise
 from environments.dp_params import DP_RL_Params
-from networks.net_factory import net_factory
 from privacy.gdp_privacy import get_privacy_params
-from privacy.base_schedules import ClippedSchedule, ExponentialSchedule, InterpolatedClippedSchedule, InterpolatedExponentialSchedule
-from privacy.schedules import SigmaAndClipSchedule, PolicyAndClipSchedule, AbstractNoiseAndClipSchedule
+from privacy.base_schedules import (
+    ClippedSchedule,
+    ExponentialSchedule,
+    InterpolatedClippedSchedule,
+    InterpolatedExponentialSchedule,
+)
+from privacy.schedules import (
+    SigmaAndClipSchedule,
+    PolicyAndClipSchedule,
+    AbstractNoiseAndClipSchedule,
+)
 from util.baselines import Baseline
-from util.dataloaders import get_datasets 
+from util.dataloaders import get_dataset_shapes
 from util.logger import WandbTableLogger
 from util.util import determine_optimal_num_devices, ensure_valid_pytree
 
 
 def main():
     sweep_config = SingletonConfig.get_sweep_config_instance()
-    environment_config = SingletonConfig.get_environment_config_instance()
     wandb_config = SingletonConfig.get_wandb_config_instance()
 
     total_timesteps = sweep_config.total_timesteps
     env_prng_seed = sweep_config.env_prng_seed
 
     # Initialize dataset
-    X, y, X_test, y_test = get_datasets()
-    print(f"Dataset shape: {X.shape}, {y.shape}")
-    print(f"Test Dataset shape: {X_test.shape}, {y_test.shape}")
+    X_shape, y_shape, X_test_shape, y_test_shape = get_dataset_shapes()
+    print(f"Dataset shape: {X_shape}, {y_shape}")
+    print(f"Test Dataset shape: {X_test_shape}, {y_test_shape}")
 
-    gdp_params = get_privacy_params(X.shape[0])
-    epsilon = gdp_params.eps
-    delta = gdp_params.delta
+    # Get privacy parameters
+    gdp_params = get_privacy_params(X_shape[0])
     T = gdp_params.T
     mu_tot = gdp_params.mu
-
     print("Privacy parameters:")
-    print(f"\t(epsilon, delta)-DP: ({epsilon}, {delta})")
+    print(f"\t(epsilon, delta)-DP: ({gdp_params.eps}, {gdp_params.delta})")
     print(f"\tmu-GDP: {mu_tot}")
 
     # Initialize Policy model
     keypoints = jnp.arange(0, T + 1, step=T // 50, dtype=jnp.int32)
     values = jnp.ones_like(keypoints, dtype=jnp.float32)
-    policy_schedule = InterpolatedExponentialSchedule(keypoints.copy(), values=values.copy(), T=T)
-    clip_schedule = InterpolatedExponentialSchedule(keypoints=keypoints.copy(), values=values.copy(), T=T)
+    policy_schedule = InterpolatedExponentialSchedule(
+        keypoints.copy(), values=values.copy(), T=T
+    )
+    clip_schedule = InterpolatedExponentialSchedule(
+        keypoints=keypoints.copy(), values=values.copy(), T=T
+    )
     schedule = SigmaAndClipSchedule(
         noise_schedule=policy_schedule,
         clip_schedule=clip_schedule,
@@ -63,21 +72,8 @@ def main():
     schedule = schedule.__class__.project(schedule)
     policy_batch_size = sweep_config.policy.batch_size
 
-    private_network_arch = net_factory(
-        input_shape=X.shape,
-        output_shape=y.shape,
-        conf=sweep_config.env.network,
-    )
-
     # Initialize private environment
-    env_params = DP_RL_Params.create(
-        environment_config,
-        network_arch=private_network_arch,
-        X=X,
-        y=y,
-        valX=X_test,
-        valy=y_test,
-    )
+    env_params = DP_RL_Params.create_direct_from_config()
 
     logger = WandbTableLogger(
         {
@@ -209,12 +205,8 @@ def main():
     clips = schedule.get_private_clips()
     policy = schedule.get_private_weights()
     _ = logger.log_array("policy", policy, timestep_dict, force=True, plot=True)
-    _ = logger.log_array(
-        "actions", sigmas, timestep_dict, force=True, plot=True
-    )
-    _ = logger.log_array(
-        "clips", clips, timestep_dict, force=True, plot=True
-    )
+    _ = logger.log_array("actions", sigmas, timestep_dict, force=True, plot=True)
+    _ = logger.log_array("clips", clips, timestep_dict, force=True, plot=True)
 
     # Generate final results with lots of iterations
     eval_num_iterations = 100

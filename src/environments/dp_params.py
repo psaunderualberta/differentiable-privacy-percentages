@@ -3,6 +3,9 @@ from jaxtyping import Array
 import equinox as eqx
 from conf.config import EnvConfig
 import jax.numpy as jnp
+from util.dataloaders import get_datasets
+from conf.singleton_conf import SingletonConfig
+from networks.net_factory import net_factory_from_config
 
 
 class DP_RL_Params(eqx.Module):
@@ -19,7 +22,13 @@ class DP_RL_Params(eqx.Module):
 
     @classmethod
     def create(
-        cls, conf: EnvConfig, network_arch: Network, X: Array, y: Array, valX: Array, valy: Array
+        cls,
+        conf: EnvConfig,
+        network_arch: Network,
+        X: Array,
+        y: Array,
+        valX: Array,
+        valy: Array,
     ) -> "DP_RL_Params":
         return DP_RL_Params(
             X=X,
@@ -32,6 +41,20 @@ class DP_RL_Params(eqx.Module):
             dummy_batch=jnp.arange(conf.batch_size),
             C=conf.C,
             max_steps_in_episode=conf.max_steps_in_episode,
+        )
+
+    @classmethod
+    def create_direct_from_config(cls):
+        env_conf = SingletonConfig.get_environment_config_instance()
+        private_network_arch = net_factory_from_config()
+        X, y, valX, valy = get_datasets()
+        return cls.create(
+            env_conf,
+            network_arch=private_network_arch,
+            X=X,
+            y=y,
+            valX=valX,
+            valy=valy,
         )
 
     def __hash__(self):
