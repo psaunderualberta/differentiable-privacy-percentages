@@ -1,23 +1,17 @@
-import os
-import pickle
-from typing import Any, Callable, List, Tuple, Mapping
+from typing import Mapping
 
 from jaxtyping import Array
 import jax.numpy as jnp
 import equinox as eqx
-import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 import wandb
-from typing import Optional
-from util.baselines import Baseline
 from conf.singleton_conf import SingletonConfig
 from util.aggregators import multi_line_plotter
 
 
 class Loggable(eqx.Module):
     table_name: str
-    data: Mapping[str, int | float | Array]
+    data: dict[str, int | float | Array]
     plot: bool = False
     commit: bool = False
     force: bool = False
@@ -27,7 +21,7 @@ class Loggable(eqx.Module):
 class LoggableArray(eqx.Module):
     table_name: str
     array: Array
-    aux: Mapping[str, object] | None = None
+    aux: dict[str, object] | None = None
     plot: bool = False
     commit: bool = False
     force: bool = False
@@ -47,16 +41,11 @@ class WandbTableLogger(eqx.Module):
     freqs: dict[str, int]
     counts: dict[str, int]
 
-    def __init__(self, schemas: Mapping[str, list[str]], freqs: Mapping[str, int]):
-        super().__init__()
-        self.tables = {}
-        self.cols = {}
-        for name, cols in schemas.items():
-            self.tables[name] = wandb.Table(columns=cols, log_mode="INCREMENTAL")
-            self.cols[name] = cols
-
-        self.freqs = {name: freqs.get(name, 1) for name in schemas.keys()}
-        self.counts = {name: 0 for name in schemas.keys()}
+    def __init__(self):
+        self.tables = dict()
+        self.cols = dict()
+        self.freqs = dict()
+        self.counts = dict()
 
     def add_schema(self, schema: LoggingSchema):
         assert schema.table_name not in self.tables, (
@@ -66,13 +55,12 @@ class WandbTableLogger(eqx.Module):
         cols = ["step"] + schema.cols if schema.add_step_column else schema.cols
         self.tables[name] = wandb.Table(columns=cols, log_mode="INCREMENTAL")
         self.cols[name] = cols
-        self.freqs[name] = schema.freqs
+        self.freqs[name] = schema.freq
         self.counts[name] = 0
-       
 
     def log(
         self,
-        item: Loggable | LoggableArray, 
+        item: Loggable | LoggableArray,
     ) -> bool:
         # Convert to loggable
         if isinstance(item, LoggableArray):
@@ -88,11 +76,11 @@ class WandbTableLogger(eqx.Module):
         log_time = self.counts[name] % self.freqs[name] == 0
         if log_time or force:
             table = self.tables[name]
-            data_ordered = [jnp.asarray(data[col]).tolist() for col in table.columns]
-            
-            if item.add_timestep:
-                data_ordered = [self.counts[name]] + data_ordered
 
+            if item.add_timestep:
+                data["step"] = self.counts[name]
+
+            data_ordered = [jnp.asarray(data[col]).tolist() for col in table.columns]
             table.add_data(*data_ordered)
 
             if plot:
@@ -114,7 +102,11 @@ class WandbTableLogger(eqx.Module):
 
         aux = aux if isinstance(aux, dict) else dict()
         loggable_item = Loggable(
-            table_name=name, data=cols | aux, plot=plot, force=force, add_timestep=item.add_timestep
+            table_name=name,
+            data=cols | aux,
+            plot=plot,
+            force=force,
+            add_timestep=item.add_timestep,
         )
         return self.log(loggable_item)
 

@@ -73,27 +73,10 @@ def main():
     policy_batch_size = sweep_config.policy.batch_size
 
     # Initialize private environment
-    # env_params = DP_RL_Params.create_direct_from_config()
-    # logger = WandbTableLogger()
-    # for schema in schedule.get_logging_schemas() + get_private_model_training_schemas():
-    #     logger.add_schema(schema)
-
-    logger = WandbTableLogger(
-        {
-            "policy": ["step", *(str(step) for step in range(T))],
-            "losses": ["step", "losses"],
-            "accuracies": ["step", "accuracies"],
-            "actions": ["step", *(str(step) for step in range(T))],
-            "clips": ["step", *(str(step) for step in range(T))],
-        },
-        {
-            "policy": total_timesteps // sweep_config.plotting_steps,
-            "actions": total_timesteps // sweep_config.plotting_steps,
-            "losses": total_timesteps // sweep_config.plotting_steps,
-            "accuracies": total_timesteps // sweep_config.plotting_steps,
-            "clips": total_timesteps // sweep_config.plotting_steps,
-        },
-    )
+    env_params = DP_RL_Params.create_direct_from_config()
+    logger = WandbTableLogger()
+    for schema in schedule.get_logging_schemas() + get_private_model_training_schemas():
+        logger.add_schema(schema)
 
     # TODO: Util function for mesh setup
     _, num_gpus = determine_optimal_num_devices(devices("gpu"), policy_batch_size)
@@ -101,6 +84,10 @@ def main():
     vmapped_train_with_noise = eqx.filter_vmap(
         train_with_noise, in_axes=(None, None, None, None, 0)
     )
+
+    for loggable_item in schedule.get_loggables():
+        _ = logger.log(loggable_item)
+    exit()
 
     print("Starting...")
     run = wandb.init(
