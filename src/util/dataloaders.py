@@ -8,6 +8,8 @@ import pandas as pd
 from datasets import load_dataset
 from sklearn.datasets import fetch_california_housing
 from sklearn.preprocessing import PolynomialFeatures
+from conf.singleton_conf import SingletonConfig
+
 
 __DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
 
@@ -143,6 +145,14 @@ DATALOADERS = {
     "cifar-10": _dataloader_cifar_10,
     "fashion-mnist": _dataloader_fashion_mnist,
 }
+
+
+def get_datasets():
+    sweep_config = SingletonConfig.get_sweep_config_instance()
+    X, y = DATALOADERS[sweep_config.dataset](sweep_config.dataset_poly_d)
+    X_test, y_test = DATALOADERS[sweep_config.dataset](sweep_config.dataset_poly_d, test=True)
+    return X, y, X_test, y_test
+
 
 if __name__ == "__main__":
     _dataloader_mnist()

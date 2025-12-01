@@ -1,13 +1,11 @@
 import jax.scipy.stats as jstats
-from jaxtyping import Array, PRNGKeyArray
-import chex
+from jaxtyping import Array
 import jax.numpy as jnp
 from conf.singleton_conf import SingletonConfig
 from scipy import optimize
 import equinox as eqx
 from util.util import pytree_has_inf
 import jax.lax as jlax
-from jax.nn import softmax
 import optax
 
 
@@ -173,3 +171,13 @@ class GDPPrivacyParameters(eqx.Module):
         )
 
         return projected_weights
+
+
+def get_privacy_params(dataset_length: int) -> GDPPrivacyParameters:
+    sweep_config = SingletonConfig.get_sweep_config_instance()
+    epsilon = sweep_config.env.eps
+    delta = sweep_config.env.delta
+    p = sweep_config.env.batch_size / dataset_length
+    T = SingletonConfig.get_environment_config_instance().max_steps_in_episode
+
+    return GDPPrivacyParameters(epsilon, delta, p, T)

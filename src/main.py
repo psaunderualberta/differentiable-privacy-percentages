@@ -18,11 +18,11 @@ from conf.singleton_conf import SingletonConfig
 from environments.dp import train_with_noise, lookahead_train_with_noise
 from environments.dp_params import DP_RL_Params
 from networks.net_factory import net_factory
-from privacy.gdp_privacy import GDPPrivacyParameters
+from privacy.gdp_privacy import get_privacy_params
 from privacy.base_schedules import ClippedSchedule, ExponentialSchedule, InterpolatedClippedSchedule, InterpolatedExponentialSchedule
 from privacy.schedules import SigmaAndClipSchedule, PolicyAndClipSchedule, AbstractNoiseAndClipSchedule
 from util.baselines import Baseline
-from util.dataloaders import DATALOADERS
+from util.dataloaders import get_datasets 
 from util.logger import WandbTableLogger
 from util.util import determine_optimal_num_devices, ensure_valid_pytree
 
@@ -36,16 +36,14 @@ def main():
     env_prng_seed = sweep_config.env_prng_seed
 
     # Initialize dataset
-    X, y = DATALOADERS[sweep_config.dataset](sweep_config.dataset_poly_d)
-    X_test, y_test = DATALOADERS[sweep_config.dataset](sweep_config.dataset_poly_d, test=True)
+    X, y, X_test, y_test = get_datasets()
     print(f"Dataset shape: {X.shape}, {y.shape}")
     print(f"Test Dataset shape: {X_test.shape}, {y_test.shape}")
 
-    epsilon = sweep_config.env.eps
-    delta = sweep_config.env.delta
-    p = sweep_config.env.batch_size / X.shape[0]  # Assuming MNIST dataset size
-    T = environment_config.max_steps_in_episode
-    gdp_params = GDPPrivacyParameters(epsilon, delta, p, T)
+    gdp_params = get_privacy_params(X.shape[0])
+    epsilon = gdp_params.eps
+    delta = gdp_params.delta
+    T = gdp_params.T
     mu_tot = gdp_params.mu
 
     print("Privacy parameters:")

@@ -9,7 +9,7 @@ from conf.config import (
     dist_config_helper,
 )
 from pprint import pprint
-from dataclasses import asdict, Field, replace
+from dataclasses import asdict, replace
 import wandb
 
 
@@ -84,7 +84,6 @@ class SingletonConfig:
 if __name__ == "__main__":
     # This is just for testing purposes
     pprint(SingletonConfig.get_instance())
-    pprint(SingletonConfig.get_experiment_config_instance())
     pprint(SingletonConfig.get_sweep_config_instance())
     pprint(SingletonConfig.get_environment_config_instance())
     pprint(SingletonConfig.get_wandb_config_instance())
