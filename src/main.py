@@ -1,38 +1,34 @@
-import os
 from functools import partial
 
 import equinox as eqx
 import optax
 import tqdm
 from jax import devices
-from jax.experimental.shard_map import shard_map
-
+from jax import lax as jlax
 from jax import numpy as jnp
 from jax import random as jr
-from jax import lax as jlax
-from jax.sharding import Mesh, PartitionSpec as P
+from jax.experimental.shard_map import shard_map
+from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, PRNGKeyArray
 
 import wandb
 from conf.singleton_conf import SingletonConfig
-from environments.dp import train_with_noise, lookahead_train_with_noise, get_private_model_training_schemas
-from environments.dp_params import DP_RL_Params
-from privacy.gdp_privacy import get_privacy_params
-from privacy.base_schedules import (
-    ClippedSchedule,
-    ExponentialSchedule,
-    InterpolatedClippedSchedule,
-    InterpolatedExponentialSchedule,
+from environments.dp import (
+    get_private_model_training_schemas,
+    train_with_noise,
 )
+from environments.dp_params import DP_RL_Params
+from privacy.base_schedules import InterpolatedExponentialSchedule
+from privacy.gdp_privacy import get_privacy_params
 from privacy.schedules import (
-    SigmaAndClipSchedule,
-    PolicyAndClipSchedule,
     AbstractNoiseAndClipSchedule,
+    PolicyAndClipSchedule,
+    SigmaAndClipSchedule,
 )
 from util.baselines import Baseline
 from util.dataloaders import get_dataset_shapes
-from util.logger import WandbTableLogger, Loggable
-from util.util import determine_optimal_num_devices, ensure_valid_pytree
+from util.logger import Loggable, WandbTableLogger
+from util.util import ensure_valid_pytree, get_optimal_mesh
 
 
 def main():
@@ -56,16 +52,17 @@ def main():
     print(f"\tmu-GDP: {mu_tot}")
 
     # Initialize Policy model
+    # TODO: Creatable via config
     keypoints = jnp.arange(0, T + 1, step=T // 50, dtype=jnp.int32)
-    values = jnp.ones_like(keypoints, dtype=jnp.float32)
+    values = jnp.zeros_like(keypoints, dtype=jnp.float32)
     policy_schedule = InterpolatedExponentialSchedule(
         keypoints.copy(), values=values.copy(), T=T
     )
     clip_schedule = InterpolatedExponentialSchedule(
         keypoints=keypoints.copy(), values=values.copy(), T=T
     )
-    schedule = SigmaAndClipSchedule(
-        noise_schedule=policy_schedule,
+    schedule = PolicyAndClipSchedule(
+        policy_schedule=policy_schedule,
         clip_schedule=clip_schedule,
         privacy_params=gdp_params,
     )
@@ -74,20 +71,17 @@ def main():
 
     # Initialize private environment
     env_params = DP_RL_Params.create_direct_from_config()
+
+    # Initialize logger
     logger = WandbTableLogger()
     for schema in schedule.get_logging_schemas() + get_private_model_training_schemas():
         logger.add_schema(schema)
 
-    # TODO: Util function for mesh setup
-    _, num_gpus = determine_optimal_num_devices(devices("gpu"), policy_batch_size)
-    mesh = Mesh(devices("gpu")[:num_gpus], "x")
+    # Get mesh over accessible GPUs
+    mesh = get_optimal_mesh(devices("gpu"), policy_batch_size)
     vmapped_train_with_noise = eqx.filter_vmap(
         train_with_noise, in_axes=(None, None, None, None, 0)
     )
-
-    for loggable_item in schedule.get_loggables():
-        _ = logger.log(loggable_item)
-    exit()
 
     print("Starting...")
     run = wandb.init(
@@ -113,7 +107,7 @@ def main():
         mb_key: PRNGKeyArray,
         init_key: PRNGKeyArray,
         noise_keys: PRNGKeyArray,
-    ) -> tuple[Array, tuple[Loggable, Loggable, Array]]:
+    ) -> tuple[Array, tuple[Array, Array, Array]]:
         """Calculate the policy loss."""
 
         # Train all networks
@@ -124,15 +118,9 @@ def main():
         # Average over all shard-mapped networks
         to_diff = jnp.mean(to_diff)
         to_diff = jlax.pmean(to_diff, "x").squeeze()
-
-        # losses = losses.reshape(-1, T + 1)
-        # accuracies = accuracies.reshape(-1, T)
-
-        # derivatives = derivatives.reshape(-1, T)
-        # # derivatives = derivatives * dsigma_dweight(sigmas, mu, p, T)
         return to_diff, (losses, accuracies, val_acc)
 
-    optimizer = optax.sgd(learning_rate=sweep_config.policy.lr.sample())
+    optimizer = optax.sgd(learning_rate=sweep_config.policy.lr.sample(), momentum=0.5)
     opt_state = optimizer.init(schedule)  # type: ignore
 
     iterator = tqdm.tqdm(
@@ -158,9 +146,16 @@ def main():
                 schedule, mb_key, init_key, jr.split(noise_key, policy_batch_size)
             )
 
+            loggable_losses = Loggable(table_name="train_loss", data={"losses": losses})
+            loggable_accuracies = Loggable(
+                table_name="accuracy", data={"accuracies": accuracies}
+            )
+            loggable_accuracies = Loggable(
+                table_name="accuracy", data={"accuracies": accuracies}
+            )
             # Log iteration results to file
-            _ = logger.log(losses)
-            _ = logger.log(accuracies)
+            _ = logger.log(loggable_losses)
+            _ = logger.log(loggable_accuracies)
 
             # Log metrics for monitoring run
             wandb.log({"loss": loss, "accuracy": val_accs.mean()})
@@ -169,6 +164,7 @@ def main():
             loss = ensure_valid_pytree(loss, "loss in main")
 
             # Update policy
+            grads = ensure_valid_pytree(grads, "grads in main")
             updates, opt_state = optimizer.update(grads, opt_state, schedule)
             schedule = eqx.apply_updates(schedule, updates)
 
@@ -182,10 +178,11 @@ def main():
             iterator.set_description(f"Training Progress - Loss: {loss:.4f}")
 
     except Exception as e:
-        print("WARNING: Error raised during training: ", e.args[0])
+        # print("WARNING: Error raised during training: ", e.args[0])
 
-        if not isinstance(e, KeyboardInterrupt):
-            raise e
+        # if not isinstance(e, KeyboardInterrupt):
+        #     raise e
+        raise e
 
     # Plot final learnables
     for loggable_item in schedule.get_loggables(force=True):
@@ -210,10 +207,10 @@ def main():
         )
 
     # Cleanup, finish wandb run
-    for multi_line_table_name in ["actions", "policy", "clips"]:
-        logger.line_plot(multi_line_table_name)
-    for bulk_line_table_name in ["losses", "accuracies"]:
-        logger.bulk_line_plots(bulk_line_table_name)
+    for multi_line_table in schedule.get_logging_schemas():
+        logger.line_plot(multi_line_table.table_name)
+    for bulk_line_table in get_private_model_training_schemas():
+        logger.bulk_line_plots(bulk_line_table.table_name)
 
     logger.finish()
     run.finish()

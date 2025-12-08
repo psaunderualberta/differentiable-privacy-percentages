@@ -9,6 +9,7 @@ from jax import tree as jt
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, PRNGKeyArray, PyTree, PyTreeDef
+
 from conf.singleton_conf import SingletonConfig
 
 
@@ -266,3 +267,10 @@ def determine_optimal_num_devices(
         print("Using devices: ", trimmed_devices_)
     mesh = Mesh(trimmed_devices_, ("i",))
     return NamedSharding(mesh, P("i")), len(trimmed_devices_)
+
+
+def get_optimal_mesh(devices_, num_training_runs, printing=True):
+    _, num_gpus = determine_optimal_num_devices(
+        devices_, num_training_runs, printing=printing
+    )
+    return Mesh(devices_[:num_gpus], "x")

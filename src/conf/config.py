@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 from pprint import pprint
-import numpy as np
 from typing import Literal
 
-import tyro
 import jax.numpy as jnp
+import numpy as np
+import tyro
 
 
 @dataclass(frozen=True)
@@ -204,7 +204,9 @@ class SweepConfig:
     name: str | None = None  # The (optional) name of the wandb sweep
     description: str | None = None  # The (optional) description of the wandb sweep
     with_baselines: bool = False  # Flag to compute plots comparing against baseline (Expensive, default is False)
-    dataset: Literal["mnist", "california", "cifar-10", "fashion-mnist"] = "mnist"  # Dataset on which to privatise
+    dataset: Literal["mnist", "california", "cifar-10", "fashion-mnist"] = (
+        "mnist"  # Dataset on which to privatise
+    )
     dataset_poly_d: int | None = None  # Degree of polynomial features to be generated
     total_timesteps: int = 100  # Training steps of RL algorithm
     cfg_prng_seed: int = 42  # RL Agent configuration seed

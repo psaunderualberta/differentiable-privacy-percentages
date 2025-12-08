@@ -1,10 +1,13 @@
 from abc import abstractmethod
+
 import equinox as eqx
 from jaxtyping import Array
-from privacy.gdp_privacy import GDPPrivacyParameters
-from privacy.base_schedules import AbstractSchedule
-from util.logger import Loggable, LoggableArray, LoggingSchema
+
 from conf.singleton_conf import SingletonConfig
+from privacy.base_schedules import AbstractSchedule
+from privacy.gdp_privacy import GDPPrivacyParameters
+from util.logger import Loggable, LoggableArray, LoggingSchema
+from util.util import pytree_has_inf
 
 
 class AbstractNoiseAndClipSchedule(eqx.Module):
@@ -67,16 +70,23 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         private_sigmas = self.get_private_sigmas()
         clips = self.get_private_clips()
 
+        private_sigmas = eqx.error_if(
+            private_sigmas, pytree_has_inf(private_sigmas), "private_sigmas have Inf!"
+        )
+        private_sigmas = eqx.error_if(
+            private_sigmas, (private_sigmas == 0).any(), "private_sigmas has 0!"
+        )
         weights = self.privacy_params.sigma_schedule_to_weights(clips, private_sigmas)
+        weights = eqx.error_if(weights, pytree_has_inf(weights), "weights1 have Inf!")
         proj_weights = self.privacy_params.project_weights(weights)
+        proj_weights = eqx.error_if(
+            proj_weights, pytree_has_inf(proj_weights), "weights2 have Inf!"
+        )
         return proj_weights.squeeze()
 
     @classmethod
+    @eqx.filter_jit
     def project(cls, schedule: "SigmaAndClipSchedule") -> "SigmaAndClipSchedule":
-        if not isinstance(schedule, SigmaAndClipSchedule):
-            raise ValueError(
-                "Input schedule must be an instance of SigmaAndClipSchedule."
-            )
         private_weights = schedule.get_private_weights()
         private_clips = schedule.get_private_clips()
 
@@ -112,6 +122,11 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
                 cols=[str(step) for step in range(len(self.get_private_weights()))],
                 freq=plot_interval,
             ),
+            LoggingSchema(
+                table_name="mus",
+                cols=[str(step) for step in range(len(self.get_private_weights()))],
+                freq=plot_interval,
+            ),
         ]
 
     def get_loggables(self, force=False) -> list[Loggable | LoggableArray]:
@@ -131,6 +146,14 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
             LoggableArray(
                 table_name="weights",
                 array=self.get_private_weights(),
+                plot=True,
+                force=force,
+            ),
+            LoggableArray(
+                table_name="mus",
+                array=self.privacy_params.weights_to_mu_schedule(
+                    self.get_private_weights()
+                ),
                 plot=True,
                 force=force,
             ),
@@ -168,6 +191,7 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
         return proj_weights.squeeze()
 
     @classmethod
+    @eqx.filter_jit
     def project(cls, schedule: "PolicyAndClipSchedule") -> "PolicyAndClipSchedule":
         if not isinstance(schedule, PolicyAndClipSchedule):
             raise ValueError(
@@ -184,7 +208,7 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
             clip_schedule=schedule.clip_schedule,
             privacy_params=schedule.privacy_params,
         )
-    
+
     def get_logging_schemas(self) -> list[LoggingSchema]:
         return [
             LoggingSchema(
@@ -198,7 +222,11 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
             LoggingSchema(
                 table_name="weights",
                 cols=[str(step) for step in range(len(self.get_private_weights()))],
-             ),
+            ),
+            LoggingSchema(
+                table_name="mus",
+                cols=[str(step) for step in range(len(self.get_private_weights()))],
+            ),
         ]
 
     def get_loggables(self, force=False) -> list[Loggable | LoggableArray]:
@@ -218,6 +246,14 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
             LoggableArray(
                 table_name="weights",
                 array=self.get_private_weights(),
+                plot=True,
+                force=force,
+            ),
+            LoggableArray(
+                table_name="mus",
+                array=self.privacy_params.weights_to_mu_schedule(
+                    self.get_private_weights()
+                ),
                 plot=True,
                 force=force,
             ),
