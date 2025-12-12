@@ -18,7 +18,7 @@ from environments.dp import (
     train_with_noise,
 )
 from environments.dp_params import DP_RL_Params
-from privacy.base_schedules import InterpolatedExponentialSchedule
+from privacy.base_schedules import ConstantSchedule, InterpolatedExponentialSchedule
 from privacy.gdp_privacy import get_privacy_params
 from privacy.schedules import (
     AbstractNoiseAndClipSchedule,
@@ -56,17 +56,17 @@ def main():
     keypoints = jnp.arange(0, T + 1, step=T // 50, dtype=jnp.int32)
     values = jnp.zeros_like(keypoints, dtype=jnp.float32)
     policy_schedule = InterpolatedExponentialSchedule(
-        keypoints.copy(), values=values.copy(), T=T
-    )
-    clip_schedule = InterpolatedExponentialSchedule(
         keypoints=keypoints.copy(), values=values.copy(), T=T
     )
-    schedule = PolicyAndClipSchedule(
-        policy_schedule=policy_schedule,
+    clip_schedule = InterpolatedExponentialSchedule(
+        keypoints=keypoints.copy(), values=values.copy() + 2.1, T=T
+    )
+    schedule = SigmaAndClipSchedule(
+        noise_schedule=policy_schedule,
         clip_schedule=clip_schedule,
         privacy_params=gdp_params,
     )
-    schedule = schedule.__class__.project(schedule)
+    schedule = schedule.project()
     policy_batch_size = sweep_config.policy.batch_size
 
     # Initialize private environment
@@ -150,9 +150,6 @@ def main():
             loggable_accuracies = Loggable(
                 table_name="accuracy", data={"accuracies": accuracies}
             )
-            loggable_accuracies = Loggable(
-                table_name="accuracy", data={"accuracies": accuracies}
-            )
             # Log iteration results to file
             _ = logger.log(loggable_losses)
             _ = logger.log(loggable_accuracies)
@@ -169,7 +166,7 @@ def main():
             schedule = eqx.apply_updates(schedule, updates)
 
             # Project schedule back to valid space
-            schedule = schedule.__class__.project(schedule)
+            schedule = schedule.project()
 
             # Ensure no Infs or NaNs were introduced
             schedule = ensure_valid_pytree(schedule, "policy in main")

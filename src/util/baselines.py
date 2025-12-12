@@ -1,19 +1,17 @@
 import os
 
+import equinox as eqx
 import jax.numpy as jnp
 import jax.random as jr
-from jaxtyping import Array, PRNGKeyArray
 import pandas as pd
 import plotly.express as px
 import tqdm
-import equinox as eqx
+from jaxtyping import Array, PRNGKeyArray
 
-from environments.dp import DP_RL_Params
-from privacy.schedules import AbstractNoiseAndClipSchedule, PolicyAndClipSchedule 
+from environments.dp import DP_RL_Params, train_with_noise
 from privacy.base_schedules import ClippedSchedule, ExponentialSchedule
 from privacy.gdp_privacy import GDPPrivacyParameters
-from environments.dp import train_with_noise
-
+from privacy.schedules import AbstractNoiseAndClipSchedule, PolicyAndClipSchedule
 
 file_location = os.path.abspath(os.path.dirname(__file__))
 
@@ -25,10 +23,8 @@ class Baseline:
         privacy_params: GDPPrivacyParameters,
         num_reps: int = 8,
     ):
+        self.env_params = env_params
         self.privacy_params = privacy_params
-        assert len(env_params.X.shape) >= 1
-        self.p: float = env_params.dummy_batch.size / env_params.X.shape[0]
-        self.env_params: DP_RL_Params = env_params
         self.num_repetitions: int = num_reps
         self.columns: list[str] = [
             "type",
@@ -65,7 +61,7 @@ class Baseline:
             df,
             x="type",
             y="loss",
-            title="Final Loss Violin Plot",
+            title="Final Loss Plot",
             points="all",
             notched=True,
         )
@@ -76,7 +72,7 @@ class Baseline:
             df,
             x="type",
             y="accuracy",
-            title="Accuracy Violin Plot",
+            title="Accuracy Plot",
             points="all",
             notched=True,
         )
@@ -110,12 +106,15 @@ class Baseline:
         name: str,
         key: PRNGKeyArray,
         with_progress_bar: bool = True,
+        iterations: int = -1,
     ) -> pd.DataFrame:
         df = pd.DataFrame(columns=self.columns)
 
-        iterator = range(self.num_repetitions)
+        if iterations < 0:
+            iterations = self.num_repetitions
+        iterator = range(iterations)
         if with_progress_bar:
-            iterator = tqdm.tqdm(iterator, desc=name, total=self.num_repetitions)
+            iterator = tqdm.tqdm(iterator, desc=name, total=iterations)
 
         for _ in iterator:
             key, mb_key, init_key = jr.split(key, 3)
@@ -144,21 +143,45 @@ class Baseline:
 
         # Uniform schedule
         weights = jnp.ones(
-            (
-                1,
-                T,
-            ),
+            (1, T),
             dtype=jnp.float32,
         )
-
         policy_schedule = ClippedSchedule(weights.copy(), min_value=-jnp.inf)
-        clip_schedule = ClippedSchedule(weights.copy(), min_value=-jnp.inf)
+
+        best_acc = -jnp.inf
+        best_clip = None
+        for clip_value in range(1, 41, 4):
+            clip_value /= 10
+            weights_c = weights * clip_value
+
+            # TODO: Small sweep to determine optimal clipping value
+            clip_schedule = ClippedSchedule(weights_c.copy(), min_value=-jnp.inf)
+            schedule = PolicyAndClipSchedule(
+                policy_schedule, clip_schedule, self.privacy_params
+            )
+
+            sigma = float(schedule.get_private_sigmas().mean())
+            name = f"Grid Search: Constant Noise ({round(sigma, 2)})"
+
+            df = self.generate_schedule_data(
+                schedule, name, key, with_progress_bar=with_progress_bar, iterations=10
+            )
+
+            if df["accuracy"].mean() > best_acc:
+                best_acc = df["accuracy"].mean()
+                best_clip = clip_value
+
+        weights_c = weights * best_clip
+
+        # TODO: Small sweep to determine optimal clipping value
+        clip_schedule = ClippedSchedule(weights_c.copy(), min_value=-jnp.inf)
         schedule = PolicyAndClipSchedule(
             policy_schedule, clip_schedule, self.privacy_params
         )
 
         sigma = float(schedule.get_private_sigmas().mean())
-        name = f"Constant Noise ({round(sigma, 2)})"
+        clip = float(schedule.get_private_clips().mean())
+        name = f"Constant Noise (S={round(sigma, 2)}, C={round(clip, 2)})"
 
         df = self.generate_schedule_data(
             schedule, name, key, with_progress_bar=with_progress_bar

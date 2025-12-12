@@ -142,6 +142,29 @@ class GDPPrivacyParameters(eqx.Module):
         )
         return self.gdp_to_sigma(C, mu_schedule)
 
+    def weights_to_clip_schedule(self, sigmas: Array, weights: Array) -> Array:
+        """Convert a vector of non-negative weights summing to T to a sigma schedule for G-DP.
+
+        Args:
+            schedule: A 1D array representing the weights. Assumed to be non-negative and sum to T.
+            mu: The mu parameter of GDP. Assumed to be a non-negative float or array.
+            p: The sampling probability for poisson sampling
+            T: The number of training iterations
+
+        Returns:
+            The Gaussian noise scale sigma.
+        """
+        weights = eqx.error_if(weights, pytree_has_inf(weights), "weights have Inf!")
+        weights = eqx.error_if(weights, (weights == 0).any(), "weights have 0!")
+        mu_schedule = self.weights_to_mu_schedule(weights)
+        mu_schedule = eqx.error_if(
+            mu_schedule, pytree_has_inf(mu_schedule), "mu schedule has Inf!"
+        )
+        mu_schedule = eqx.error_if(
+            mu_schedule, (mu_schedule == 0).any(), "Some mus are 0!"
+        )
+        return sigmas * mu_schedule
+
     def sigma_schedule_to_weights(self, C: Array, schedule: Array):
         """Convert a sigma schedule vector to a vector of non-negative weights summing to T for G-DP.
         Inverse of `weights_to_sigma_schedule`

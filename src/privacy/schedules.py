@@ -27,11 +27,8 @@ class AbstractNoiseAndClipSchedule(eqx.Module):
             "Subclasses must implement get_private_weights method."
         )
 
-    @classmethod
     @abstractmethod
-    def project(
-        cls, schedule: "AbstractNoiseAndClipSchedule"
-    ) -> "AbstractNoiseAndClipSchedule":
+    def project(self) -> "AbstractNoiseAndClipSchedule":
         raise NotImplementedError("Subclasses must implement 'project' class method.")
 
     @abstractmethod
@@ -84,24 +81,23 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         )
         return proj_weights.squeeze()
 
-    @classmethod
     @eqx.filter_jit
-    def project(cls, schedule: "SigmaAndClipSchedule") -> "SigmaAndClipSchedule":
-        private_weights = schedule.get_private_weights()
-        private_clips = schedule.get_private_clips()
+    def project(self) -> "SigmaAndClipSchedule":
+        private_weights = self.get_private_weights()
+        private_clips = self.get_private_clips()
 
-        new_noises = schedule.privacy_params.weights_to_sigma_schedule(
+        new_noises = self.privacy_params.weights_to_sigma_schedule(
             private_clips, private_weights
         )
 
-        new_noise_schedule = schedule.noise_schedule.__class__.from_projection(
-            schedule.noise_schedule, new_noises
+        new_noise_schedule = self.noise_schedule.__class__.from_projection(
+            self.noise_schedule, new_noises
         )
 
         return SigmaAndClipSchedule(
             noise_schedule=new_noise_schedule,
-            clip_schedule=schedule.clip_schedule,
-            privacy_params=schedule.privacy_params,
+            clip_schedule=self.clip_schedule,
+            privacy_params=self.privacy_params,
         )
 
     def get_logging_schemas(self) -> list[LoggingSchema]:
@@ -190,23 +186,17 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
         proj_weights = self.privacy_params.project_weights(weights)
         return proj_weights.squeeze()
 
-    @classmethod
     @eqx.filter_jit
-    def project(cls, schedule: "PolicyAndClipSchedule") -> "PolicyAndClipSchedule":
-        if not isinstance(schedule, PolicyAndClipSchedule):
-            raise ValueError(
-                "Input schedule must be an instance of PolicyAndClipSchedule."
-            )
-
-        private_weights = schedule.get_private_weights()
-        new_policy_schedule = schedule.policy_schedule.__class__.from_projection(
-            schedule.policy_schedule, private_weights
+    def project(self) -> "PolicyAndClipSchedule":
+        private_weights = self.get_private_weights()
+        new_policy_schedule = self.policy_schedule.__class__.from_projection(
+            self.policy_schedule, private_weights
         )
 
         return PolicyAndClipSchedule(
             policy_schedule=new_policy_schedule,
-            clip_schedule=schedule.clip_schedule,
-            privacy_params=schedule.privacy_params,
+            clip_schedule=self.clip_schedule,
+            privacy_params=self.privacy_params,
         )
 
     def get_logging_schemas(self) -> list[LoggingSchema]:

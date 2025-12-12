@@ -1,8 +1,9 @@
+import abc
+
 import equinox as eqx
-from jaxtyping import Array
 import jax.numpy as jnp
 from jax import lax as jlax
-import abc
+from jaxtyping import Array
 
 
 class AbstractSchedule(eqx.Module):
@@ -14,9 +15,7 @@ class AbstractSchedule(eqx.Module):
 
     @abc.abstractmethod
     def get_raw_schedule(self) -> Array:
-        raise NotImplementedError(
-            "Subclasses must implement get_raw_schedule method."
-        )
+        raise NotImplementedError("Subclasses must implement get_raw_schedule method.")
 
     @classmethod
     @abc.abstractmethod
@@ -26,6 +25,25 @@ class AbstractSchedule(eqx.Module):
         raise NotImplementedError(
             "Subclasses must implement 'from_projection' class method."
         )
+
+
+class ConstantSchedule(AbstractSchedule):
+    schedule: Array
+
+    def __init__(self, schedule: Array):
+        self.schedule = schedule
+
+    def get_valid_schedule(self) -> Array:
+        return jlax.stop_gradient(self.schedule)
+
+    def get_raw_schedule(self) -> Array:
+        return jlax.stop_gradient(self.schedule)
+
+    @classmethod
+    def from_projection(
+        cls, schedule: "AbstractSchedule", projection: Array
+    ) -> "ConstantSchedule":
+        return ConstantSchedule(projection)
 
 
 class ClippedSchedule(AbstractSchedule):
@@ -65,7 +83,7 @@ class ExponentialSchedule(AbstractSchedule):
     def from_projection(
         cls, schedule: "ExponentialSchedule", projection: Array
     ) -> "ExponentialSchedule":
-        reset_projection = jnp.log(jnp.exp(projection) - 1 + 1e-6)
+        reset_projection = jnp.log(jnp.exp(projection) - 1)
         return ExponentialSchedule(schedule=reset_projection)
 
 
@@ -114,7 +132,9 @@ class InterpolatedExponentialSchedule(AbstractSchedule):
 
     def get_valid_schedule(self) -> Array:
         return jnp.interp(
-            self.points, jlax.stop_gradient(self.keypoints), jnp.log(jnp.exp(self.values) + 1)
+            self.points,
+            jlax.stop_gradient(self.keypoints),
+            jnp.log(jnp.exp(self.values) + 1),
         )
 
     def get_raw_schedule(self) -> Array:
