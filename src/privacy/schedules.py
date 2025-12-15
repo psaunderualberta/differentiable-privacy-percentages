@@ -102,27 +102,12 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
     def get_logging_schemas(self) -> list[LoggingSchema]:
         plot_interval = SingletonConfig.get_sweep_config_instance().plotting_interval
+        col_names = [str(step) for step in range(len(self.get_private_sigmas()))]
         return [
-            LoggingSchema(
-                table_name="sigmas",
-                cols=[str(step) for step in range(len(self.get_private_sigmas()))],
-                freq=plot_interval,
-            ),
-            LoggingSchema(
-                table_name="clips",
-                cols=[str(step) for step in range(len(self.get_private_clips()))],
-                freq=plot_interval,
-            ),
-            LoggingSchema(
-                table_name="weights",
-                cols=[str(step) for step in range(len(self.get_private_weights()))],
-                freq=plot_interval,
-            ),
-            LoggingSchema(
-                table_name="mus",
-                cols=[str(step) for step in range(len(self.get_private_weights()))],
-                freq=plot_interval,
-            ),
+            LoggingSchema(table_name="sigmas", cols=col_names, freq=plot_interval),
+            LoggingSchema(table_name="clips", cols=col_names, freq=plot_interval),
+            LoggingSchema(table_name="weights", cols=col_names, freq=plot_interval),
+            LoggingSchema(table_name="mus", cols=col_names, freq=plot_interval),
         ]
 
     def get_loggables(self, force=False) -> list[Loggable | LoggableArray]:
@@ -200,23 +185,12 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
         )
 
     def get_logging_schemas(self) -> list[LoggingSchema]:
+        col_names = [str(step) for step in range(len(self.get_private_sigmas()))]
         return [
-            LoggingSchema(
-                table_name="sigmas",
-                cols=[str(step) for step in range(len(self.get_private_sigmas()))],
-            ),
-            LoggingSchema(
-                table_name="clips",
-                cols=[str(step) for step in range(len(self.get_private_clips()))],
-            ),
-            LoggingSchema(
-                table_name="weights",
-                cols=[str(step) for step in range(len(self.get_private_weights()))],
-            ),
-            LoggingSchema(
-                table_name="mus",
-                cols=[str(step) for step in range(len(self.get_private_weights()))],
-            ),
+            LoggingSchema(table_name="sigmas", cols=col_names),
+            LoggingSchema(table_name="clips", cols=col_names),
+            LoggingSchema(table_name="weights", cols=col_names),
+            LoggingSchema(table_name="mus", cols=col_names),
         ]
 
     def get_loggables(self, force=False) -> list[Loggable | LoggableArray]:
