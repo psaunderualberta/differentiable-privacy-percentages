@@ -5,25 +5,27 @@ Source:
 github.com/openai/gym/blob/master/gym/envs/classic_control/continuous_mountain_car.py
 """
 
+from functools import partial
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import PyTree, PRNGKeyArray, Array
 import jax.random as jr
 import optax
-from util.util import (
-    reinit_model,
-    clip_grads_abadi,
-    sample_batch_uniform,
-    get_spherical_noise,
-    subset_classification_accuracy,
-    classification_accuracy,
-)
-from environments.losses import vmapped_loss, loss
-from privacy.schedules import AbstractNoiseAndClipSchedule
-from functools import partial
+from jaxtyping import Array, PRNGKeyArray, PyTree
+
 from environments.dp_params import DP_RL_Params
+from environments.losses import loss, vmapped_loss
+from privacy.schedules import AbstractNoiseAndClipSchedule
 from util.logger import Loggable, LoggingSchema
+from util.util import (
+    classification_accuracy,
+    clip_grads_abadi,
+    get_spherical_noise,
+    reinit_model,
+    sample_batch_uniform,
+    subset_classification_accuracy,
+)
 
 
 def get_private_model_training_schemas() -> list[LoggingSchema]:
@@ -148,114 +150,3 @@ def train_with_noise(
     val_accuracy = classification_accuracy(network_final, params.valX, params.valy)
 
     return network_final, val_loss, losses, accuracies, val_accuracy
-
-
-def lookahead_train_with_noise(
-    noise_schedule: jnp.ndarray,
-    params: DP_RL_Params,
-    mb_key: PRNGKeyArray,
-    init_key: PRNGKeyArray,
-    noise_key: PRNGKeyArray,
-) -> tuple[eqx.Module, Array, Array, Array]:
-    filtered_pvary = eqx.filter_jit(jax.lax.pvary)
-
-    # Create network
-    network = reinit_model(params.network, init_key)
-    net_params, net_static = eqx.partition(network, eqx.is_array)
-    net_params = filtered_pvary(net_params, "x")
-
-    optimizer = getattr(optax, params.optimizer)(params.lr)
-    opt_state = optimizer.init(net_params)
-    opt_state_params, opt_state_static = eqx.partition(opt_state, eqx.is_array)
-    opt_state_params = eqx.filter_jit(jax.lax.pvary)(opt_state_params, "x")
-
-    # Checkpoint each call to training step
-    ckpt_training_step = eqx.filter_checkpoint(training_step)
-
-    def lookahead_step(noise, model, opt_state, mb_key, noise_key):
-        new_model, new_opt_state, mb_key, noise_key, onestep_loss, onestep_accuracy = (
-            ckpt_training_step(
-                model,
-                optimizer,
-                opt_state,
-                mb_key,
-                noise_key,
-                noise,
-                jnp.asarray(1.0),
-                params,
-            )
-        )
-
-        # Compute lookahead loss
-        _, _, _, _, lookahead_loss, _ = ckpt_training_step(
-            new_model,
-            optimizer,
-            new_opt_state,
-            mb_key,
-            noise_key,
-            jnp.zeros_like(noise),
-            jnp.asarray(1.0),
-            params,
-            private=False,
-        )
-
-        return lookahead_loss, (
-            new_model,
-            new_opt_state,
-            mb_key,
-            noise_key,
-            onestep_loss,
-            onestep_accuracy,
-        )
-
-    def scan_fun(
-        carry: tuple[PyTree, PyTree, PRNGKeyArray, PRNGKeyArray], noise: Array
-    ) -> tuple[
-        tuple[PyTree, optax.OptState, PRNGKeyArray, PRNGKeyArray],  # Carry values
-        tuple[Array, Array, Array],  # Scan outputs
-    ]:
-        net_params, opt_state_params, mb_key, noise_key = carry
-
-        model = eqx.combine(net_params, net_static)
-        opt_state = eqx.combine(opt_state_params, opt_state_static)
-
-        (
-            lookahead_loss,
-            (
-                new_model,
-                new_opt_state,
-                mb_key,
-                noise_key,
-                onestep_loss,
-                onestep_accuracy,
-            ),
-        ) = lookahead_step(noise, model, opt_state, mb_key, noise_key)
-
-        new_net_params, _ = eqx.partition(new_model, eqx.is_array)
-        opt_state_params, _ = eqx.partition(new_opt_state, eqx.is_array)
-        return jax.lax.stop_gradient(
-            (new_net_params, new_opt_state, mb_key, noise_key)
-        ), (
-            lookahead_loss,
-            onestep_loss,
-            onestep_accuracy,
-        )
-
-    (net_params, _, mb_key, noise_key), (lookahead_losses, losses, accuracies) = (
-        jax.lax.scan(
-            scan_fun,
-            (net_params, opt_state, mb_key, noise_key),
-            xs=noise_schedule,
-        )
-    )
-
-    mb_key, batch_key = jr.split(mb_key)
-    network_final = eqx.combine(net_params, net_static)
-    batch_x, batch_y = sample_batch_uniform(
-        params.X, params.y, params.dummy_batch, batch_key
-    )
-    final_loss, _ = loss(network_final, batch_x, batch_y)
-
-    losses = jnp.concat([losses, jnp.asarray([final_loss])])
-
-    return network_final, lookahead_losses.mean(), losses, accuracies
