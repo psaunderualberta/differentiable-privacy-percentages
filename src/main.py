@@ -59,8 +59,10 @@ def main():
         keypoints=keypoints.copy(), values=values.copy(), T=T
     )
     clip_schedule = InterpolatedExponentialSchedule(
-        keypoints=keypoints.copy(), values=values.copy() + 2.1, T=T
+        keypoints=keypoints.copy(), values=values.copy() + 2.6, T=T
     )
+    # policy_schedule = ConstantSchedule(1.0, T)
+    # clip_schedule = ConstantSchedule(1.0, T)
     schedule = SigmaAndClipSchedule(
         noise_schedule=policy_schedule,
         clip_schedule=clip_schedule,
@@ -120,7 +122,7 @@ def main():
         to_diff = jlax.pmean(to_diff, "x").squeeze()
         return to_diff, (losses, accuracies, val_acc)
 
-    optimizer = optax.sgd(learning_rate=sweep_config.policy.lr.sample(), momentum=0.5)
+    optimizer = optax.sgd(learning_rate=sweep_config.policy.lr.sample(), momentum=0.25)
     opt_state = optimizer.init(schedule)  # type: ignore
 
     iterator = tqdm.tqdm(
