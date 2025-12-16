@@ -8,8 +8,15 @@ import plotly.express as px
 import tqdm
 from jaxtyping import Array, PRNGKeyArray
 
-from environments.dp import DP_RL_Params, train_with_noise
-from privacy.base_schedules import ClippedSchedule, ExponentialSchedule
+from environments.dp import (
+    DP_RL_Params,
+    train_with_grad_derived_noise,
+    train_with_noise,
+)
+from privacy.derived_schedules import (
+    AbstractGradientDerivedNoiseAndClipSchedule,
+    MedianGradientNoiseAndClipSchedule,
+)
 from privacy.gdp_privacy import GDPPrivacyParameters
 from privacy.schedules import AbstractNoiseAndClipSchedule, PolicyAndClipSchedule
 
@@ -33,8 +40,6 @@ class Baseline:
             "accuracy",
             "losses",
             "accuracies",
-            "actions",
-            "clips",
         ]
 
     def delete_non_baseline_data(self):
@@ -102,7 +107,8 @@ class Baseline:
 
     def generate_schedule_data(
         self,
-        schedule: AbstractNoiseAndClipSchedule,
+        schedule: AbstractNoiseAndClipSchedule
+        | AbstractGradientDerivedNoiseAndClipSchedule,
         name: str,
         key: PRNGKeyArray,
         with_progress_bar: bool = True,
@@ -119,9 +125,16 @@ class Baseline:
         for _ in iterator:
             key, mb_key, init_key = jr.split(key, 3)
             key, noise_key = jr.split(key)
-            _, val_loss, losses, accuracies, val_acc = train_with_noise(
-                schedule, self.env_params, mb_key, init_key, noise_key
-            )
+            if isinstance(schedule, AbstractNoiseAndClipSchedule):
+                _, val_loss, losses, accuracies, val_acc = train_with_noise(
+                    schedule, self.env_params, mb_key, init_key, noise_key
+                )
+            else:
+                _, val_loss, losses, accuracies, val_acc = (
+                    train_with_grad_derived_noise(
+                        schedule, self.env_params, mb_key, init_key, noise_key
+                    )
+                )
             df.loc[len(df)] = {  # type: ignore
                 "type": name,
                 "step": 0,  # only recording one step for these
@@ -129,8 +142,6 @@ class Baseline:
                 "accuracy": val_acc,
                 "losses": losses,
                 "accuracies": accuracies,
-                "actions": schedule.get_private_sigmas(),
-                "clips": schedule.get_private_clips(),
             }
 
         # Create a copy of baseline data, then another to be modified
@@ -142,46 +153,11 @@ class Baseline:
         T = self.env_params.max_steps_in_episode
 
         # Uniform schedule
-        weights = jnp.ones(
-            (1, T),
-            dtype=jnp.float32,
-        )
-        policy_schedule = ClippedSchedule(weights.copy(), min_value=-jnp.inf)
+        weights = jnp.ones(T, dtype=jnp.float32)
 
-        best_acc = -jnp.inf
-        best_clip = None
-        for clip_value in range(1, 41, 4):
-            clip_value /= 10
-            weights_c = weights * clip_value
+        schedule = MedianGradientNoiseAndClipSchedule(weights, self.privacy_params)
 
-            # TODO: Small sweep to determine optimal clipping value
-            clip_schedule = ClippedSchedule(weights_c.copy(), min_value=-jnp.inf)
-            schedule = PolicyAndClipSchedule(
-                policy_schedule, clip_schedule, self.privacy_params
-            )
-
-            sigma = float(schedule.get_private_sigmas().mean())
-            name = f"Grid Search: Constant Noise ({round(sigma, 2)})"
-
-            df = self.generate_schedule_data(
-                schedule, name, key, with_progress_bar=with_progress_bar, iterations=10
-            )
-
-            if df["accuracy"].mean() > best_acc:
-                best_acc = df["accuracy"].mean()
-                best_clip = clip_value
-
-        weights_c = weights * best_clip
-
-        # TODO: Small sweep to determine optimal clipping value
-        clip_schedule = ClippedSchedule(weights_c.copy(), min_value=-jnp.inf)
-        schedule = PolicyAndClipSchedule(
-            policy_schedule, clip_schedule, self.privacy_params
-        )
-
-        sigma = float(schedule.get_private_sigmas().mean())
-        clip = float(schedule.get_private_clips().mean())
-        name = f"Constant Noise (S={round(sigma, 2)}, C={round(clip, 2)})"
+        name = "Clip to Median Gradient Norm"
 
         df = self.generate_schedule_data(
             schedule, name, key, with_progress_bar=with_progress_bar

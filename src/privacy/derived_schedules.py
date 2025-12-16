@@ -1,9 +1,9 @@
 from abc import abstractmethod
 
 import jax.numpy as jnp
-from jax import vmap
+import optax
+from jax import debug, vmap
 from jaxtyping import Array
-from optax import global_norm
 
 from conf.singleton_conf import SingletonConfig
 from privacy.gdp_privacy import GDPPrivacyParameters
@@ -47,16 +47,23 @@ class MedianGradientNoiseAndClipSchedule(AbstractGradientDerivedNoiseAndClipSche
         self.weights = initial_weights
         self.privacy_params = privacy_params
 
+    def get_private_weights(self) -> Array:
+        return self.weights
+
     def get_private_mus(self) -> Array:
-        return self.privacy_params.weights_to_mu_schedule(self.get_private_weights())
+        proj_weights = self.privacy_params.project_weights(self.get_private_weights())
+        return self.privacy_params.weights_to_mu_schedule(proj_weights)
 
     def get_derived_noise_and_clip(
         self, grads: Array, iter: Array
     ) -> tuple[Array, Array]:
-        norms = vmap(global_norm)(grads)
+        norms = vmap(optax.tree.norm)(grads)
         median_norm = jnp.median(norms)
+        median_norm = jnp.asarray(2.6)
+
         mu = self.get_private_mus()[iter]
         noise = median_norm / mu
+        debug.print("{} {}", median_norm, noise)
 
         return noise, median_norm
 

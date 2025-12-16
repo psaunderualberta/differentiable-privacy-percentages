@@ -215,7 +215,9 @@ class SweepConfig:
 
     @property
     def plotting_interval(self) -> int:
-        return max(1, self.total_timesteps // self.plotting_steps)
+        if self.plotting_steps >= self.total_timesteps:
+            return 1
+        return self.total_timesteps // self.plotting_steps
 
     def to_wandb_sweep(self) -> dict[str, object]:
         config = {
