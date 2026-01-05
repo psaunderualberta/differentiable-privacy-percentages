@@ -123,7 +123,7 @@ def main():
         to_diff = jlax.pmean(to_diff, "x").squeeze()
         return to_diff, (losses, accuracies, val_acc)
 
-    optimizer = optax.sgd(learning_rate=sweep_config.policy.lr.sample())
+    optimizer = optax.sgd(learning_rate=sweep_config.policy.lr.sample(), momentum=0.25)
     opt_state = optimizer.init(schedule)  # type: ignore
 
     iterator = tqdm.tqdm(

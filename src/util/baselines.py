@@ -14,7 +14,11 @@ from environments.dp import (
     train_with_stateful_noise,
 )
 from privacy.gdp_privacy import GDPPrivacyParameters
-from privacy.schedules import AbstractNoiseAndClipSchedule, PolicyAndClipSchedule
+from privacy.schedules import (
+    AbstractNoiseAndClipSchedule,
+    DynamicDPSGDSchedule,
+    PolicyAndClipSchedule,
+)
 from privacy.stateful_schedules import (
     AbstractScheduleState,
     AbstractStatefulNoiseAndClipSchedule,
@@ -161,11 +165,20 @@ class Baseline:
 
         name = "Clip to Median Gradient Norm"
 
-        df = self.generate_schedule_data(
+        median_df = self.generate_schedule_data(
             schedule, name, key, with_progress_bar=with_progress_bar
         )
 
-        self.original_df = df
+        c_0 = jnp.asarray(2.5)
+        rho_mu = jnp.asarray(2)
+        rho_c = jnp.asarray(2)
+        schedule = DynamicDPSGDSchedule(rho_mu, rho_c, c_0, self.privacy_params)
+        name = "Dynamic-SGD"
+
+        dynamic_df = self.generate_schedule_data(
+            schedule, name, key, with_progress_bar=with_progress_bar
+        )
+        self.original_df = pd.concat([median_df, dynamic_df], axis=0)
         self.df = self.original_df.copy()
 
         return self.df.copy()
