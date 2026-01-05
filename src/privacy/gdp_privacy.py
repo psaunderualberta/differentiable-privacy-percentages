@@ -88,7 +88,7 @@ class GDPPrivacyParameters(eqx.Module):
 
         eps = self.compute_eps()
 
-        schedule = schedule**2 + eps
+        schedule = schedule**2
         return jnp.sqrt(jnp.log(schedule * (jnp.exp(self.mu_0**2) - 1) + 1))
 
     def mu_schedule_to_weights(self, schedule: Array) -> Array:
@@ -104,8 +104,8 @@ class GDPPrivacyParameters(eqx.Module):
         Returns:
             A 1D array representing the adjusted schedule.
         """
-        eps = self.compute_eps()
-        return jnp.sqrt((jnp.exp(schedule**2) - 1) / (jnp.exp(self.mu_0**2) - 1) - eps)
+        sqrd_weights = (jnp.exp(schedule**2) - 1) / (jnp.exp(self.mu_0**2) - 1)
+        return jnp.sqrt(sqrd_weights)
 
     def gdp_to_sigma(self, C: Array, mu: Array) -> Array:
         """Convert GDP mu parameter to Gaussian noise scale sigma.
@@ -181,6 +181,9 @@ class GDPPrivacyParameters(eqx.Module):
         max_sigma = SingletonConfig.get_policy_config_instance().max_sigma
         schedule = jnp.where(schedule > max_sigma, max_sigma, schedule)
         schedule = eqx.error_if(schedule, (schedule == 0).any(), "schedule has 0!")
+        schedule = eqx.error_if(
+            schedule, jnp.isinf(1 / schedule).any(), "schedule has Inf!"
+        )
         return self.mu_schedule_to_weights(C / schedule)
 
     # TODO: Move projection into the gradient computation
@@ -188,11 +191,10 @@ class GDPPrivacyParameters(eqx.Module):
         """
         W: in the form w**2 + eps
         """
-        eps = self.compute_eps()
 
         # project to l2 sphere
         l2_sphere_radius = jnp.sqrt(
-            self.mu**2 / (self.p**2 * (jnp.exp(self.mu_0**2) - 1)) - self.T * eps
+            self.mu**2 / (self.p**2 * (jnp.exp(self.mu_0**2) - 1))
         )
         projected_weights = optax.projections.projection_l2_ball(
             weights, scale=l2_sphere_radius

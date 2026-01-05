@@ -22,6 +22,7 @@ from privacy.base_schedules import ConstantSchedule, InterpolatedExponentialSche
 from privacy.gdp_privacy import get_privacy_params
 from privacy.schedules import (
     AbstractNoiseAndClipSchedule,
+    AlternatingSigmaAndClipSchedule,
     PolicyAndClipSchedule,
     SigmaAndClipSchedule,
 )
@@ -63,7 +64,7 @@ def main():
     )
     # policy_schedule = ConstantSchedule(1.0, T)
     # clip_schedule = ConstantSchedule(1.0, T)
-    schedule = SigmaAndClipSchedule(
+    schedule = AlternatingSigmaAndClipSchedule(
         noise_schedule=policy_schedule,
         clip_schedule=clip_schedule,
         privacy_params=gdp_params,
@@ -122,7 +123,7 @@ def main():
         to_diff = jlax.pmean(to_diff, "x").squeeze()
         return to_diff, (losses, accuracies, val_acc)
 
-    optimizer = optax.sgd(learning_rate=sweep_config.policy.lr.sample(), momentum=0.25)
+    optimizer = optax.sgd(learning_rate=sweep_config.policy.lr.sample())
     opt_state = optimizer.init(schedule)  # type: ignore
 
     iterator = tqdm.tqdm(

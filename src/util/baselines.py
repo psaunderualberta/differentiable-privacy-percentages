@@ -10,15 +10,16 @@ from jaxtyping import Array, PRNGKeyArray
 
 from environments.dp import (
     DP_RL_Params,
-    train_with_grad_derived_noise,
     train_with_noise,
-)
-from privacy.derived_schedules import (
-    AbstractGradientDerivedNoiseAndClipSchedule,
-    MedianGradientNoiseAndClipSchedule,
+    train_with_stateful_noise,
 )
 from privacy.gdp_privacy import GDPPrivacyParameters
 from privacy.schedules import AbstractNoiseAndClipSchedule, PolicyAndClipSchedule
+from privacy.stateful_schedules import (
+    AbstractScheduleState,
+    AbstractStatefulNoiseAndClipSchedule,
+    StatefulMedianGradientNoiseAndClipSchedule,
+)
 
 file_location = os.path.abspath(os.path.dirname(__file__))
 
@@ -107,8 +108,7 @@ class Baseline:
 
     def generate_schedule_data(
         self,
-        schedule: AbstractNoiseAndClipSchedule
-        | AbstractGradientDerivedNoiseAndClipSchedule,
+        schedule: AbstractNoiseAndClipSchedule | AbstractStatefulNoiseAndClipSchedule,
         name: str,
         key: PRNGKeyArray,
         with_progress_bar: bool = True,
@@ -130,10 +130,12 @@ class Baseline:
                     schedule, self.env_params, mb_key, init_key, noise_key
                 )
             else:
-                _, val_loss, losses, accuracies, val_acc = (
-                    train_with_grad_derived_noise(
-                        schedule, self.env_params, mb_key, init_key, noise_key
-                    )
+                _, val_loss, losses, accuracies, val_acc = train_with_stateful_noise(
+                    schedule,
+                    self.env_params,
+                    mb_key,
+                    init_key,
+                    noise_key,
                 )
             df.loc[len(df)] = {  # type: ignore
                 "type": name,
@@ -150,12 +152,12 @@ class Baseline:
     def generate_baseline_data(
         self, key: PRNGKeyArray, with_progress_bar: bool = True
     ) -> pd.DataFrame:
-        T = self.env_params.max_steps_in_episode
-
         # Uniform schedule
-        weights = jnp.ones(T, dtype=jnp.float32)
-
-        schedule = MedianGradientNoiseAndClipSchedule(weights, self.privacy_params)
+        c_0 = jnp.asarray(0.1)
+        eta_C = jnp.asarray(0.2)
+        schedule = StatefulMedianGradientNoiseAndClipSchedule(
+            c_0, eta_C, self.privacy_params
+        )
 
         name = "Clip to Median Gradient Norm"
 

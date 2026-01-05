@@ -16,8 +16,11 @@ from jaxtyping import Array, PRNGKeyArray, PyTree
 
 from environments.dp_params import DP_RL_Params
 from environments.losses import loss, vmapped_loss
-from privacy.derived_schedules import AbstractGradientDerivedNoiseAndClipSchedule
 from privacy.schedules import AbstractNoiseAndClipSchedule
+from privacy.stateful_schedules import (
+    AbstractScheduleState,
+    AbstractStatefulNoiseAndClipSchedule,
+)
 from util.logger import Loggable, LoggingSchema
 from util.util import (
     classification_accuracy,
@@ -129,8 +132,11 @@ def train_with_noise(
         )
 
         new_net_params, _ = eqx.partition(new_model, eqx.is_array)
-        opt_state_params, _ = eqx.partition(new_opt_state, eqx.is_array)
-        return (new_net_params, new_opt_state, mb_key, noise_key), (new_loss, accuracy)
+        new_opt_state_params, _ = eqx.partition(new_opt_state, eqx.is_array)
+        return (new_net_params, new_opt_state_params, mb_key, noise_key), (
+            new_loss,
+            accuracy,
+        )
 
     initial_carry = (net_params, opt_state_params, mb_key, noise_key)
     (net_params, _, mb_key, noise_key), (losses, accuracies) = jax.lax.scan(
@@ -154,16 +160,16 @@ def train_with_noise(
 
 
 @eqx.filter_jit
-def train_with_grad_derived_noise(
-    schedule: AbstractGradientDerivedNoiseAndClipSchedule,
+def train_with_stateful_noise(
+    schedule: AbstractStatefulNoiseAndClipSchedule,
     params: DP_RL_Params,
     mb_key: PRNGKeyArray,
     init_key: PRNGKeyArray,
     noise_key: PRNGKeyArray,
 ) -> tuple[eqx.Module, Array, Array, Array, Array]:
     # Get noise and clip schedules
-    mus = schedule.get_private_mus()
-    iters = jnp.arange(mus.size)
+    initial_schedule_state = schedule.get_initial_state()
+    iters = schedule.get_iteration_array()
 
     # Create network
     network = reinit_model(params.network, init_key)
@@ -179,13 +185,15 @@ def train_with_grad_derived_noise(
         jax.checkpoint, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable
     )
     def scanned_training_step(
-        carry: tuple[PyTree, PyTree, PRNGKeyArray, PRNGKeyArray],
+        carry: tuple[PyTree, PyTree, AbstractScheduleState, PRNGKeyArray, PRNGKeyArray],
         iter: Array,
     ) -> tuple[
-        tuple[PyTree, optax.OptState, PRNGKeyArray, PRNGKeyArray],  # Carry values
+        tuple[
+            PyTree, optax.OptState, AbstractScheduleState, PRNGKeyArray, PRNGKeyArray
+        ],  # Carry values
         tuple[Array, Array],  # Scan outputs
     ]:
-        net_params, opt_state_params, mb_key, noise_key = carry
+        net_params, opt_state_params, schedule_state, mb_key, noise_key = carry
         model = eqx.combine(net_params, net_static)
         opt_state = eqx.combine(opt_state_params, opt_state_static)
 
@@ -193,9 +201,16 @@ def train_with_grad_derived_noise(
         batch_x, batch_y = sample_batch_uniform(
             params.X, params.y, params.dummy_batch, _key
         )
-
         new_loss, grads = vmapped_loss(model, batch_x, batch_y)
-        noise, clip = schedule.get_derived_noise_and_clip(grads, iter)
+
+        # update state
+        new_schedule_state = schedule.update_state(
+            schedule_state, grads, iter, batch_x, batch_y
+        )
+        clip = new_schedule_state.get_clip()
+        noise = new_schedule_state.get_noise()
+
+        # Clip gradients
         clipped_grads = clip_grads_abadi(grads, clip)
 
         # Add spherical noise to gradients
@@ -214,11 +229,26 @@ def train_with_grad_derived_noise(
         )
 
         new_net_params, _ = eqx.partition(new_model, eqx.is_array)
-        opt_state_params, _ = eqx.partition(new_opt_state, eqx.is_array)
-        return (new_net_params, new_opt_state, mb_key, noise_key), (new_loss, accuracy)
+        new_opt_state_params, _ = eqx.partition(new_opt_state, eqx.is_array)
+        return (
+            new_net_params,
+            new_opt_state_params,
+            new_schedule_state,
+            mb_key,
+            noise_key,
+        ), (
+            new_loss,
+            accuracy,
+        )
 
-    initial_carry = (net_params, opt_state_params, mb_key, noise_key)
-    (net_params, _, mb_key, noise_key), (losses, accuracies) = jax.lax.scan(
+    initial_carry = (
+        net_params,
+        opt_state_params,
+        initial_schedule_state,
+        mb_key,
+        noise_key,
+    )
+    (net_params, _, _, mb_key, noise_key), (losses, accuracies) = jax.lax.scan(
         scanned_training_step,
         initial_carry,
         xs=iters,

@@ -128,7 +128,7 @@ def get_spherical_noise(
     def f(g: eqx.Module | None, k: PRNGKeyArray):
         if g is None:
             return g
-        return clip * action * jax.random.normal(k, g.shape, g.dtype) / batch_size
+        return action * jax.random.normal(k, g.shape, g.dtype) / batch_size
 
     return jt.map(f, grads, pytree_keys(grads, key))
 
@@ -185,7 +185,7 @@ def index_pytree(structure: PyTree, index: int) -> PyTree:
 def pytree_has_nan(tree: PyTree) -> Array:
     def f(t: PyTree) -> bool:
         if t is None:
-            return None
+            return False
         return jnp.isnan(t).any(axis=None)
 
     return jt.reduce(lambda x, y: jnp.logical_or(x, y), jt.map(f, tree), False)
@@ -195,7 +195,7 @@ def pytree_has_inf(tree: PyTree) -> Array:
     def f(t: PyTree) -> bool:
         if t is None:
             return None
-        return ~jnp.isfinite(t).any(axis=None)
+        return jnp.isinf(t).any(axis=None)
 
     return jt.reduce(lambda x, y: jnp.logical_or(x, y), jt.map(f, tree), False)
 
