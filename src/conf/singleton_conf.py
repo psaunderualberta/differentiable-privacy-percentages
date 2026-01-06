@@ -1,16 +1,18 @@
+from dataclasses import asdict, replace
+from pprint import pprint
+
 import tyro
+
+import wandb
 from conf.config import (
     Config,
+    DistributionConfig,
     EnvConfig,
+    PolicyConfig,
     SweepConfig,
     WandbConfig,
-    PolicyConfig,
-    DistributionConfig,
     dist_config_helper,
 )
-from pprint import pprint
-from dataclasses import asdict, replace
-import wandb
 
 
 def get_wandb_run_conf(wandb_conf: WandbConfig) -> dict:
@@ -39,7 +41,7 @@ def _populate_conf_from_dict(conf: Config, dictionary: dict) -> Config:
 
 
 def _get_config():
-    SingletonConfig.config = tyro.cli(Config)
+    SingletonConfig.config = tyro.cli(Config, config=(tyro.conf.SuppressFixed,))
     wandb_conf = SingletonConfig.get_wandb_config_instance()
     if wandb_conf.restart_run_id is not None:
         conf = get_wandb_run_conf(wandb_conf)

@@ -7,8 +7,8 @@ import jax.numpy as jnp
 import jax.random as jr
 import optax
 
-from conf.config import MLPConfig
-from networks.util import Network, Linear
+from networks.mlp.config import MLPConfig
+from networks.util import Linear, Network
 
 
 class MLP(eqx.Module, Network):
@@ -25,8 +25,10 @@ class MLP(eqx.Module, Network):
         layer_out = conf.hidden_sizes[0] if has_hidden else conf.nclasses
         layers = [
             [
-                Linear(conf.din, layer_out, key=_key, initialization=conf.initialization),
-                eqx.nn.LayerNorm(layer_out)
+                Linear(
+                    conf.din, layer_out, key=_key, initialization=conf.initialization
+                ),
+                eqx.nn.LayerNorm(layer_out),
             ]
         ]
 
@@ -37,8 +39,13 @@ class MLP(eqx.Module, Network):
                 layers.append(
                     [
                         jax.nn.tanh,
-                        Linear(layer_in, layer_out, key=_key, initialization=conf.initialization),
-                        eqx.nn.LayerNorm(layer_out)
+                        Linear(
+                            layer_in,
+                            layer_out,
+                            key=_key,
+                            initialization=conf.initialization,
+                        ),
+                        eqx.nn.LayerNorm(layer_out),
                     ]
                 )
 
@@ -48,7 +55,12 @@ class MLP(eqx.Module, Network):
             layers.append(
                 [
                     jax.nn.tanh,
-                    Linear(layer_out, conf.nclasses, key=_key, initialization=conf.initialization),
+                    Linear(
+                        layer_out,
+                        conf.nclasses,
+                        key=_key,
+                        initialization=conf.initialization,
+                    ),
                 ]
             )
 
@@ -101,7 +113,9 @@ class MLP(eqx.Module, Network):
             return jax.lax.select(len(arr.shape) > 1, 0, arr.shape[0])
 
         model_arrays, _ = eqx.partition(self.layers, eqx.is_array)
-        hidden_dims = jax.tree.map(get_out_dim, model_arrays, is_leaf=lambda x: x is None)
+        hidden_dims = jax.tree.map(
+            get_out_dim, model_arrays, is_leaf=lambda x: x is None
+        )
         return jax.tree.reduce(lambda x, y: x + y, hidden_dims).item()
 
 
@@ -112,6 +126,7 @@ if __name__ == "__main__":
     y = jnp.ones((10, 1))
 
     from conf.singleton_conf import SingletonConfig
+
     model_conf = SingletonConfig.get_environment_config_instance().mlp
 
     model = MLP.from_config(model_conf)

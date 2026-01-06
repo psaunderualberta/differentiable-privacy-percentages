@@ -2,9 +2,11 @@ from dataclasses import dataclass
 from pprint import pprint
 from typing import Literal
 
-import jax.numpy as jnp
 import numpy as np
 import tyro
+
+from networks.cnn.config import CNNConfig
+from networks.mlp.config import MLPConfig
 
 
 @dataclass(frozen=True)
@@ -47,63 +49,6 @@ def dist_config_helper(
     if min >= max:
         max += 1e-10
     return DistributionConfig(min=min, max=max, value=value, distribution=distribution)
-
-
-# ---
-# Configs for different private networks
-# ---
-@dataclass
-class MLPConfig:
-    """Configuration for Multi-Layer Perceptron"""
-
-    din: int = -1  # Value is derived from data
-    hidden_sizes: tuple[int, ...] = (32,)  # Size of hidden layers
-    nclasses: int = -1  # Value is derived from data
-    initialization: Literal["glorot", "zeros"] = "glorot"
-    key: int = 0  # Overridden as derivative from experiment.env_prng_key
-
-    def to_wandb_sweep(self) -> dict[str, object]:
-        attrs = [
-            "din",
-            "dhidden",
-            "nhidden",
-            "initialization",
-            "nclasses",
-        ]
-        return {"parameters": {attr: {"value": getattr(self, attr)} for attr in attrs}}
-
-
-@dataclass
-class CNNConfig:
-    """Configuration for Convolutional Neural Network"""
-
-    # linear config params
-    mlp: MLPConfig
-
-    # conv config params
-    channels: tuple[int, ...] = (16, 32)  # Number of channels in each conv layer
-    nchannels: int = -1  # Number of input channels, derived from data
-    kernel_sizes: tuple[int, ...] = (8, 4)  # Kernel sizes for each conv layer
-    paddings: tuple[int, ...] = (2, 0)  # Padding for each conv layer
-    strides: tuple[int, ...] = (2, 2)  # Stride
-    pool_kernel_size: int = 2  # Edge length of pooling kernel
-    key: int = 0  # Overridden as derivative from experiment.env_prng_key
-
-    # dummy item, used to determine MLP input shape
-    dummy_data: jnp.ndarray | None = None
-
-    def to_wandb_sweep(self) -> dict[str, object]:
-        attrs = [
-            "nchannels",
-            "kernel_size",
-            "pool_kernel_size",
-            "hidden_channels",
-            "nhidden_conv",
-        ]
-        return {
-            "parameters": {attr: {"value": getattr(self, attr)} for attr in attrs}
-            | {"mlp": self.mlp.to_wandb_sweep()}
-        }
 
 
 # ---
