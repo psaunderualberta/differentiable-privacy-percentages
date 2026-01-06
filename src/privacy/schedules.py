@@ -8,7 +8,7 @@ from jaxtyping import Array
 from scipy import optimize
 
 from conf.singleton_conf import SingletonConfig
-from policy.base_schedules import AbstractSchedule
+from privacy.base_schedules import AbstractSchedule
 from privacy.gdp_privacy import GDPPrivacyParameters
 from util.logger import Loggable, LoggableArray, LoggingSchema
 from util.util import pytree_has_inf
