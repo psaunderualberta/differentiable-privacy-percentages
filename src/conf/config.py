@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pprint import pprint
-from typing import Literal
+from typing import Annotated, Literal, Union
 
 import tyro
 
@@ -49,8 +49,10 @@ class PolicyConfig:
 class EnvConfig:
     "Configuration for the Reinforcement Learning Environment"
 
-    mlp: MLPConfig  # Configuration for the MLP to privatize. Ignored if 'network_type' = cnn
-    cnn: CNNConfig  # Configuration for the CNN to privatize. Ignored if 'network_type' = mlp
+    network: Union[
+        Annotated[MLPConfig, tyro.conf.subcommand("mlp")],
+        Annotated[CNNConfig, tyro.conf.subcommand("cnn")],
+    ]
 
     lr: DistributionConfig = dist_config_helper(
         value=0.1,
@@ -67,17 +69,11 @@ class EnvConfig:
     C: float = 1.0  # Ignored
     network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to privatize.
 
-    # Derived object, getting the actual network config
-    @property
-    def network(self) -> MLPConfig | CNNConfig:
-        return getattr(self, self.network_type)
-
     def to_wandb_sweep(self) -> dict[str, object]:
         assert isinstance(self.lr, DistributionConfig)
         return {
             "parameters": {
-                "mlp": self.mlp.to_wandb_sweep(),
-                "cnn": self.cnn.to_wandb_sweep(),
+                "network": self.network.to_wandb_sweep(),
                 "lr": self.lr.to_wandb_sweep(),
                 "optimizer": {"value": self.optimizer},
                 "loss_type": {"value": self.loss_type},
