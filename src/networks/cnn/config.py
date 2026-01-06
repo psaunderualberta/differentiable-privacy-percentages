@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 from tyro.conf import Fixed
 
+from conf.config_util import to_wandb_sweep_params
 from networks.mlp.config import MLPConfig
 
 
@@ -25,15 +26,13 @@ class CNNConfig:
     # dummy item, used to determine MLP input shape
     dummy_data: jnp.ndarray | None = None
 
+    attrs: Fixed[tuple[str, ...]] = (
+        "nchannels",
+        "kernel_size",
+        "pool_kernel_size",
+        "hidden_channels",
+        "nhidden_conv",
+    )
+
     def to_wandb_sweep(self) -> dict[str, object]:
-        attrs = [
-            "nchannels",
-            "kernel_size",
-            "pool_kernel_size",
-            "hidden_channels",
-            "nhidden_conv",
-        ]
-        return {
-            "parameters": {attr: {"value": getattr(self, attr)} for attr in attrs}
-            | {"mlp": self.mlp.to_wandb_sweep()}
-        }
+        return to_wandb_sweep_params(self)

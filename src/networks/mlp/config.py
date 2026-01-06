@@ -3,6 +3,8 @@ from typing import Literal
 
 from tyro.conf import Fixed
 
+from conf.config_util import to_wandb_sweep_params
+
 
 @dataclass
 class MLPConfig:
@@ -13,13 +15,13 @@ class MLPConfig:
     nclasses: int = -1  # Value is derived from data
     initialization: Literal["glorot", "zeros"] = "glorot"
     key: Fixed[int] = 0  # Overridden as derivative from experiment.env_prng_key
+    attrs: Fixed[tuple[str, ...]] = (
+        "din",
+        "dhidden",
+        "nhidden",
+        "initialization",
+        "nclasses",
+    )
 
     def to_wandb_sweep(self) -> dict[str, object]:
-        attrs = [
-            "din",
-            "dhidden",
-            "nhidden",
-            "initialization",
-            "nclasses",
-        ]
-        return {"parameters": {attr: {"value": getattr(self, attr)} for attr in attrs}}
+        return to_wandb_sweep_params(self)

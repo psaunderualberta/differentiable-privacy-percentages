@@ -2,54 +2,16 @@ from dataclasses import dataclass
 from pprint import pprint
 from typing import Annotated, Literal, Union
 
-import numpy as np
 import tyro
+from tyro.conf import Fixed
 
+from conf.config_util import (
+    DistributionConfig,
+    dist_config_helper,
+    to_wandb_sweep_params,
+)
 from networks.cnn.config import CNNConfig
 from networks.mlp.config import MLPConfig
-
-
-@dataclass(frozen=True)
-class DistributionConfig:
-    min: float  # minimum of distribiution
-    max: float  # maximum of distribution
-    value: float  # constant value if distribution == 'constant'
-    distribution: str  # type of distribution, in wandb-format (i.e. uniform, log_uniform_values, etc.)
-
-    def sample(self) -> float:
-        if self.distribution == "constant":
-            return self.value
-
-        elif self.distribution == "log_uniform_values":
-            return np.exp(
-                np.random.uniform(low=np.log(self.min), high=np.log(self.max))
-            )
-
-        return np.random.uniform(low=self.min, high=self.min)
-
-    def to_wandb_sweep(self):
-        if self.distribution == "constant":
-            return {"distribution": self.distribution, "value": self.value}
-
-        return {
-            "min": self.min,
-            "max": self.max,
-            "distribution": self.distribution,
-        }
-
-
-# wandb cannot create sweeps if any distribution has min >= max
-# >:(
-def dist_config_helper(
-    min: float = 0.0,
-    max: float = 0.0,
-    value: float = 0.0,
-    distribution: str = "constant",
-) -> DistributionConfig:
-    if min >= max:
-        max += 1e-10
-    return DistributionConfig(min=min, max=max, value=value, distribution=distribution)
-
 
 # ---
 # Config for the policy
@@ -69,16 +31,15 @@ class PolicyConfig:
     )  # Learning rate configuration of policy network
     max_sigma: float = 10.0
 
+    attrs: Fixed[tuple[str, ...]] = (
+        "network",
+        "lr",
+        "batch_size",
+        "max_sigma",
+    )
+
     def to_wandb_sweep(self) -> dict[str, object]:
-        assert isinstance(self.lr, DistributionConfig)
-        return {
-            "parameters": {
-                "network": self.network.to_wandb_sweep(),
-                "lr": self.lr.to_wandb_sweep(),
-                "batch_size": {"value": self.batch_size},
-                "max_sigma": {"value": self.max_sigma},
-            }
-        }
+        return to_wandb_sweep_params(self)
 
 
 # ---
@@ -108,24 +69,21 @@ class EnvConfig:
     batch_size: int = 250  # Batch size for NN training
     max_steps_in_episode: int = 100  # Maximum # of steps within an episode
     C: float = 1.0  # Ignored
-    network_type: Literal["mlp", "cnn"] = "mlp"  # The type of network to privatize.
+
+    attrs: Fixed[tuple[str, ...]] = (
+        "network",
+        "lr",
+        "optimizer",
+        "loss_type",
+        "eps",
+        "delta",
+        "batch_size",
+        "max_steps_in_episode",
+        "C",
+    )
 
     def to_wandb_sweep(self) -> dict[str, object]:
-        assert isinstance(self.lr, DistributionConfig)
-        return {
-            "parameters": {
-                "network": self.network.to_wandb_sweep(),
-                "lr": self.lr.to_wandb_sweep(),
-                "optimizer": {"value": self.optimizer},
-                "loss_type": {"value": self.loss_type},
-                "eps": {"value": self.eps},
-                "delta": {"value": self.delta},
-                "batch_size": {"value": self.batch_size},
-                "max_steps_in_episode": {"value": self.max_steps_in_episode},
-                "C": {"value": self.C},
-                "network_type": {"value": self.network_type},
-            }
-        }
+        return to_wandb_sweep_params(self)
 
 
 @dataclass
@@ -148,6 +106,19 @@ class SweepConfig:
     env_prng_seed: int = 42  # Environment configuration seed
     train_on_single_network: bool = False  # Train the policy on only a single network (same initialization & minibatches)
 
+    attrs: Fixed[tuple[str, ...]] = (
+        "policy",
+        "env",
+        "plotting_steps",
+        "with_baselines",
+        "dataset",
+        "dataset_poly_d",
+        "total_timesteps",
+        "cfg_prng_seed",
+        "env_prng_seed",
+        "train_on_single_network",
+    )
+
     @property
     def plotting_interval(self) -> int:
         if self.plotting_steps >= self.total_timesteps:
@@ -161,18 +132,7 @@ class SweepConfig:
                 "name": self.metric_name,
                 "goal": self.metric_goal,
             },
-            "parameters": {
-                "env": self.env.to_wandb_sweep(),
-                "policy": self.policy.to_wandb_sweep(),
-                "plotting_steps": {"value": self.plotting_steps},
-                "with_baselines": {"value": self.with_baselines},
-                "dataset": {"value": self.dataset},
-                "dataset_poly_d": {"value": self.dataset_poly_d},
-                "total_timesteps": {"value": self.total_timesteps},
-                "cfg_prng_seed": {"value": self.cfg_prng_seed},
-                "env_prng_seed": {"value": self.env_prng_seed},
-                "train_on_single_network": {"value": self.train_on_single_network},
-            },
+            **to_wandb_sweep_params(self),
         }
 
         if self.description is not None:
