@@ -258,18 +258,8 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         private_sigmas = self.get_private_sigmas()
         clips = self.get_private_clips()
 
-        private_sigmas = eqx.error_if(
-            private_sigmas, pytree_has_inf(private_sigmas), "private_sigmas have Inf!"
-        )
-        private_sigmas = eqx.error_if(
-            private_sigmas, (private_sigmas == 0).any(), "private_sigmas has 0!"
-        )
         weights = self.privacy_params.sigma_schedule_to_weights(clips, private_sigmas)
-        weights = eqx.error_if(weights, pytree_has_inf(weights), "weights1 have Inf!")
         proj_weights = self.privacy_params.project_weights(weights)
-        proj_weights = eqx.error_if(
-            proj_weights, pytree_has_inf(proj_weights), "weights2 have Inf!"
-        )
         return proj_weights.squeeze()
 
     @eqx.filter_jit
@@ -365,7 +355,7 @@ class DynamicDPSGDSchedule(AbstractNoiseAndClipSchedule):
         self,
         rho_mu: Array,
         rho_C: Array,
-        C_0: Array,
+        c_0: Array,
         privacy_params: GDPPrivacyParameters,
         eps: Array | float = 0.01,
     ):
@@ -373,7 +363,7 @@ class DynamicDPSGDSchedule(AbstractNoiseAndClipSchedule):
         self.__iters = jnp.arange(1, T + 1)
         self.rho_mu = rho_mu
         self.rho_C = rho_C
-        self.C_0 = C_0
+        self.C_0 = c_0
         self.__eps = jnp.asarray(eps)
 
         self.privacy_params = privacy_params

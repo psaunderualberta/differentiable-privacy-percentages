@@ -1,4 +1,5 @@
 import os
+from typing import Callable, Type
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -153,31 +154,92 @@ class Baseline:
         # Create a copy of baseline data, then another to be modified
         return df
 
+    def baseline_sweep(
+        self,
+        key: PRNGKeyArray,
+        params: list[Callable[[PRNGKeyArray], Array]],
+        name: str,
+        schedule_class: Type[AbstractNoiseAndClipSchedule]
+        | Type[AbstractStatefulNoiseAndClipSchedule],
+        num_runs_in_sweep: int = 20,
+        with_progress_bar: bool = True,
+    ) -> pd.DataFrame:
+        num_params = len(params)
+        best_params = []
+        best_run_accuracy = 0
+        for _ in tqdm.tqdm(range(num_runs_in_sweep), desc=f"Sweep: {name}"):
+            run_params = []
+            key, _key = jr.split(key)
+            param_keys = jr.split(_key, num_params)
+            for param_fun, param_key in zip(params, param_keys):
+                run_params.append(param_fun(param_key))
+
+            schedule = schedule_class(*run_params)
+            df = self.generate_schedule_data(
+                schedule, name, key, with_progress_bar=False, iterations=10
+            )
+
+            run_accuracy = df["accuracy"].mean()
+            if df["accuracy"].mean() > best_run_accuracy:
+                best_run_accuracy = run_accuracy
+                best_params = run_params
+
+        schedule = schedule_class(*best_params)
+
+        return self.generate_schedule_data(schedule, name, key, with_progress_bar=True)
+
     def generate_baseline_data(
         self, key: PRNGKeyArray, with_progress_bar: bool = True
     ) -> pd.DataFrame:
-        # Uniform schedule
-        c_0 = jnp.asarray(0.1)
-        eta_C = jnp.asarray(0.2)
-        schedule = StatefulMedianGradientNoiseAndClipSchedule(
-            c_0, eta_C, self.privacy_params
-        )
-
         name = "Clip to Median Gradient Norm"
+        params = [
+            lambda key: jr.uniform(key, shape=(), minval=0.01, maxval=1.0),  # c_0
+            lambda key: jr.uniform(key, shape=(), minval=0.1, maxval=1.0),  # eta_C
+            lambda _: self.privacy_params,  # privacy_params
+        ]
 
-        median_df = self.generate_schedule_data(
-            schedule, name, key, with_progress_bar=with_progress_bar
+        key, sweep_key = jr.split(key)
+        median_df = self.baseline_sweep(
+            sweep_key,
+            params,
+            name,
+            StatefulMedianGradientNoiseAndClipSchedule,
+            with_progress_bar=with_progress_bar,
         )
 
-        c_0 = jnp.asarray(2.5)
-        rho_mu = jnp.asarray(2)
-        rho_c = jnp.asarray(2)
-        schedule = DynamicDPSGDSchedule(rho_mu, rho_c, c_0, self.privacy_params)
-        name = "Dynamic-SGD"
+        # Uniform schedule
+        # c_0 = jnp.asarray(0.1)
+        # eta_C = jnp.asarray(0.2)
+        # schedule = StatefulMedianGradientNoiseAndClipSchedule(
+        #     c_0, eta_C, self.privacy_params
+        # )
 
-        dynamic_df = self.generate_schedule_data(
-            schedule, name, key, with_progress_bar=with_progress_bar
+        # median_df = self.generate_schedule_data(
+        #     schedule, name, key, with_progress_bar=with_progress_bar
+        # )
+
+        name = "Dynamic-DPSGD"
+        params = [
+            lambda key: jr.uniform(key, shape=(), minval=1.5, maxval=5.0),  # c_0
+            lambda key: jr.uniform(key, shape=(), minval=1, maxval=10),  # rho_mu
+            lambda key: jr.uniform(key, shape=(), minval=1, maxval=10),  # rho_c
+            lambda _: self.privacy_params,  # privacy_params
+        ]
+
+        key, sweep_key = jr.split(key)
+        dynamic_df = self.baseline_sweep(
+            sweep_key,
+            params,
+            name,
+            DynamicDPSGDSchedule,
+            with_progress_bar=with_progress_bar,
         )
+
+        # c_0 = jnp.asarray(2.5)
+        # rho_mu = jnp.asarray(2)
+        # rho_c = jnp.asarray(2)
+        # schedule = DynamicDPSGDSchedule(rho_mu, rho_c, c_0, self.privacy_params)
+
         self.original_df = pd.concat([median_df, dynamic_df], axis=0)
         self.df = self.original_df.copy()
 
