@@ -1,11 +1,13 @@
 from dataclasses import replace
+
 from jax import numpy as jnp
 
-from conf.config import CNNConfig, MLPConfig
 from conf.singleton_conf import SingletonConfig
+from networks.cnn.CNN import CNN
+from networks.cnn.config import CNNConfig
+from networks.mlp.config import MLPConfig
+from networks.mlp.MLP import MLP
 from util.dataloaders import get_datasets
-from networks.MLP import MLP
-from networks.CNN import CNN
 
 
 def net_factory(

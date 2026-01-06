@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import Any, List
 
 import chex
@@ -8,9 +9,8 @@ import jax.random as jr
 import optax
 
 from conf.config import CNNConfig
-from networks.util import Network 
-from dataclasses import replace
-from networks.MLP import MLP
+from networks.mlp.MLP import MLP
+from networks.util import Network
 
 
 class CNN(eqx.Module, Network):
