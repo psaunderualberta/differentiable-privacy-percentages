@@ -35,6 +35,7 @@ from util.util import ensure_valid_pytree, get_optimal_mesh
 def main():
     sweep_config = SingletonConfig.get_sweep_config_instance()
     wandb_config = SingletonConfig.get_wandb_config_instance()
+    exit()
 
     total_timesteps = sweep_config.total_timesteps
     env_prng_seed = sweep_config.env_prng_seed
