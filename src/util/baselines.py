@@ -14,14 +14,13 @@ from environments.dp import (
     train_with_noise,
     train_with_stateful_noise,
 )
-from policy.schedules import (
-    AbstractNoiseAndClipSchedule,
-    DynamicDPSGDSchedule,
-    PolicyAndClipSchedule,
-)
-from policy.stateful_schedules import (
+from policy.schedules.abstract import AbstractNoiseAndClipSchedule
+from policy.schedules.schedules import DynamicDPSGDSchedule, PolicyAndClipSchedule
+from policy.stateful_schedules.abstract import (
     AbstractScheduleState,
     AbstractStatefulNoiseAndClipSchedule,
+)
+from policy.stateful_schedules.stateful_schedules import (
     StatefulMedianGradientNoiseAndClipSchedule,
 )
 from privacy.gdp_privacy import GDPPrivacyParameters

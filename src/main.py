@@ -18,8 +18,9 @@ from environments.dp import (
     train_with_noise,
 )
 from environments.dp_params import DP_RL_Params
-from policy.base_schedules import ConstantSchedule, InterpolatedExponentialSchedule
-from policy.schedules import (
+from policy.base_schedules.constant import ConstantSchedule
+from policy.base_schedules.exponential import InterpolatedExponentialSchedule
+from policy.schedules.schedules import (
     AbstractNoiseAndClipSchedule,
     AlternatingSigmaAndClipSchedule,
     PolicyAndClipSchedule,
