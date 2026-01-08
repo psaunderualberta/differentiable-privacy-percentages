@@ -15,7 +15,8 @@ from environments.dp import (
     train_with_stateful_noise,
 )
 from policy.schedules.abstract import AbstractNoiseAndClipSchedule
-from policy.schedules.schedules import DynamicDPSGDSchedule, PolicyAndClipSchedule
+from policy.schedules.dynamic_dpsgd import DynamicDPSGDSchedule
+from policy.schedules.policy_and_clip import PolicyAndClipSchedule
 from policy.stateful_schedules.abstract import (
     AbstractScheduleState,
     AbstractStatefulNoiseAndClipSchedule,

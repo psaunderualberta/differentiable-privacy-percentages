@@ -20,12 +20,9 @@ from environments.dp import (
 from environments.dp_params import DP_RL_Params
 from policy.base_schedules.constant import ConstantSchedule
 from policy.base_schedules.exponential import InterpolatedExponentialSchedule
-from policy.schedules.schedules import (
-    AbstractNoiseAndClipSchedule,
-    AlternatingSigmaAndClipSchedule,
-    PolicyAndClipSchedule,
-    SigmaAndClipSchedule,
-)
+from policy.schedules.alternating import AlternatingSigmaAndClipSchedule
+from policy.schedules.policy_and_clip import PolicyAndClipSchedule
+from policy.schedules.sigma_and_clip import SigmaAndClipSchedule
 from privacy.gdp_privacy import get_privacy_params
 from util.baselines import Baseline
 from util.dataloaders import get_dataset_shapes
