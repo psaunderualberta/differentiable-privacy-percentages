@@ -14,17 +14,17 @@ from environments.dp import (
     train_with_noise,
     train_with_stateful_noise,
 )
-from privacy.gdp_privacy import GDPPrivacyParameters
-from privacy.schedules import (
+from policy.schedules import (
     AbstractNoiseAndClipSchedule,
     DynamicDPSGDSchedule,
     PolicyAndClipSchedule,
 )
-from privacy.stateful_schedules import (
+from policy.stateful_schedules import (
     AbstractScheduleState,
     AbstractStatefulNoiseAndClipSchedule,
     StatefulMedianGradientNoiseAndClipSchedule,
 )
+from privacy.gdp_privacy import GDPPrivacyParameters
 
 file_location = os.path.abspath(os.path.dirname(__file__))
 

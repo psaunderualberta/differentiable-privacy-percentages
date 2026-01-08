@@ -16,8 +16,8 @@ from jaxtyping import Array, PRNGKeyArray, PyTree
 
 from environments.dp_params import DP_RL_Params
 from environments.losses import loss, vmapped_loss
-from privacy.schedules import AbstractNoiseAndClipSchedule
-from privacy.stateful_schedules import (
+from policy.schedules import AbstractNoiseAndClipSchedule
+from policy.stateful_schedules import (
     AbstractScheduleState,
     AbstractStatefulNoiseAndClipSchedule,
 )

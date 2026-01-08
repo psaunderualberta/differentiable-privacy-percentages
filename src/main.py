@@ -18,14 +18,14 @@ from environments.dp import (
     train_with_noise,
 )
 from environments.dp_params import DP_RL_Params
-from privacy.base_schedules import ConstantSchedule, InterpolatedExponentialSchedule
-from privacy.gdp_privacy import get_privacy_params
-from privacy.schedules import (
+from policy.base_schedules import ConstantSchedule, InterpolatedExponentialSchedule
+from policy.schedules import (
     AbstractNoiseAndClipSchedule,
     AlternatingSigmaAndClipSchedule,
     PolicyAndClipSchedule,
     SigmaAndClipSchedule,
 )
+from privacy.gdp_privacy import get_privacy_params
 from util.baselines import Baseline
 from util.dataloaders import get_dataset_shapes
 from util.logger import Loggable, WandbTableLogger
