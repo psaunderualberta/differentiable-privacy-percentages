@@ -1,9 +1,6 @@
-from abc import abstractmethod
-
-import equinox as eqx
 import jax.numpy as jnp
 import optax
-from jax import debug, vmap
+from jax import vmap
 from jaxtyping import Array
 
 from conf.singleton_conf import SingletonConfig

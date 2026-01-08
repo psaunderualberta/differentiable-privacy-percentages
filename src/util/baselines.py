@@ -20,7 +20,7 @@ from policy.stateful_schedules.abstract import (
     AbstractScheduleState,
     AbstractStatefulNoiseAndClipSchedule,
 )
-from policy.stateful_schedules.stateful_schedules import (
+from policy.stateful_schedules.median_gradient import (
     StatefulMedianGradientNoiseAndClipSchedule,
 )
 from privacy.gdp_privacy import GDPPrivacyParameters
