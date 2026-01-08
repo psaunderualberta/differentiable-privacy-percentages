@@ -11,8 +11,12 @@ from policy.base_schedules.config import (
 )
 
 
+class AbstractNoiseAndClipScheduleConfig:
+    pass
+
+
 @dataclass
-class SigmaAndClipScheduleConfig:
+class SigmaAndClipScheduleConfig(AbstractNoiseAndClipScheduleConfig):
     noise: Union[
         Annotated[ConstantScheduleConfig, tyro.conf.subcommand("constant")],
         Annotated[InterpolatedClippedScheduleConfig, tyro.conf.subcommand("clipped")],
@@ -34,7 +38,7 @@ class SigmaAndClipScheduleConfig:
 
 
 @dataclass
-class PolicyAndClipScheduleConfig:
+class PolicyAndClipScheduleConfig(AbstractNoiseAndClipScheduleConfig):
     noise: Union[
         Annotated[ConstantScheduleConfig, tyro.conf.subcommand("constant")],
         Annotated[InterpolatedClippedScheduleConfig, tyro.conf.subcommand("clipped")],
@@ -56,7 +60,7 @@ class PolicyAndClipScheduleConfig:
 
 
 @dataclass
-class AlternatingSigmaAndClipScheduleConfig:
+class AlternatingSigmaAndClipScheduleConfig(AbstractNoiseAndClipScheduleConfig):
     noise: Union[
         Annotated[ConstantScheduleConfig, tyro.conf.subcommand("constant")],
         Annotated[InterpolatedClippedScheduleConfig, tyro.conf.subcommand("clipped")],
@@ -79,7 +83,7 @@ class AlternatingSigmaAndClipScheduleConfig:
 
 
 @dataclass
-class DynamicDPSGDScheduleConfig:
+class DynamicDPSGDScheduleConfig(AbstractNoiseAndClipScheduleConfig):
     rho_mu: float = 0.5
     rho_c: float = 0.5
     c_0: float = 1.5

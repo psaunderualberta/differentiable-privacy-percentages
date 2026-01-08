@@ -5,8 +5,12 @@ from tyro.conf import Fixed
 from conf.config_util import to_wandb_sweep_params
 
 
+class AbstractScheduleConfig:
+    pass
+
+
 @dataclass
-class ConstantScheduleConfig:
+class ConstantScheduleConfig(AbstractScheduleConfig):
     value: float = 1.0
     attrs: Fixed[tuple[str, ...]] = ("value",)
 
@@ -15,7 +19,7 @@ class ConstantScheduleConfig:
 
 
 @dataclass
-class InterpolatedExponentialScheduleConfig:
+class InterpolatedExponentialScheduleConfig(AbstractScheduleConfig):
     num_keypoints: int = 50
     init_value: float = 1.0
     attrs: Fixed[tuple[str, ...]] = ("num_keypoints", "init_value")
@@ -25,7 +29,7 @@ class InterpolatedExponentialScheduleConfig:
 
 
 @dataclass
-class InterpolatedClippedScheduleConfig:
+class InterpolatedClippedScheduleConfig(AbstractScheduleConfig):
     num_keypoints: int = 50
     init_value: float = 1.0
     attrs: Fixed[tuple[str, ...]] = ("num_keypoints", "init_value")

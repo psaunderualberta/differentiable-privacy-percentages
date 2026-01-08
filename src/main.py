@@ -20,6 +20,7 @@ from environments.dp import (
 from environments.dp_params import DP_RL_Params
 from policy.base_schedules.constant import ConstantSchedule
 from policy.base_schedules.exponential import InterpolatedExponentialSchedule
+from policy.factory import policy_factory
 from policy.schedules.alternating import AlternatingSigmaAndClipSchedule
 from policy.schedules.policy_and_clip import PolicyAndClipSchedule
 from policy.schedules.sigma_and_clip import SigmaAndClipSchedule
@@ -33,7 +34,7 @@ from util.util import ensure_valid_pytree, get_optimal_mesh
 def main():
     sweep_config = SingletonConfig.get_sweep_config_instance()
     wandb_config = SingletonConfig.get_wandb_config_instance()
-    exit()
+    # exit()
 
     total_timesteps = sweep_config.total_timesteps
     env_prng_seed = sweep_config.env_prng_seed
@@ -53,22 +54,12 @@ def main():
 
     # Initialize Policy model
     # TODO: Creatable via config
-    keypoints = jnp.arange(0, T + 1, step=T // 50, dtype=jnp.int32)
-    values = jnp.zeros_like(keypoints, dtype=jnp.float32)
-    # policy_schedule = InterpolatedExponentialSchedule(
-    #     keypoints=keypoints.copy(), values=values.copy(), T=T
-    # )
-    # clip_schedule = InterpolatedExponentialSchedule(
-    #     keypoints=keypoints.copy(), values=values.copy() + 2.6, T=T
-    # )
-    policy_schedule = ConstantSchedule(1.0, T)
-    clip_schedule = ConstantSchedule(1.0, T)
-    schedule = AlternatingSigmaAndClipSchedule(
-        noise_schedule=policy_schedule,
-        clip_schedule=clip_schedule,
-        privacy_params=gdp_params,
-    )
+
+    schedule_conf = SingletonConfig.get_policy_config_instance().schedule
+    schedule = policy_factory(schedule_conf, gdp_params)
+
     schedule = schedule.project()
+    exit()
     policy_batch_size = sweep_config.policy.batch_size
 
     # Initialize private environment

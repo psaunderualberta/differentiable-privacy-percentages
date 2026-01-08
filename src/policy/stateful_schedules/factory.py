@@ -6,7 +6,7 @@ from policy.stateful_schedules.median_gradient import (
 from src.privacy.gdp_privacy import GDPPrivacyParameters
 
 
-def base_schedule_factory(
+def stateful_schedule_factory(
     conf, privacy_params: GDPPrivacyParameters
 ) -> AbstractStatefulNoiseAndClipSchedule:
     if isinstance(conf, StatefulMedianGradientNoiseAndClipConfig):
