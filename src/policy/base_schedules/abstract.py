@@ -4,7 +4,6 @@ import equinox as eqx
 from jaxtyping import Array
 
 
-
 class AbstractSchedule(eqx.Module):
     @abc.abstractmethod
     def get_valid_schedule(self) -> Array:

@@ -1,13 +1,14 @@
 import jax.numpy as jnp
 import optax
 from jax import vmap
-from jaxtyping import Array
+from jaxtyping import Array, ArrayLike
 
 from conf.singleton_conf import SingletonConfig
 from policy.stateful_schedules.abstract import (
     AbstractScheduleState,
     AbstractStatefulNoiseAndClipSchedule,
 )
+from policy.stateful_schedules.config import StatefulMedianGradientNoiseAndClipConfig
 from privacy.gdp_privacy import GDPPrivacyParameters
 from util.logger import Loggable, LoggableArray, LoggingSchema
 
@@ -37,11 +38,21 @@ class StatefulMedianGradientNoiseAndClipSchedule(AbstractStatefulNoiseAndClipSch
     privacy_params: GDPPrivacyParameters
     gamma: float = 0.5
 
-    def __init__(self, c_0: Array, eta_c: Array, privacy_params: GDPPrivacyParameters):
-        self.c_0 = c_0
-        self.eta_c = eta_c
+    def __init__(
+        self, c_0: ArrayLike, eta_c: ArrayLike, privacy_params: GDPPrivacyParameters
+    ):
+        self.c_0 = jnp.asarray(c_0)
+        self.eta_c = jnp.asarray(eta_c)
         self.privacy_params = privacy_params
         self.iteration_array = jnp.arange(self.privacy_params.T)
+
+    @classmethod
+    def from_config(
+        cls,
+        conf: StatefulMedianGradientNoiseAndClipConfig,
+        privacy_params: GDPPrivacyParameters,
+    ) -> "StatefulMedianGradientNoiseAndClipSchedule":
+        return cls(conf.c_0, conf.eta_c, privacy_params)
 
     def get_initial_state(self) -> MedianGradientScheduleState:
         sigma = self.c_0 / self.privacy_params.mu_0

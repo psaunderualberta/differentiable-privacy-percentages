@@ -12,6 +12,13 @@ from conf.config_util import (
 )
 from networks.cnn.config import CNNConfig
 from networks.mlp.config import MLPConfig
+from policy.schedules.config import (
+    AlternatingSigmaAndClipScheduleConfig,
+    DynamicDPSGDScheduleConfig,
+    PolicyAndClipScheduleConfig,
+    SigmaAndClipScheduleConfig,
+)
+from policy.stateful_schedules.config import StatefulMedianGradientNoiseAndClipConfig
 
 # ---
 # Config for the policy
@@ -20,9 +27,17 @@ from networks.mlp.config import MLPConfig
 
 @dataclass
 class PolicyConfig:
-    network: Union[
-        Annotated[MLPConfig, tyro.conf.subcommand("mlp")],
-        Annotated[CNNConfig, tyro.conf.subcommand("cnn")],
+    schedule: Union[
+        Annotated[
+            AlternatingSigmaAndClipScheduleConfig, tyro.conf.subcommand("alternating")
+        ],
+        Annotated[DynamicDPSGDScheduleConfig, tyro.conf.subcommand("dynamic-dpsgd")],
+        Annotated[PolicyAndClipScheduleConfig, tyro.conf.subcommand("policy-and-clip")],
+        Annotated[SigmaAndClipScheduleConfig, tyro.conf.subcommand("sigma-and-clip")],
+        Annotated[
+            StatefulMedianGradientNoiseAndClipConfig,
+            tyro.conf.subcommand("median-gradient"),
+        ],
     ]
     batch_size: int = 1  # Batch size for policy training
     lr: DistributionConfig = dist_config_helper(
@@ -32,7 +47,7 @@ class PolicyConfig:
     max_sigma: float = 10.0
 
     attrs: Fixed[tuple[str, ...]] = (
-        "network",
+        "schedule",
         "lr",
         "batch_size",
         "max_sigma",
