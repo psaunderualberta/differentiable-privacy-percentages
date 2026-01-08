@@ -3,7 +3,7 @@ from policy.stateful_schedules.config import StatefulMedianGradientNoiseAndClipC
 from policy.stateful_schedules.median_gradient import (
     StatefulMedianGradientNoiseAndClipSchedule,
 )
-from src.privacy.gdp_privacy import GDPPrivacyParameters
+from privacy.gdp_privacy import GDPPrivacyParameters
 
 
 def stateful_schedule_factory(

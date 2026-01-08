@@ -24,7 +24,7 @@ class InterpolatedClippedSchedule(AbstractSchedule):
         cls, conf: InterpolatedClippedScheduleConfig
     ) -> "InterpolatedClippedSchedule":
         T = SingletonConfig.get_environment_config_instance().max_steps_in_episode
-        keypoints = jnp.arange(0, T + 1, step=T // conf.num_keypoints, dtype=jnp.int32)
+        keypoints = jnp.linspace(0, T, conf.num_keypoints, dtype=jnp.int32)
         values = jnp.zeros_like(keypoints, dtype=jnp.float32) + conf.init_value
 
         return cls(keypoints, values, T)

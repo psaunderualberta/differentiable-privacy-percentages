@@ -11,8 +11,8 @@ class AbstractScheduleConfig:
 
 @dataclass
 class ConstantScheduleConfig(AbstractScheduleConfig):
-    value: float = 1.0
-    attrs: Fixed[tuple[str, ...]] = ("value",)
+    init_value: float = 1.0
+    attrs: Fixed[tuple[str, ...]] = ("init_value",)
 
     def to_wandb_sweep(self):
         return to_wandb_sweep_params(self)

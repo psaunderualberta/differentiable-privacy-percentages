@@ -19,7 +19,7 @@ class ConstantSchedule(AbstractSchedule):
     @classmethod
     def from_config(cls, conf: ConstantScheduleConfig) -> "ConstantSchedule":
         T = SingletonConfig.get_environment_config_instance().max_steps_in_episode
-        return cls(conf.value, T)
+        return cls(conf.init_value, T)
 
     def get_valid_schedule(self) -> Array:
         return jlax.stop_gradient(self.placeholder) * self.value

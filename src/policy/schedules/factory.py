@@ -9,7 +9,7 @@ from policy.schedules.config import (
 from policy.schedules.dynamic_dpsgd import DynamicDPSGDSchedule
 from policy.schedules.policy_and_clip import PolicyAndClipSchedule
 from policy.schedules.sigma_and_clip import SigmaAndClipSchedule
-from src.privacy.gdp_privacy import GDPPrivacyParameters
+from privacy.gdp_privacy import GDPPrivacyParameters
 
 
 def schedule_factory(
