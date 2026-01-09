@@ -11,7 +11,7 @@ from conf.config_util import (
     to_wandb_sweep_params,
 )
 from networks.cnn.config import CNNConfig
-from networks.mlp.config import MLPConfig
+from networks.mlp.config import MLPConfig, f
 from policy.schedules.config import (
     AlternatingSigmaAndClipScheduleConfig,
     DynamicDPSGDScheduleConfig,
@@ -27,18 +27,18 @@ from policy.stateful_schedules.config import StatefulMedianGradientNoiseAndClipC
 
 @dataclass
 class PolicyConfig:
-    schedule: Union[
-        Annotated[
-            AlternatingSigmaAndClipScheduleConfig, tyro.conf.subcommand("alternating")
-        ],
-        Annotated[DynamicDPSGDScheduleConfig, tyro.conf.subcommand("dynamic-dpsgd")],
-        Annotated[PolicyAndClipScheduleConfig, tyro.conf.subcommand("policy-and-clip")],
-        Annotated[SigmaAndClipScheduleConfig, tyro.conf.subcommand("sigma-and-clip")],
-        Annotated[
-            StatefulMedianGradientNoiseAndClipConfig,
-            tyro.conf.subcommand("median-gradient"),
-        ],
-    ]
+    alternating_schedule: AlternatingSigmaAndClipScheduleConfig
+    dynamic_dpsgd_schedule: DynamicDPSGDScheduleConfig
+    policy_and_clip_schedule: PolicyAndClipScheduleConfig
+    sigma_and_clip_schedule: SigmaAndClipScheduleConfig
+    stateful_median_schedule: StatefulMedianGradientNoiseAndClipConfig
+    schedule_type: Literal[
+        "alternating_schedule",
+        "dynamic_dpsgd_schedule",
+        "policy_and_clip_schedule",
+        "sigma_and_clip_schedule",
+        "stateful_median_schedule",
+    ] = "sigma_and_clip_schedule"
     batch_size: int = 1  # Batch size for policy training
     lr: DistributionConfig = dist_config_helper(
         value=1.0,
@@ -47,11 +47,20 @@ class PolicyConfig:
     max_sigma: float = 10.0
 
     attrs: Fixed[tuple[str, ...]] = (
-        "schedule",
+        "schedule_type",
+        "alternating_schedule",
+        "dynamic_dpsgd_schedule",
+        "policy_and_clip_schedule",
+        "sigma_and_clip_schedule",
+        "stateful_median_schedule",
         "lr",
         "batch_size",
         "max_sigma",
     )
+
+    @property
+    def schedule(self):
+        return getattr(self, self.schedule_type)
 
     def to_wandb_sweep(self) -> dict[str, object]:
         return to_wandb_sweep_params(self)
@@ -66,10 +75,9 @@ class PolicyConfig:
 class EnvConfig:
     "Configuration for the Reinforcement Learning Environment"
 
-    network: Union[
-        Annotated[MLPConfig, tyro.conf.subcommand("mlp")],
-        Annotated[CNNConfig, tyro.conf.subcommand("cnn")],
-    ]
+    mlp: MLPConfig
+    cnn: CNNConfig
+    network_type: Literal["mlp", "cnn"] = "mlp"
 
     lr: DistributionConfig = dist_config_helper(
         value=0.1,
@@ -86,7 +94,9 @@ class EnvConfig:
     C: float = 1.0  # Ignored
 
     attrs: Fixed[tuple[str, ...]] = (
-        "network",
+        "mlp",
+        "cnn",
+        "network_type",
         "lr",
         "optimizer",
         "loss_type",
@@ -96,6 +106,10 @@ class EnvConfig:
         "max_steps_in_episode",
         "C",
     )
+
+    @property
+    def network(self):
+        return getattr(self, self.network_type)
 
     def to_wandb_sweep(self) -> dict[str, object]:
         return to_wandb_sweep_params(self)

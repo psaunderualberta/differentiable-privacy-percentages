@@ -18,8 +18,6 @@ from environments.dp import (
     train_with_noise,
 )
 from environments.dp_params import DP_RL_Params
-from policy.base_schedules.constant import ConstantSchedule
-from policy.base_schedules.exponential import InterpolatedExponentialSchedule
 from policy.factory import policy_factory
 from policy.schedules.alternating import AlternatingSigmaAndClipSchedule
 from policy.schedules.policy_and_clip import PolicyAndClipSchedule
@@ -53,14 +51,11 @@ def main():
     print(f"\tmu-GDP: {mu_tot}")
 
     # Initialize Policy model
-    # TODO: Creatable via config
 
     schedule_conf = SingletonConfig.get_policy_config_instance().schedule
     schedule = policy_factory(schedule_conf, gdp_params)
 
     schedule = schedule.project()
-    print(schedule)
-    exit()
     policy_batch_size = sweep_config.policy.batch_size
 
     # Initialize private environment

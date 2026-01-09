@@ -27,11 +27,12 @@ class CNNConfig:
     dummy_data: jnp.ndarray | None = None
 
     attrs: Fixed[tuple[str, ...]] = (
-        "nchannels",
-        "kernel_size",
+        "channels",
+        "kernel_sizes",
+        "paddings",
+        "strides",
         "pool_kernel_size",
-        "hidden_channels",
-        "nhidden_conv",
+        "mlp",
     )
 
     def to_wandb_sweep(self) -> dict[str, object]:

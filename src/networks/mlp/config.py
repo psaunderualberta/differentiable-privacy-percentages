@@ -17,11 +17,15 @@ class MLPConfig:
     key: Fixed[int] = 0  # Overridden as derivative from experiment.env_prng_key
     attrs: Fixed[tuple[str, ...]] = (
         "din",
-        "dhidden",
-        "nhidden",
+        "hidden_sizes",
         "initialization",
         "nclasses",
     )
 
     def to_wandb_sweep(self) -> dict[str, object]:
         return to_wandb_sweep_params(self)
+
+
+def f(*args):
+    print(args)
+    exit()
