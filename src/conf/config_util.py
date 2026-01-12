@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Literal
 
 import equinox as eqx
 import numpy as np
@@ -10,7 +11,9 @@ class DistributionConfig:
     min: float  # minimum of distribiution
     max: float  # maximum of distribution
     value: float  # constant value if distribution == 'constant'
-    distribution: str  # type of distribution, in wandb-format (i.e. uniform, log_uniform_values, etc.)
+    distribution: Literal[
+        "constant", "log_uniform_values", "int_uniform", "uniform"
+    ]  # type of distribution, in wandb-format (i.e. uniform, log_uniform_values, etc.)
 
     def sample(self) -> float:
         if self.distribution == "constant":
@@ -20,6 +23,8 @@ class DistributionConfig:
             return np.exp(
                 np.random.uniform(low=np.log(self.min), high=np.log(self.max))
             )
+        elif self.distribution == "int_uniform":
+            return np.random.randint(low=self.min, high=self.min)
 
         return np.random.uniform(low=self.min, high=self.min)
 

@@ -38,7 +38,7 @@ class PolicyConfig:
         "policy_and_clip_schedule",
         "sigma_and_clip_schedule",
         "stateful_median_schedule",
-    ] = "sigma_and_clip_schedule"
+    ] = "alternating_schedule"
     batch_size: int = 1  # Batch size for policy training
     lr: DistributionConfig = dist_config_helper(
         value=1.0,
@@ -131,8 +131,11 @@ class SweepConfig:
     )
     dataset_poly_d: int | None = None  # Degree of polynomial features to be generated
     total_timesteps: int = 100  # Training steps of RL algorithm
-    cfg_prng_seed: int = 42  # RL Agent configuration seed
-    env_prng_seed: int = 42  # Environment configuration seed
+    prng_seed: DistributionConfig = dist_config_helper(
+        min=0,
+        max=10**9,
+        distribution="int_uniform",
+    )  # Environment configuration seed
     train_on_single_network: bool = False  # Train the policy on only a single network (same initialization & minibatches)
 
     attrs: Fixed[tuple[str, ...]] = (
@@ -143,8 +146,7 @@ class SweepConfig:
         "dataset",
         "dataset_poly_d",
         "total_timesteps",
-        "cfg_prng_seed",
-        "env_prng_seed",
+        "prng_seed",
         "train_on_single_network",
     )
 

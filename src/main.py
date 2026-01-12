@@ -19,9 +19,7 @@ from environments.dp import (
 )
 from environments.dp_params import DP_RL_Params
 from policy.factory import policy_factory
-from policy.schedules.alternating import AlternatingSigmaAndClipSchedule
-from policy.schedules.policy_and_clip import PolicyAndClipSchedule
-from policy.schedules.sigma_and_clip import SigmaAndClipSchedule
+from policy.schedules.abstract import AbstractNoiseAndClipSchedule
 from privacy.gdp_privacy import get_privacy_params
 from util.baselines import Baseline
 from util.dataloaders import get_dataset_shapes
@@ -35,7 +33,7 @@ def main():
     # exit()
 
     total_timesteps = sweep_config.total_timesteps
-    env_prng_seed = sweep_config.env_prng_seed
+    env_prng_seed = sweep_config.prng_seed.sample()
 
     # Initialize dataset
     X_shape, y_shape, X_test_shape, y_test_shape = get_dataset_shapes()
@@ -54,7 +52,6 @@ def main():
 
     schedule_conf = SingletonConfig.get_policy_config_instance().schedule
     schedule = policy_factory(schedule_conf, gdp_params)
-
     schedule = schedule.project()
     policy_batch_size = sweep_config.policy.batch_size
 
@@ -78,6 +75,7 @@ def main():
         entity=wandb_config.entity,
         id=wandb_config.restart_run_id,
         mode=wandb_config.mode,
+        config=sweep_config.to_wandb_sweep(),
         resume="allow",
     )
 

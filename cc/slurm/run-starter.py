@@ -1,9 +1,9 @@
-import tyro
+import os
+import subprocess
 from dataclasses import dataclass
 from tempfile import NamedTemporaryFile
-import subprocess
-import os
 
+import tyro
 
 os.environ["PROJECT_ROOT"] = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..")
@@ -72,7 +72,7 @@ echo "$CUDA_VISIBLE_DEVICES"
 
 echo "starting training..."
 echo $SLURM_TMPDIR
-uv run main.py {self.main_args}
+time uv run main.py {self.main_args}
 
 # End printing
 echo "Job finished with exit code $? at: `date`"
