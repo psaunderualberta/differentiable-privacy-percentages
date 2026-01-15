@@ -24,7 +24,7 @@ class DistributionConfig:
                 np.random.uniform(low=np.log(self.min), high=np.log(self.max))
             )
         elif self.distribution == "int_uniform":
-            return np.random.randint(low=self.min, high=self.min)
+            return np.random.randint(low=self.min, high=self.max)
 
         return np.random.uniform(low=self.min, high=self.min)
 

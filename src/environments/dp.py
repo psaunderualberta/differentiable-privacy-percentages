@@ -35,11 +35,11 @@ from util.util import (
 def get_private_model_training_schemas() -> list[LoggingSchema]:
     return [
         LoggingSchema(
-            table_name="train_loss",
+            table_name="train_losses",
             cols=["losses"],
         ),
         LoggingSchema(
-            table_name="accuracy",
+            table_name="accuracies",
             cols=["accuracies"],
         ),
     ]

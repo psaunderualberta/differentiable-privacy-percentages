@@ -50,7 +50,7 @@ class DynamicDPSGDSchedule(AbstractNoiseAndClipSchedule):
     def __find_mu_0(self, tol=1e-12):
         mu_tot = self.privacy_params.mu
         p = self.privacy_params.p
-        pows = self.rho_mu ** (-self.iters / self.iters.size)
+        pows = self.rho_mu ** (self.iters / self.iters.size)
 
         def f(current_mu_0):
             # Eq'n 10 in reference material

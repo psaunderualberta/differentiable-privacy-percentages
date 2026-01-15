@@ -75,7 +75,6 @@ def main():
         entity=wandb_config.entity,
         id=wandb_config.restart_run_id,
         mode=wandb_config.mode,
-        config=sweep_config.to_wandb_sweep(),
         resume="allow",
     )
 
@@ -133,9 +132,11 @@ def main():
                 schedule, mb_key, init_key, jr.split(noise_key, policy_batch_size)
             )
 
-            loggable_losses = Loggable(table_name="train_loss", data={"losses": losses})
+            loggable_losses = Loggable(
+                table_name="train_losses", data={"losses": losses}
+            )
             loggable_accuracies = Loggable(
-                table_name="accuracy", data={"accuracies": accuracies}
+                table_name="accuracies", data={"accuracies": accuracies}
             )
             # Log iteration results to file
             _ = logger.log(loggable_losses)
