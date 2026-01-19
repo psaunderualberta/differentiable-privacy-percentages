@@ -106,7 +106,10 @@ def main():
         to_diff = jlax.pmean(to_diff, "x").squeeze()
         return to_diff, (losses, accuracies, val_acc)
 
-    optimizer = optax.sgd(learning_rate=sweep_config.policy.lr.sample())
+    optimizer = optax.sgd(
+        learning_rate=sweep_config.policy.lr.sample(),
+        momentum=sweep_config.policy.momentum.sample(),
+    )
     opt_state = optimizer.init(schedule)  # type: ignore
 
     iterator = tqdm.tqdm(
@@ -151,13 +154,15 @@ def main():
             # Update policy
             grads = ensure_valid_pytree(grads, "grads in main")
             updates, opt_state = optimizer.update(grads, opt_state, schedule)
-            schedule = eqx.apply_updates(schedule, updates)
+            schedule = schedule.apply_updates(updates)
+
+            schedule = ensure_valid_pytree(schedule, "policy in main after updates")
 
             # Project schedule back to valid space
             schedule = schedule.project()
 
             # Ensure no Infs or NaNs were introduced
-            schedule = ensure_valid_pytree(schedule, "policy in main")
+            schedule = ensure_valid_pytree(schedule, "policy in main after project")
 
             # self-explanatory
             iterator.set_description(f"Training Progress - Loss: {loss:.4f}")

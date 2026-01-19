@@ -1,3 +1,5 @@
+from typing import Self
+
 import equinox as eqx
 from jaxtyping import Array
 
@@ -59,8 +61,11 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         )
         return proj_weights.squeeze()
 
+    def apply_updates(self, updates) -> Self:
+        return eqx.apply_updates(self, updates)
+
     @eqx.filter_jit
-    def project(self) -> "SigmaAndClipSchedule":
+    def project(self) -> Self:
         private_weights = self.get_private_weights()
         private_clips = self.get_private_clips()
 
@@ -72,7 +77,7 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
             self.noise_schedule, new_noises
         )
 
-        return SigmaAndClipSchedule(
+        return self.__class__(
             noise_schedule=new_noise_schedule,
             clip_schedule=self.clip_schedule,
             privacy_params=self.privacy_params,

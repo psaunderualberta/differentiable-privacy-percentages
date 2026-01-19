@@ -182,7 +182,7 @@ class GDPPrivacyParameters(eqx.Module):
         schedule = jnp.where(schedule > max_sigma, max_sigma, schedule)
         schedule = eqx.error_if(schedule, (schedule == 0).any(), "schedule has 0!")
         schedule = eqx.error_if(
-            schedule, jnp.isinf(1 / schedule).any(), "schedule has Inf!"
+            schedule, jnp.isinf(C / schedule).any(), "schedule has Inf!"
         )
         return self.mu_schedule_to_weights(C / schedule)
 

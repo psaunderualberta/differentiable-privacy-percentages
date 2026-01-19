@@ -1,3 +1,5 @@
+from typing import Self
+
 import equinox as eqx
 import jax.lax as jlax
 import jax.numpy as jnp
@@ -42,6 +44,14 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
         return cls(noise_schedule, clip_schedule, privacy_params)
 
+    def __diff_clips_select(self, a, b):
+        def tree_select(a, b):
+            if a is None:
+                return a
+            return jlax.select(self.diff_clips, a, b)
+
+        return jtree.map(tree_select, a, b)
+
     def get_private_sigmas(self) -> Array:
         sigmas = self.noise_schedule.get_valid_schedule().squeeze()
         return jlax.select(self.diff_clips, jlax.stop_gradient(sigmas), sigmas)
@@ -58,8 +68,22 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         proj_weights = self.privacy_params.project_weights(weights)
         return proj_weights.squeeze()
 
+    def apply_updates(self, updates) -> Self:
+        updated_noise = eqx.apply_updates(self.noise_schedule, updates.noise_schedule)
+        updated_clips = eqx.apply_updates(self.clip_schedule, updates.clip_schedule)
+
+        new_clips = self.__diff_clips_select(updated_clips, self.clip_schedule)
+        new_noise = self.__diff_clips_select(self.noise_schedule, updated_noise)
+
+        return self.__class__(
+            noise_schedule=new_clips,
+            clip_schedule=new_noise,
+            privacy_params=self.privacy_params,
+            diff_clips=self.diff_clips,
+        )
+
     @eqx.filter_jit
-    def project(self) -> "AlternatingSigmaAndClipSchedule":
+    def project(self) -> Self:
         private_weights = self.get_private_weights()
         private_clips = self.get_private_clips()
         private_sigmas = self.get_private_sigmas()
@@ -78,15 +102,12 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
             self.clip_schedule, new_clips
         )
 
-        def tree_select(a, b):
-            if a is None:
-                return a
-            return jlax.select(self.diff_clips, a, b)
+        clip_schedule = self.__diff_clips_select(new_clip_schedule, self.clip_schedule)
+        noise_schedule = self.__diff_clips_select(
+            self.noise_schedule, new_noise_schedule
+        )
 
-        clip_schedule = jtree.map(tree_select, new_clip_schedule, self.clip_schedule)
-        noise_schedule = jtree.map(tree_select, self.noise_schedule, new_noise_schedule)
-
-        return AlternatingSigmaAndClipSchedule(
+        return self.__class__(
             noise_schedule=noise_schedule,
             clip_schedule=clip_schedule,
             privacy_params=self.privacy_params,

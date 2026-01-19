@@ -1,3 +1,6 @@
+from typing import Self
+
+import equinox as eqx
 import jax.lax as jlax
 import jax.numpy as jnp
 from jaxtyping import Array, ArrayLike
@@ -90,12 +93,15 @@ class DynamicDPSGDSchedule(AbstractNoiseAndClipSchedule):
         proj_weights = self.privacy_params.project_weights(weights)
         return proj_weights.squeeze()
 
-    def project(self) -> "AbstractNoiseAndClipSchedule":
+    def apply_updates(self, updates) -> Self:
+        return eqx.apply_updates(self, updates)
+
+    def project(self) -> Self:
         rho_mu = jnp.maximum(self.rho_mu, self.eps)
         rho_C = jnp.maximum(self.rho_C, self.eps)
         C_0 = jnp.maximum(self.C_0, self.eps)
 
-        return DynamicDPSGDSchedule(rho_mu, rho_C, C_0, self.privacy_params, self.eps)
+        return self.__class__(rho_mu, rho_C, C_0, self.privacy_params, self.eps)
 
     def get_logging_schemas(self) -> list[LoggingSchema]:
         plot_interval = SingletonConfig.get_sweep_config_instance().plotting_interval

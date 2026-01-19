@@ -1,3 +1,5 @@
+from typing import Self
+
 import equinox as eqx
 from jaxtyping import Array
 
@@ -28,7 +30,7 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
     def from_config(
         cls, conf: PolicyAndClipScheduleConfig, privacy_params: GDPPrivacyParameters
     ) -> "PolicyAndClipSchedule":
-        noise_schedule = base_schedule_factory(conf.noise)
+        noise_schedule = base_schedule_factory(conf.policy)
         clip_schedule = base_schedule_factory(conf.clip)
 
         return cls(noise_schedule, clip_schedule, privacy_params)
@@ -48,14 +50,17 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
         proj_weights = self.privacy_params.project_weights(weights)
         return proj_weights.squeeze()
 
+    def apply_updates(self, updates) -> Self:
+        return eqx.apply_updates(self, updates)
+
     @eqx.filter_jit
-    def project(self) -> "PolicyAndClipSchedule":
+    def project(self) -> Self:
         private_weights = self.get_private_weights()
         new_policy_schedule = self.policy_schedule.__class__.from_projection(
             self.policy_schedule, private_weights
         )
 
-        return PolicyAndClipSchedule(
+        return self.__class__(
             policy_schedule=new_policy_schedule,
             clip_schedule=self.clip_schedule,
             privacy_params=self.privacy_params,

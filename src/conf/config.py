@@ -44,6 +44,10 @@ class PolicyConfig:
         value=1.0,
         distribution="constant",
     )  # Learning rate configuration of policy network
+    momentum: DistributionConfig = dist_config_helper(
+        value=0.25,
+        distribution="constant",
+    )
     max_sigma: float = 10.0
 
     attrs: Fixed[tuple[str, ...]] = (
@@ -54,6 +58,7 @@ class PolicyConfig:
         "sigma_and_clip_schedule",
         "stateful_median_schedule",
         "lr",
+        "momentum",
         "batch_size",
         "max_sigma",
     )

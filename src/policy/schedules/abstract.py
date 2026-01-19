@@ -1,4 +1,5 @@
 from abc import abstractmethod
+from typing import Self
 
 import equinox as eqx
 from jaxtyping import Array
@@ -24,7 +25,13 @@ class AbstractNoiseAndClipSchedule(eqx.Module):
         )
 
     @abstractmethod
-    def project(self) -> "AbstractNoiseAndClipSchedule":
+    def apply_updates(self, updates) -> Self:
+        raise NotImplementedError(
+            "Subclasses must implement get_private_weights method."
+        )
+
+    @abstractmethod
+    def project(self) -> Self:
         raise NotImplementedError("Subclasses must implement 'project' class method.")
 
     @abstractmethod
