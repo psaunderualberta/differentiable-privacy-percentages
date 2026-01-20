@@ -45,7 +45,7 @@ class PolicyConfig:
         distribution="constant",
     )  # Learning rate configuration of policy network
     momentum: DistributionConfig = dist_config_helper(
-        value=0.25,
+        value=0.1,
         distribution="constant",
     )
     max_sigma: float = 10.0

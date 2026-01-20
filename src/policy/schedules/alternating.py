@@ -72,12 +72,12 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         updated_noise = eqx.apply_updates(self.noise_schedule, updates.noise_schedule)
         updated_clips = eqx.apply_updates(self.clip_schedule, updates.clip_schedule)
 
-        new_clips = self.__diff_clips_select(updated_clips, self.clip_schedule)
         new_noise = self.__diff_clips_select(self.noise_schedule, updated_noise)
+        new_clips = self.__diff_clips_select(updated_clips, self.clip_schedule)
 
         return self.__class__(
-            noise_schedule=new_clips,
-            clip_schedule=new_noise,
+            noise_schedule=new_noise,
+            clip_schedule=new_clips,
             privacy_params=self.privacy_params,
             diff_clips=self.diff_clips,
         )

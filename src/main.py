@@ -155,6 +155,7 @@ def main():
             grads = ensure_valid_pytree(grads, "grads in main")
             updates, opt_state = optimizer.update(grads, opt_state, schedule)
             schedule = schedule.apply_updates(updates)
+            # schedule = eqx.apply_updates(updates)
 
             schedule = ensure_valid_pytree(schedule, "policy in main after updates")
 
