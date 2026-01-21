@@ -47,6 +47,7 @@ class SlurmConfig:
     cpus_per_gpu: int = 1
     gpus: int = 3
     mem_per_gpu: str = "12G"
+    account: str = "aip-nidhih"
 
     @property
     def main_args(self) -> str:
@@ -62,6 +63,7 @@ class SlurmConfig:
 #SBATCH --output={self.logfile}
 #SBATCH --job-name={self.jobname}
 #SBATCH --chdir={self.project_dir}
+#SBATCH --account={self.account}
 
 # Startup printing
 echo "Current working directory: `pwd`"
@@ -102,4 +104,28 @@ if __name__ == "__main__":
         os.makedirs(out_dir, exist_ok=True)
 
 
+# cat <sweep-file> | parallel -q uv run cc/slurm/run-starter.py --run_id={} --jobname='"<jobname>"'
 # cat <sweep-file> | while read -r id; do python <this-file> --run_id=$id; done
+# cat cc/sweeps/xwf6g25p.txt | parallel -q uv run cc/slurm/run-starter.py --run_id={} --jobname='"mnist, e=3.0, T=3000, sigma_and_clip_schedule"'
+
+
+# api = wandb.Api()
+# for sweep_id in [
+#     "0o4624tg",
+#     "d7bpyhho",
+#     "dqd9gi7u",
+#     "x3k200d9",
+#     "r23tp5hw",
+#     "3slde1jz",
+#     "oozbbzds",
+#     "zr5iao5i",
+#     "wqpj96dd",
+#     "7d4ycdav",
+#     "60e2jzi3",
+#     "qghyyusm",
+# ]:
+#     sweep = api.sweep(f"psaunder/Testing Mu-gdp/{sweep_id}")
+#     name = sweep.name
+#     print(
+#         f"cat cc/sweeps/{sweep_id}.txt | parallel -q uv run cc/slurm/run-starter.py --run_id={{}} --jobname='\"{sweep.name}\"'"
+#     )
