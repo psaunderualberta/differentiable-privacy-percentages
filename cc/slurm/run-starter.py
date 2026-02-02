@@ -46,7 +46,7 @@ class SlurmConfig:
     project_dir: str = os.environ["PROJECT_SOURCE_ROOT"]
     cpus_per_gpu: int = 1
     gpus: int = 3
-    mem_per_gpu: str = "12G"
+    mem_per_gpu: str = "6G"
     account: str = "aip-nidhih"
 
     @property
@@ -109,23 +109,30 @@ if __name__ == "__main__":
 # cat cc/sweeps/xwf6g25p.txt | parallel -q uv run cc/slurm/run-starter.py --run_id={} --jobname='"mnist, e=3.0, T=3000, sigma_and_clip_schedule"'
 
 
-# api = wandb.Api()
-# for sweep_id in [
-#     "0o4624tg",
-#     "d7bpyhho",
-#     "dqd9gi7u",
-#     "x3k200d9",
-#     "r23tp5hw",
-#     "3slde1jz",
-#     "oozbbzds",
-#     "zr5iao5i",
-#     "wqpj96dd",
-#     "7d4ycdav",
-#     "60e2jzi3",
-#     "qghyyusm",
-# ]:
-#     sweep = api.sweep(f"psaunder/Testing Mu-gdp/{sweep_id}")
-#     name = sweep.name
-#     print(
-#         f"cat cc/sweeps/{sweep_id}.txt | parallel -q uv run cc/slurm/run-starter.py --run_id={{}} --jobname='\"{sweep.name}\"'"
-#     )
+api = wandb.Api()
+for sweep_id in [
+    "0o4624tg",
+    "d7bpyhho",
+    "dqd9gi7u",
+    "x3k200d9",
+    "r23tp5hw",
+    "3slde1jz",
+    "oozbbzds",
+    "zr5iao5i",
+    "wqpj96dd",
+    "7d4ycdav",
+    "60e2jzi3",
+    "qghyyusm",
+]:
+    sweep = api.sweep(f"psaunder/Testing Mu-gdp/{sweep_id}")
+    process_out = subprocess.run(
+        f"cat cc/sweeps/{sweep_id}.txt | parallel -q uv run cc/slurm/run-starter.py --run_id={{}} --jobname='\"{sweep.name}\"'",
+        shell=True,
+        capture_output=True,
+    )
+    process_stderr = process_out.stderr.decode("utf-8").strip()
+    if len(process_stderr) != 0:
+        raise Exception("Could not start job: " + process_stderr)
+    print(
+        f"cat cc/sweeps/{sweep_id}.txt | parallel -q uv run cc/slurm/run-starter.py --run_id={{}} --jobname='\"{sweep.name}\"'"
+    )
