@@ -151,7 +151,7 @@ def main():
                     "val-loss": loss,
                     "val-accuracy": val_accs.mean(),
                     "train-loss": losses[:, -1].mean(),
-                    "accuracies": accuracies[:, -1].mean(),
+                    "train-accuracies": accuracies[:, -1].mean(),
                 }
             )
 
