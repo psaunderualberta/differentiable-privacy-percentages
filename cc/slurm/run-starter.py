@@ -47,7 +47,7 @@ class SlurmConfig:
     cpus_per_task: int = 1
     gpus: int = 3
     mem_per_gpu: str = "6G"
-    account: str = "aip-nidhih"
+    account: str = "aip-lelis"
 
     @property
     def main_args(self) -> str:
@@ -108,24 +108,3 @@ if __name__ == "__main__":
 # cat <sweep-file> | parallel -q uv run cc/slurm/run-starter.py --run_id={} --jobname='"<jobname>"'
 # cat <sweep-file> | while read -r id; do python <this-file> --run_id=$id; done
 # cat cc/sweeps/xwf6g25p.txt | parallel -q uv run cc/slurm/run-starter.py --run_id={} --jobname='"mnist, e=3.0, T=3000, sigma_and_clip_schedule"'
-
-
-# api = wandb.Api()
-# for sweep_id in [
-#     "ohv0f6wh",
-#     "vna8alp6",
-#     "79v27u2v",
-#     "tpr7albz",
-#     "jtj6pa88",
-#     "7ir60x79",
-# ]:
-#     sweep = api.sweep(f"psaunder/Testing Mu-gdp/{sweep_id}")
-#     cmd = f"cat cc/sweeps/{sweep_id}.txt | parallel -q uv run cc/slurm/run-starter.py --run_id={{}} --jobname='\"{sweep.name}\"'"
-#     process_out = subprocess.run(
-#         cmd,
-#         shell=True,
-#         capture_output=True,
-#     )
-#     process_stderr = process_out.stderr.decode("utf-8").strip()
-#     if len(process_stderr) != 0:
-#         raise Exception("Could not start job: " + process_stderr)
