@@ -146,7 +146,14 @@ def main():
             _ = logger.log(loggable_accuracies)
 
             # Log metrics for monitoring run
-            wandb.log({"loss": loss, "accuracy": val_accs.mean()})
+            wandb.log(
+                {
+                    "val-loss": loss,
+                    "val-accuracy": val_accs.mean(),
+                    "train-loss": losses[:, -1].mean(),
+                    "accuracies": accuracies[:, -1].mean(),
+                }
+            )
 
             # Ensure gradients are real numbers
             loss = ensure_valid_pytree(loss, "loss in main")

@@ -264,6 +264,7 @@ def determine_optimal_num_devices(
         if num_training_runs % num_devices == 0:
             trimmed_devices_ = devices[:num_devices]
     if printing:
+        print("Given devices: ", devices)
         print("Using devices: ", trimmed_devices_)
     mesh = Mesh(trimmed_devices_, ("i",))
     return NamedSharding(mesh, P("i")), len(trimmed_devices_)

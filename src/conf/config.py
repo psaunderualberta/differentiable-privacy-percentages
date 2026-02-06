@@ -127,7 +127,7 @@ class SweepConfig:
     method: str = "random"  # The wandb search method
     metric_name: str = "accuracy"  # The metric for wandb to optimize
     metric_goal: str = "maximize"  # The wandb optimization goal
-    plotting_steps: int = 30
+    plotting_interval: int = 30000
     name: str | None = None  # The (optional) name of the wandb sweep
     description: str | None = None  # The (optional) description of the wandb sweep
     with_baselines: bool = False  # Flag to compute plots comparing against baseline (Expensive, default is False)
@@ -146,7 +146,7 @@ class SweepConfig:
     attrs: Fixed[tuple[str, ...]] = (
         "policy",
         "env",
-        "plotting_steps",
+        "plotting_interval",
         "with_baselines",
         "dataset",
         "dataset_poly_d",
@@ -156,10 +156,15 @@ class SweepConfig:
     )
 
     @property
-    def plotting_interval(self) -> int:
-        if self.plotting_steps >= self.total_timesteps:
+    def plotting_steps(self) -> int:
+        if self.plotting_interval >= self.total_timesteps:
             return 1
-        return self.total_timesteps // self.plotting_steps
+        return self.total_timesteps // self.plotting_interval
+
+    # def plotting_interval(self) -> int:
+    #     if self.plotting_steps >= self.total_timesteps:
+    #         return 1
+    #     return self.total_timesteps // self.plotting_steps
 
     def to_wandb_sweep(self) -> dict[str, object]:
         config = {

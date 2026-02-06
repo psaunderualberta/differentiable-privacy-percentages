@@ -1,16 +1,14 @@
-from typing import Tuple
+from pprint import pprint
+from typing import Optional, Tuple
 
 import jax.numpy as jnp
+import numpy as np
 import pandas as pd
 import plotly.express as px
-from pprint import pprint
 import plotly.graph_objects as go
-from typing import Optional
-import numpy as np
+
 from conf.singleton_conf import SingletonConfig
-
 from util.util import str_to_jnp_array
-
 
 ### ----
 # Losses

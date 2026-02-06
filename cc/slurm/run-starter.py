@@ -44,9 +44,9 @@ class SlurmConfig:
         os.environ["PROJECT_ROOT"], "cc", "logs", "%j", "%x.log"
     )
     project_dir: str = os.environ["PROJECT_SOURCE_ROOT"]
-    cpus_per_gpu: int = 1
+    cpus_per_task: int = 1
     gpus: int = 3
-    mem_per_gpu: str = "8G"
+    mem_per_gpu: str = "6G"
     account: str = "aip-nidhih"
 
     @property
@@ -56,8 +56,9 @@ class SlurmConfig:
     @property
     def sbatch_file(self) -> str:
         return f"""#!/bin/bash
-#SBATCH --cpus-per-gpu={self.cpus_per_gpu}
+#SBATCH --cpus-per-task={self.cpus_per_task}
 #SBATCH --gpus={self.gpus} # Remove this line to run using CPU only
+#SBATCH --gpus-per-node={self.gpus}
 #SBATCH --mem-per-gpu={self.mem_per_gpu}
 #SBATCH --time={self.runtime.days}-{self.runtime.hours}:{self.runtime.minutes}:{self.runtime.seconds}
 #SBATCH --output={self.logfile}
@@ -109,30 +110,22 @@ if __name__ == "__main__":
 # cat cc/sweeps/xwf6g25p.txt | parallel -q uv run cc/slurm/run-starter.py --run_id={} --jobname='"mnist, e=3.0, T=3000, sigma_and_clip_schedule"'
 
 
-api = wandb.Api()
-for sweep_id in [
-    "0o4624tg",
-    "d7bpyhho",
-    "dqd9gi7u",
-    "x3k200d9",
-    "r23tp5hw",
-    "3slde1jz",
-    "oozbbzds",
-    "zr5iao5i",
-    "wqpj96dd",
-    "7d4ycdav",
-    "60e2jzi3",
-    "qghyyusm",
-]:
-    sweep = api.sweep(f"psaunder/Testing Mu-gdp/{sweep_id}")
-    process_out = subprocess.run(
-        f"cat cc/sweeps/{sweep_id}.txt | parallel -q uv run cc/slurm/run-starter.py --run_id={{}} --jobname='\"{sweep.name}\"'",
-        shell=True,
-        capture_output=True,
-    )
-    process_stderr = process_out.stderr.decode("utf-8").strip()
-    if len(process_stderr) != 0:
-        raise Exception("Could not start job: " + process_stderr)
-    print(
-        f"cat cc/sweeps/{sweep_id}.txt | parallel -q uv run cc/slurm/run-starter.py --run_id={{}} --jobname='\"{sweep.name}\"'"
-    )
+# api = wandb.Api()
+# for sweep_id in [
+#     "ohv0f6wh",
+#     "vna8alp6",
+#     "79v27u2v",
+#     "tpr7albz",
+#     "jtj6pa88",
+#     "7ir60x79",
+# ]:
+#     sweep = api.sweep(f"psaunder/Testing Mu-gdp/{sweep_id}")
+#     cmd = f"cat cc/sweeps/{sweep_id}.txt | parallel -q uv run cc/slurm/run-starter.py --run_id={{}} --jobname='\"{sweep.name}\"'"
+#     process_out = subprocess.run(
+#         cmd,
+#         shell=True,
+#         capture_output=True,
+#     )
+#     process_stderr = process_out.stderr.decode("utf-8").strip()
+#     if len(process_stderr) != 0:
+#         raise Exception("Could not start job: " + process_stderr)
