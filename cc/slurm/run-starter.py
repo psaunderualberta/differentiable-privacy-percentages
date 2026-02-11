@@ -44,7 +44,7 @@ class SlurmConfig:
         os.environ["PROJECT_ROOT"], "cc", "logs", "%j", "%x.log"
     )
     project_dir: str = os.environ["PROJECT_SOURCE_ROOT"]
-    cpus_per_task: int = 1
+    cpus_per_task: int = 2
     gpus: int = 3
     mem_per_gpu: str = "6G"
     account: str = "aip-lelis"

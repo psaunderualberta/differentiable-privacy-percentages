@@ -1,25 +1,19 @@
 import subprocess
 
+import tyro
+
 import wandb
 
 
-def main():
+def main(sweep_ids: list[str]):
     api = wandb.Api()
-    for sweep_id in [
-        "0c82kz7f",
-        "c7nouohm",
-        "i9pjj7lx",
-        "ytk0kihd",
-        "f4ygd9ca",
-        "qsl1z58c",
-        "fu353o8e",
-        "nbvden06",
-        "3aewd5rh",
-        "cyfr40bb",
-        "mmzaqd58",
-        "g0htg6ku",
-    ]:
-        sweep = api.sweep(f"psaunder/Testing Mu-gdp/{sweep_id}")
+    for sweep_id in sweep_ids:
+        try:
+            sweep = api.sweep(f"psaunder/Testing Mu-gdp/{sweep_id}")
+        except wandb.Error as e:
+            print("Error", e)
+            continue
+
         cmd = f"cat cc/sweeps/{sweep_id}.txt | parallel -q uv run cc/slurm/run-starter.py --run_id={{}} --jobname='\"{sweep.name}\"'"
         process_out = subprocess.run(
             cmd,
@@ -32,4 +26,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    tyro.cli(main)
