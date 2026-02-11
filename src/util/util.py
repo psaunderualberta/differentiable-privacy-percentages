@@ -1,3 +1,4 @@
+import ast
 from typing import Any
 
 import equinox as eqx
@@ -248,7 +249,7 @@ def recursive_list_to_jnp_array(obj: dict | list | str | int):
 def str_to_jnp_array(s: str, sep: str = ", ", with_brackets: bool = True) -> Array:
     if with_brackets:
         s = s[1:-1]
-    return jnp.asarray(np.fromstring(s, dtype=float, sep=sep))
+    return jnp.asarray(ast.literal_eval(s))
 
 
 def determine_optimal_num_devices(

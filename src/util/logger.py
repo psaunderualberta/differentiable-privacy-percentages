@@ -1,12 +1,16 @@
+import csv
+import tempfile
 from typing import Mapping
 
-from jaxtyping import Array
-import jax.numpy as jnp
 import equinox as eqx
+import jax.numpy as jnp
 import pandas as pd
+from jaxtyping import Array
+
 import wandb
 from conf.singleton_conf import SingletonConfig
 from util.aggregators import multi_line_plotter
+from util.util import str_to_jnp_array
 
 
 class Loggable(eqx.Module):
@@ -36,24 +40,29 @@ class LoggingSchema(eqx.Module):
 
 
 class WandbTableLogger(eqx.Module):
-    tables: dict[str, wandb.Table]
+    files: dict[str, tempfile._TemporaryFileWrapper]
+    writers: dict[str, csv.DictWriter]
     cols: dict[str, list[str]]
     freqs: dict[str, int]
     counts: dict[str, int]
 
     def __init__(self):
-        self.tables = dict()
+        self.files = dict()
+        self.writers = dict()
         self.cols = dict()
         self.freqs = dict()
         self.counts = dict()
 
     def add_schema(self, schema: LoggingSchema):
-        assert schema.table_name not in self.tables, (
+        assert schema.table_name not in self.writers, (
             f"Table name '{schema.table_name}' already exists in logger."
         )
         name = schema.table_name
         cols = ["step"] + schema.cols if schema.add_step_column else schema.cols
-        self.tables[name] = wandb.Table(columns=cols, log_mode="INCREMENTAL")
+        file = tempfile.NamedTemporaryFile(newline="", suffix=".csv", mode="w")
+        self.files[name] = file
+        self.writers[name] = csv.DictWriter(file, fieldnames=cols)
+        self.writers[name].writeheader()
         self.cols[name] = cols
         self.freqs[name] = schema.freq
         self.counts[name] = 0
@@ -70,21 +79,24 @@ class WandbTableLogger(eqx.Module):
         data = item.data
         force = item.force
         plot = item.plot
-        assert name in self.tables, (
-            f"Name '{name}' not found in set of tables: {list(self.tables.keys())}"
+        assert name in self.writers, (
+            f"Name '{name}' not found in set of writers: {list(self.writers.keys())}"
         )
         log_time = self.counts[name] % self.freqs[name] == 0
         if log_time or force:
-            table = self.tables[name]
+            writer = self.writers[name]
 
             if item.add_timestep:
                 data["step"] = self.counts[name]
 
-            data_ordered = [jnp.asarray(data[col]).tolist() for col in table.columns]
-            table.add_data(*data_ordered)
+            data_ordered = {
+                col: jnp.asarray(data[col]).tolist() for col in self.cols[name]
+            }
+            writer.writerow(data_ordered)
+            self.files[name].flush()
 
             if plot:
-                self.line_plot(name, [data_ordered])
+                self.line_plot(name, data_ordered)
 
         self.counts[name] += 1
         return log_time or force
@@ -113,38 +125,48 @@ class WandbTableLogger(eqx.Module):
     def commit(self, metrics: Mapping[str, int] | None = None):
         if metrics is None:
             metrics = dict()
-        assert len(self.tables.keys() & metrics) == 0, "Name Overlap"
+        assert len(self.writers.keys() & metrics) == 0, "Name Overlap"
 
         # For type checker
         assert isinstance(metrics, dict)
         wandb.log(metrics)
 
     def finish(self):
+        final_tables_pd = {
+            tablename: pd.read_csv(filename.name)
+            for tablename, filename in self.files.items()
+        }
         final_tables = {
-            name: wandb.Table(
-                columns=table.columns, data=table.data, log_mode="IMMUTABLE"
-            )
-            for (name, table) in self.tables.items()
+            name: wandb.Table(dataframe=table, log_mode="IMMUTABLE")
+            for (name, table) in final_tables_pd.items()
         }
 
         wandb.log(final_tables)
 
-    def line_plot(self, table_name: str, data: list | None = None):
-        wandb_table = self.tables[table_name]
-        if data is None:
-            df = pd.DataFrame(columns=wandb_table.columns, data=wandb_table.data)
+        for file in self.files.values():
+            file.close()
+
+    def line_plot(self, table_name: str, data: dict[str, list] | None = None):
+        if data is not None:
+            cols = self.cols[table_name]
+            data_ordered = [data[col] for col in cols]
+            df = pd.DataFrame(columns=cols, data=[data_ordered])
         else:
-            df = pd.DataFrame(columns=wandb_table.columns, data=data)
+            df = pd.read_csv(self.files[table_name].name)
 
         # multi-line, but only plotting one line
         fig = multi_line_plotter(df, table_name)
         wandb.log({f"{table_name}-plot": fig})
 
     def bulk_line_plots(self, table_name: str):
-        data = self.tables[table_name].data[-1]
+        dataframe = pd.read_csv(self.files[table_name].name).iloc[-1]
+        data = dataframe.drop("step").values
+
+        # data is a list with a string array, such as ['[1, 2, 3]']
+        jnp_data = str_to_jnp_array(data[0], with_brackets=False)
 
         # implicitly checks for square-ness
-        bulk_lines = jnp.asarray(data[-1])
+        bulk_lines = jnp.asarray(jnp_data)
         num_cols = bulk_lines.shape[-1]
 
         pd_compatible_data = []
@@ -153,6 +175,7 @@ class WandbTableLogger(eqx.Module):
 
         cols = ["run no.", *map(str, range(num_cols))]
         df = pd.DataFrame(columns=cols, data=pd_compatible_data)
+        print(df)
 
         # multi-line, but only plotting one line
         fig = multi_line_plotter(df, table_name, color_indicator="run no.")
