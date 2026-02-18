@@ -42,6 +42,7 @@ class GDPPrivacyParameters(eqx.Module):
     __p: float
     __T: int
     __mu_0: Array
+    __w_min: Array
 
     def __init__(self, eps: float, delta: float, p: float, T: int):
         self.eps = eps
@@ -50,6 +51,7 @@ class GDPPrivacyParameters(eqx.Module):
         self.__p = p
         self.__T = T
         self.__mu_0 = self.compute_mu_0()
+        self.__w_min = jnp.asarray(0.1)
 
     @property
     def mu(self) -> float:
@@ -66,6 +68,10 @@ class GDPPrivacyParameters(eqx.Module):
     @property
     def mu_0(self) -> Array:
         return jlax.stop_gradient(self.__mu_0)
+
+    @property
+    def w_min(self) -> Array:
+        return jlax.stop_gradient(self.__w_min)
 
     def compute_mu_0(self) -> Array:
         return jnp.sqrt(jnp.log(self.mu**2 / (self.p**2 * self.T) + 1))
@@ -200,9 +206,17 @@ class GDPPrivacyParameters(eqx.Module):
         #     weights, scale=l2_sphere_radius
         # )
 
-        projected_weights = optax.projections.projection_l1_ball(weights, scale=self.T)
+        projected_weights = optax.projections.projection_simplex(weights, scale=self.T)
 
-        return projected_weights
+        num_ge_w_min = jnp.maximum(jnp.sum(projected_weights >= self.w_min), 1.0)
+        cum_lt_w_min = jnp.maximum(self.w_min - projected_weights, 0).sum()
+        shifted_projected_weights = projected_weights - cum_lt_w_min / num_ge_w_min
+
+        bounded_projected_weights = jnp.where(
+            projected_weights < self.w_min, self.w_min, shifted_projected_weights
+        )
+
+        return bounded_projected_weights
 
 
 def get_privacy_params(dataset_length: int) -> GDPPrivacyParameters:

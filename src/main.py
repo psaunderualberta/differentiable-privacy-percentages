@@ -42,7 +42,6 @@ def main():
 
     # Get privacy parameters
     gdp_params = get_privacy_params(X_shape[0])
-    T = gdp_params.T
     mu_tot = gdp_params.mu
     print("Privacy parameters:")
     print(f"\t(epsilon, delta)-DP: ({gdp_params.eps}, {gdp_params.delta})")
