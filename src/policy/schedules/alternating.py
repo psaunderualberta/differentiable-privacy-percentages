@@ -66,7 +66,6 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
         weights = self.privacy_params.sigma_schedule_to_weights(clips, private_sigmas)
         proj_weights = self.privacy_params.project_weights(weights)
-        exit()
         return proj_weights.squeeze()
 
     def apply_updates(self, updates) -> Self:
@@ -83,7 +82,7 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
             diff_clips=self.diff_clips,
         )
 
-    # @eqx.filter_jit
+    @eqx.filter_jit
     def project(self) -> Self:
         private_weights = self.get_private_weights()
         private_clips = self.get_private_clips()
