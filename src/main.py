@@ -53,6 +53,7 @@ def main():
     schedule = policy_factory(schedule_conf, gdp_params)
     schedule = schedule.project()
     policy_batch_size = sweep_config.policy.batch_size
+    exit()
 
     # Initialize private environment
     env_params = DP_RL_Params.create_direct_from_config()

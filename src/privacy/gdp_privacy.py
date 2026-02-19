@@ -43,6 +43,7 @@ class GDPPrivacyParameters(eqx.Module):
     __T: int
     __mu_0: Array
     __w_min: Array
+    __w_max: Array
 
     def __init__(self, eps: float, delta: float, p: float, T: int):
         self.eps = eps
@@ -52,6 +53,7 @@ class GDPPrivacyParameters(eqx.Module):
         self.__T = T
         self.__mu_0 = self.compute_mu_0()
         self.__w_min = jnp.asarray(0.1)
+        self.__w_max = jnp.asarray(10.0)
 
     @property
     def mu(self) -> float:
@@ -72,6 +74,10 @@ class GDPPrivacyParameters(eqx.Module):
     @property
     def w_min(self) -> Array:
         return jlax.stop_gradient(self.__w_min)
+
+    @property
+    def w_max(self) -> Array:
+        return jlax.stop_gradient(self.__w_max)
 
     def compute_mu_0(self) -> Array:
         return jnp.sqrt(jnp.log(self.mu**2 / (self.p**2 * self.T) + 1))
@@ -193,30 +199,51 @@ class GDPPrivacyParameters(eqx.Module):
         return self.mu_schedule_to_weights(C / schedule)
 
     # TODO: Move projection into the gradient computation
-    def project_weights(self, weights: Array) -> Array:
+    def project_weights(self, weights: Array, tol: float | Array = 1e-6) -> Array:
         """
-        W: in the form w**2 + eps
+        post-GD weights (i.e. after updating sigma, clip, policy, or any three)
+        returns: projected weights W s.t. 1^T @ W = self.T && W \in [self.w_min, self.w_max]
         """
 
-        # project to l2 sphere
-        # l2_sphere_radius = jnp.sqrt(
-        #     self.mu**2 / (self.p**2 * (jnp.exp(self.mu_0**2) - 1))
-        # )
-        # projected_weights = optax.projections.projection_l2_ball(
-        #     weights, scale=l2_sphere_radius
-        # )
+        # Ensure jnp array
+        tol = jnp.asarray(tol)
 
-        projected_weights = optax.projections.projection_simplex(weights, scale=self.T)
+        def safe_avg(lo_hi: tuple[Array, Array]) -> Array:
+            lo, hi = lo_hi
+            return lo + (hi - lo) / 2
 
-        num_ge_w_min = jnp.maximum(jnp.sum(projected_weights >= self.w_min), 1.0)
-        cum_lt_w_min = jnp.maximum(self.w_min - projected_weights, 0).sum()
-        shifted_projected_weights = projected_weights - cum_lt_w_min / num_ge_w_min
+        def h(mu: Array) -> Array:
+            # 'mu' as in KKT literature, not privacy literature
+            clipped = jnp.clip(weights - mu, self.w_min, self.w_max)
+            return jnp.sum(clipped) - weights.size
 
-        bounded_projected_weights = jnp.where(
-            projected_weights < self.w_min, self.w_min, shifted_projected_weights
-        )
+        def cond(lo_hi: tuple[Array, Array]) -> Array:
+            lo, hi = lo_hi
+            return jnp.all(hi - lo > tol)
 
-        return bounded_projected_weights
+        def body(lo_hi: tuple[Array, Array]) -> tuple[Array, Array]:
+            mid = safe_avg(lo_hi)
+            obj_derivative = h(mid)
+
+            lo, hi = lo_hi
+            _cond = jnp.all(obj_derivative < 0)
+            new_lo = jlax.select(_cond, lo, mid)
+            new_hi = jlax.select(_cond, mid, hi)
+
+            return (new_lo, new_hi)
+
+        # initial boundary values for bisection
+        # dh/dmu outside this interval is 0, i.e. everything is clipped
+        min_val = jnp.min(weights) - self.w_max
+        max_val = jnp.max(weights) - self.w_min
+
+        # run bisection
+        lo_hi = jlax.while_loop(cond, body, (min_val, max_val))
+
+        # final result
+        mu = safe_avg(lo_hi)
+        proj_weights = jnp.clip(weights - mu, self.w_min, self.w_max)
+        return proj_weights
 
 
 def get_privacy_params(dataset_length: int) -> GDPPrivacyParameters:
