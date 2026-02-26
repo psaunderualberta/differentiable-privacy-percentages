@@ -47,19 +47,7 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         private_sigmas = self.get_private_sigmas()
         clips = self.get_private_clips()
 
-        private_sigmas = eqx.error_if(
-            private_sigmas, pytree_has_inf(private_sigmas), "private_sigmas have Inf!"
-        )
-        private_sigmas = eqx.error_if(
-            private_sigmas, (private_sigmas == 0).any(), "private_sigmas has 0!"
-        )
-        weights = self.privacy_params.sigma_schedule_to_weights(clips, private_sigmas)
-        weights = eqx.error_if(weights, pytree_has_inf(weights), "weights1 have Inf!")
-        proj_weights = self.privacy_params.project_weights(weights)
-        proj_weights = eqx.error_if(
-            proj_weights, pytree_has_inf(proj_weights), "weights2 have Inf!"
-        )
-        return proj_weights.squeeze()
+        return self.privacy_params.project_weights(clips / private_sigmas).squeeze()
 
     def apply_updates(self, updates) -> Self:
         return eqx.apply_updates(self, updates)
@@ -69,10 +57,7 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         private_weights = self.get_private_weights()
         private_clips = self.get_private_clips()
 
-        new_noises = self.privacy_params.weights_to_sigma_schedule(
-            private_clips, private_weights
-        )
-
+        new_noises = private_clips / private_weights
         new_noise_schedule = self.noise_schedule.__class__.from_projection(
             self.noise_schedule, new_noises
         )
@@ -89,7 +74,6 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         return [
             LoggingSchema(table_name="sigmas", cols=col_names, freq=plot_interval),
             LoggingSchema(table_name="clips", cols=col_names, freq=plot_interval),
-            LoggingSchema(table_name="weights", cols=col_names, freq=plot_interval),
             LoggingSchema(table_name="mus", cols=col_names, freq=plot_interval),
         ]
 
@@ -108,16 +92,8 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
                 force=force,
             ),
             LoggableArray(
-                table_name="weights",
-                array=self.get_private_weights(),
-                plot=True,
-                force=force,
-            ),
-            LoggableArray(
                 table_name="mus",
-                array=self.privacy_params.weights_to_mu_schedule(
-                    self.get_private_weights()
-                ),
+                array=self.get_private_weights(),
                 plot=True,
                 force=force,
             ),

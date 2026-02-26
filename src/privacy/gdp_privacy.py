@@ -88,6 +88,9 @@ class GDPPrivacyParameters(eqx.Module):
 
         return (jnp.exp(1 / max_sigma**2) - 1) / (jnp.exp(self.mu_0**2) - 1)
 
+    def compute_expenditure(self, sigmas: Array, clips: Array) -> Array:
+        return jnp.sum(self.p * jnp.sqrt(jnp.exp((clips / sigmas) ** 2) - 1))
+
     def weights_to_mu_schedule(self, schedule: Array) -> Array:
         """Convert a GDP mu parameter to a Poisson subsampling schedule.
 
@@ -208,18 +211,46 @@ class GDPPrivacyParameters(eqx.Module):
         # Ensure jnp array
         tol = jnp.asarray(tol)
 
+        bound = (self.mu / self.p) ** 2 + self.T  # == sum_{i=1}^{T} e^(w_i^2)
+
         def safe_avg(lo_hi: tuple[Array, Array]) -> Array:
             lo, hi = lo_hi
             return lo + (hi - lo) / 2
 
+        def c_i_tildes_cond(lo_hi: tuple[Array, Array]) -> Array:
+            c_i_tildes, mu = lo_hi
+            f_ = c_i_tildes * (1 + 2 * mu * jnp.exp(c_i_tildes**2)) - weights
+            return jnp.all(f_ > tol)
+
+        def c_i_tildes_body(
+            lo_hi: tuple[Array, Array],
+        ) -> tuple[Array, Array]:
+            """
+            The goal is to find c_i_tilde s.t.
+            """
+            mu = lo_hi[1]
+            c_i_tildes = lo_hi[0]
+
+            f_ = c_i_tildes * (1 + 2 * mu * jnp.exp(c_i_tildes**2)) - weights
+            f_prime = 1 + 2 * mu * jnp.exp(c_i_tildes**2) * (1 + 2 * c_i_tildes**2)
+
+            return (c_i_tildes - f_ / f_prime, mu)
+
+        def get_c_i_tildes(mu: Array) -> Array:
+            c_i_tildes, _ = jlax.while_loop(
+                c_i_tildes_cond, c_i_tildes_body, (weights, mu)
+            )
+
+            return c_i_tildes
+
         def h(mu: Array) -> Array:
-            # 'mu' as in KKT literature, not privacy literature
-            clipped = jnp.clip(weights - mu, self.w_min, self.w_max)
-            return jnp.sum(clipped) - weights.size
+            c_i_tildes = get_c_i_tildes(mu)
+
+            return jnp.sum(jnp.exp(c_i_tildes**2)) - bound
 
         def cond(lo_hi: tuple[Array, Array]) -> Array:
             lo, hi = lo_hi
-            return jnp.all(hi - lo > tol)
+            return jnp.any(hi - lo > tol)
 
         def body(lo_hi: tuple[Array, Array]) -> tuple[Array, Array]:
             mid = safe_avg(lo_hi)
@@ -232,18 +263,16 @@ class GDPPrivacyParameters(eqx.Module):
 
             return (new_lo, new_hi)
 
-        # initial boundary values for bisection
-        # dh/dmu outside this interval is 0, i.e. everything is clipped
-        min_val = jnp.min(weights) - self.w_max
-        max_val = jnp.max(weights) - self.w_min
+        min_val = jnp.asarray(0.0)  # mu is constrained to be >= 0
+        max_val = jnp.asarray(5.0)
 
         # run bisection
         lo_hi = jlax.while_loop(cond, body, (min_val, max_val))
 
         # final result
         mu = safe_avg(lo_hi)
-        proj_weights = jnp.clip(weights - mu, self.w_min, self.w_max)
-        return proj_weights
+
+        return get_c_i_tildes(mu)
 
 
 def get_privacy_params(dataset_length: int) -> GDPPrivacyParameters:
@@ -254,3 +283,28 @@ def get_privacy_params(dataset_length: int) -> GDPPrivacyParameters:
     T = SingletonConfig.get_environment_config_instance().max_steps_in_episode
 
     return GDPPrivacyParameters(epsilon, delta, p, T)
+
+    # def h(mu: Array) -> Array:
+    #     # 'mu' as in KKT literature, not privacy literature
+    #     clipped = jnp.clip(weights - mu, self.w_min, self.w_max)
+    #     return jnp.sum(clipped) - weights.size
+
+    # def cond(lo_hi: tuple[Array, Array]) -> Array:
+    #     lo, hi = lo_hi
+    #     return jnp.any(hi - lo > tol)
+
+    # def body(lo_hi: tuple[Array, Array]) -> tuple[Array, Array]:
+    #     mid = safe_avg(lo_hi)
+    #     obj_derivative = h(mid)
+
+    #     lo, hi = lo_hi
+    #     _cond = jnp.all(obj_derivative < 0)
+    #     new_lo = jlax.select(_cond, lo, mid)
+    #     new_hi = jlax.select(_cond, mid, hi)
+
+    #     return (new_lo, new_hi)
+
+    # # initial boundary values for bisection
+    # # dh/dmu outside this interval is 0, i.e. everything is clipped
+    # min_val = jnp.min(weights) - self.w_max
+    # max_val = jnp.max(weights) - self.w_min

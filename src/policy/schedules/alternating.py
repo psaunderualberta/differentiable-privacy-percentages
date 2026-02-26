@@ -64,9 +64,10 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         private_sigmas = self.get_private_sigmas()
         clips = self.get_private_clips()
 
-        weights = self.privacy_params.sigma_schedule_to_weights(clips, private_sigmas)
-        proj_weights = self.privacy_params.project_weights(weights)
-        return proj_weights.squeeze()
+        return self.privacy_params.project_weights(clips / private_sigmas).squeeze()
+
+        # weights = self.privacy_params.sigma_schedule_to_weights(clips, private_sigmas)
+        # return proj_weights.squeeze()
 
     def apply_updates(self, updates) -> Self:
         updated_noise = eqx.apply_updates(self.noise_schedule, updates.noise_schedule)
@@ -88,12 +89,15 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         private_clips = self.get_private_clips()
         private_sigmas = self.get_private_sigmas()
 
-        new_noises = self.privacy_params.weights_to_sigma_schedule(
-            private_clips, private_weights
-        )
-        new_clips = self.privacy_params.weights_to_clip_schedule(
-            private_sigmas, private_weights
-        )
+        new_noises = private_clips / private_weights
+        new_clips = private_weights * private_sigmas
+
+        # new_noises = self.privacy_params.weights_to_sigma_schedule(
+        #     private_clips, private_weights
+        # )
+        # new_clips = self.privacy_params.weights_to_clip_schedule(
+        #     private_sigmas, private_weights
+        # )
 
         new_noise_schedule = self.noise_schedule.__class__.from_projection(
             self.noise_schedule, new_noises
@@ -120,7 +124,6 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         return [
             LoggingSchema(table_name="sigmas", cols=col_names, freq=plot_interval),
             LoggingSchema(table_name="clips", cols=col_names, freq=plot_interval),
-            LoggingSchema(table_name="weights", cols=col_names, freq=plot_interval),
             LoggingSchema(table_name="mus", cols=col_names, freq=plot_interval),
         ]
 
@@ -139,16 +142,8 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
                 force=force,
             ),
             LoggableArray(
-                table_name="weights",
-                array=self.get_private_weights(),
-                plot=True,
-                force=force,
-            ),
-            LoggableArray(
                 table_name="mus",
-                array=self.privacy_params.weights_to_mu_schedule(
-                    self.get_private_weights()
-                ),
+                array=self.get_private_weights(),
                 plot=True,
                 force=force,
             ),
