@@ -1,5 +1,7 @@
 import subprocess
+import time
 
+import tqdm
 import tyro
 
 import wandb
@@ -7,7 +9,9 @@ import wandb
 
 def main(sweep_ids: list[str]):
     api = wandb.Api()
-    for sweep_id in sweep_ids:
+    iterator = tqdm.tqdm(sweep_ids)
+    for sweep_id in iterator:
+        iterator.set_description(f"{sweep_id}")
         try:
             sweep = api.sweep(f"psaunder/Testing Mu-gdp/{sweep_id}")
         except wandb.Error as e:
