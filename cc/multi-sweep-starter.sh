@@ -1,5 +1,5 @@
 # MOMENTUM=0.7
-MOMENTUMS=(0.1 0.7)
+MOMENTUMS=(0.7 0.1)
 SCHEDULE_TYPES=("alternating_schedule" "sigma_and_clip_schedule")
 for i in {0..1}; do
     MOMENTUM=${MOMENTUMS[i]}
