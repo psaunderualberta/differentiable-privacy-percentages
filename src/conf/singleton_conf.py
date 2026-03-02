@@ -1,4 +1,5 @@
-from dataclasses import asdict, replace
+import dataclasses
+from dataclasses import replace
 from pprint import pprint
 
 import tyro
@@ -6,13 +7,12 @@ import tyro
 import wandb
 from conf.config import (
     Config,
-    DistributionConfig,
     EnvConfig,
     PolicyConfig,
     SweepConfig,
     WandbConfig,
-    dist_config_helper,
 )
+from conf.config_util import DistributionConfig, dist_config_helper
 
 
 def get_wandb_run_conf(wandb_conf: WandbConfig) -> dict:
@@ -22,19 +22,73 @@ def get_wandb_run_conf(wandb_conf: WandbConfig) -> dict:
     return run.config
 
 
-def _populate_conf_from_dict(conf: Config, dictionary: dict) -> Config:
-    for key, item in dictionary.items():
-        if isinstance(getattr(conf, key), DistributionConfig):
-            conf = replace(
-                conf, **{key: dist_config_helper(value=item, distribution="constant")}
-            )
-        elif isinstance(item, dict):
-            conf = replace(
-                conf, **{key: _populate_conf_from_dict(getattr(conf, key), item)}
-            )
+def _get_config_classes() -> dict[str, type]:
+    """Build a name→config-class map from all existing registries.
+
+    Imports are deferred until call time to avoid circular-import issues:
+    schedule classes transitively import SingletonConfig, so they must not
+    be imported at module load time.
+    """
+    # Trigger @register decorators before reading _REGISTRY keys.
+    from networks._registry import _REGISTRY as _network_reg
+    from policy.base_schedules._registry import _REGISTRY as _base_reg
+    from policy.schedules._registry import _REGISTRY as _sched_reg
+    from policy.stateful_schedules._registry import _REGISTRY as _stateful_reg
+
+    return {
+        config_cls.__name__: config_cls
+        for registry in (_base_reg, _sched_reg, _stateful_reg, _network_reg)
+        for config_cls in registry.keys()
+    }
+
+
+def _reconstruct_from_dict(obj, d: dict):
+    """Recursively reconstruct a dataclass from a W&B run-config dict.
+
+    For plain (non-Union) nested dataclasses the existing instance type is
+    preserved.  For Union-typed fields the stored ``_type`` key is used to
+    look up the correct config class from the registry, allowing full
+    reconstruction even when the variant differs from the CLI default.
+
+    ``DistributionConfig`` fields are treated specially: a scalar value from
+    W&B is wrapped back into a constant ``DistributionConfig``.
+    """
+    if not dataclasses.is_dataclass(obj):
+        return obj
+
+    config_classes = _get_config_classes()
+    updates: dict[str, object] = {}
+
+    for key, item in d.items():
+        if key == "_type":
+            continue  # consumed by the parent call, not a dataclass field
+
+        current = getattr(obj, key, None)
+
+        if isinstance(current, DistributionConfig):
+            # W&B stores the sampled scalar; wrap it back into a constant dist.
+            updates[key] = dist_config_helper(value=item, distribution="constant")
+
+        elif isinstance(item, dict) and "_type" in item:
+            # Union-typed field: use the stored class name to pick the variant.
+            cls_name = item["_type"]
+            if cls_name not in config_classes:
+                raise ValueError(
+                    f"Cannot reconstruct field '{key}': unknown config class '{cls_name}'. "
+                    f"Known: {sorted(config_classes)}"
+                )
+            target_cls = config_classes[cls_name]
+            # Build a default instance then recurse with the remaining keys.
+            inner = {k: v for k, v in item.items() if k != "_type"}
+            updates[key] = _reconstruct_from_dict(target_cls(), inner)
+
+        elif isinstance(item, dict) and dataclasses.is_dataclass(current):
+            updates[key] = _reconstruct_from_dict(current, item)
+
         else:
-            conf = replace(conf, **{key: item})
-    return conf
+            updates[key] = item
+
+    return replace(obj, **updates)
 
 
 def _get_config():
@@ -44,10 +98,10 @@ def _get_config():
     )
     wandb_conf = SingletonConfig.get_wandb_config_instance()
     if wandb_conf.restart_run_id is not None:
-        conf = get_wandb_run_conf(wandb_conf)
+        run_conf = get_wandb_run_conf(wandb_conf)
         SingletonConfig.config = replace(
             SingletonConfig.config,
-            sweep=_populate_conf_from_dict(SingletonConfig.config.sweep, conf),
+            sweep=_reconstruct_from_dict(SingletonConfig.config.sweep, run_conf),
         )
 
 
@@ -79,7 +133,7 @@ class SingletonConfig:
 
     @classmethod
     def get_object(cls, obj):
-        return asdict(obj)
+        return dataclasses.asdict(obj)
 
 
 if __name__ == "__main__":

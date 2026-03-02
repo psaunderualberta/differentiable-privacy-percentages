@@ -1,4 +1,5 @@
 from functools import partial
+from pprint import pprint
 
 import equinox as eqx
 import optax
@@ -76,6 +77,7 @@ def main():
             id=wandb_config.restart_run_id,
             mode=wandb_config.mode,
             config=sweep_config.to_wandb_sweep(),
+            resume="allow",
         )
     else:
         # Don't overwrite config

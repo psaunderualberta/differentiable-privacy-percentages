@@ -35,8 +35,23 @@ class LoggableArray(eqx.Module):
 class LoggingSchema(eqx.Module):
     table_name: str
     cols: list[str]
-    freq: int = SingletonConfig.get_sweep_config_instance().plotting_interval
-    add_step_column: bool = True
+    freq: int
+    add_step_column: bool
+
+    def __init__(
+        self,
+        table_name: str,
+        cols: list[str],
+        freq: int | None = None,
+        add_step_column: bool = True,
+    ):
+        if freq is None:
+            freq = SingletonConfig.get_sweep_config_instance().plotting_interval
+
+        self.table_name = table_name
+        self.cols = cols
+        self.freq = freq
+        self.add_step_column = add_step_column
 
 
 class WandbTableLogger(eqx.Module):

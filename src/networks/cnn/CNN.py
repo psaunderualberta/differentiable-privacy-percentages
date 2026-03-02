@@ -6,16 +6,33 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 
+from networks._registry import register
 from networks.cnn.config import CNNConfig
 from networks.mlp.MLP import MLP
 from networks.util import Network
 
 
+@register(CNNConfig)
 class CNN(eqx.Module, Network):
     layers: list
 
     def __init__(self, layers: List[Any]):
         self.layers = layers
+
+    @classmethod
+    def build(
+        cls,
+        conf: CNNConfig,
+        input_shape: tuple[int, ...],
+        output_shape: tuple[int, ...],
+        key: int = 0,
+    ) -> "CNN":
+        nchannels = input_shape[1]
+        dummy_data = jnp.zeros(input_shape[1:])
+        nclasses = output_shape[1]
+        return cls.from_config(
+            conf, nchannels=nchannels, dummy_data=dummy_data, nclasses=nclasses, key=key
+        )
 
     @classmethod
     def from_config(

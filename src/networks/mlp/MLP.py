@@ -7,15 +7,31 @@ import jax.numpy as jnp
 import jax.random as jr
 import optax
 
+from networks._registry import register
 from networks.mlp.config import MLPConfig
 from networks.util import Linear, Network
 
 
+@register(MLPConfig)
 class MLP(eqx.Module, Network):
     layers: list
 
     def __init__(self, layers: List[Any]):
         self.layers = layers
+
+    @classmethod
+    def build(
+        cls,
+        conf: MLPConfig,
+        input_shape: tuple[int, ...],
+        output_shape: tuple[int, ...],
+        key: int = 0,
+    ) -> "MLP":
+        import jax.numpy as jnp
+
+        din = int(jnp.prod(jnp.asarray(input_shape[1:])))
+        nclasses = output_shape[1]
+        return cls.from_config(conf, din=din, nclasses=nclasses, key=key)
 
     @classmethod
     def from_config(

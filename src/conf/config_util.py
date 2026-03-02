@@ -1,7 +1,7 @@
 import dataclasses
 import typing
 from dataclasses import dataclass
-from typing import Annotated, Literal, get_args, get_origin
+from typing import Annotated, Literal, Union, get_args, get_origin
 
 import equinox as eqx
 import numpy as np
@@ -71,6 +71,21 @@ def _is_fixed_field(cls: type, field_name: str) -> bool:
     return False
 
 
+def _is_union_field(cls: type, field_name: str) -> bool:
+    """Return True if the field is typed as a Union of dataclasses."""
+    try:
+        hints = typing.get_type_hints(cls, include_extras=True)
+    except Exception:
+        return False
+    annotation = hints.get(field_name)
+    if annotation is None:
+        return False
+    # Unwrap Annotated[Union[...], ...] → Union[...]
+    if get_origin(annotation) is Annotated:
+        annotation = get_args(annotation)[0]
+    return get_origin(annotation) is Union
+
+
 def to_wandb_sweep_params(obj) -> dict[str, object]:
     """Derive W&B sweep parameters from a dataclass by inspecting its fields.
 
@@ -87,7 +102,10 @@ def to_wandb_sweep_params(obj) -> dict[str, object]:
             continue
         attr = getattr(obj, field.name)
         if hasattr(attr, "to_wandb_sweep") and callable(attr.to_wandb_sweep):
-            params[field.name] = attr.to_wandb_sweep()
+            nested = attr.to_wandb_sweep()
+            if _is_union_field(cls, field.name):
+                nested["parameters"]["_type"] = {"value": type(attr).__name__}
+            params[field.name] = nested
         else:
             params[field.name] = {"value": attr}
     return {"parameters": params}
