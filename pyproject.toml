@@ -109,7 +109,7 @@ dependencies = [
     "typeguard==4.4.4",
     "typing-extensions==4.14.1",
     "typing-inspection==0.4.1",
-    "tyro==0.9.28",
+    "tyro>=1.0.8",
     "tzdata==2025.2",
     "urllib3==2.5.0",
     "wadler-lindig==0.1.7",

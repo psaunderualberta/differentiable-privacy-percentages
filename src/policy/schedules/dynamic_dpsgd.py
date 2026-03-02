@@ -7,12 +7,14 @@ from jaxtyping import Array, ArrayLike
 from scipy import optimize
 
 from conf.singleton_conf import SingletonConfig
+from policy.schedules._registry import register
 from policy.schedules.abstract import AbstractNoiseAndClipSchedule
 from policy.schedules.config import DynamicDPSGDScheduleConfig
 from privacy.gdp_privacy import GDPPrivacyParameters
 from util.logger import Loggable, LoggableArray, LoggingSchema
 
 
+@register(DynamicDPSGDScheduleConfig)
 class DynamicDPSGDSchedule(AbstractNoiseAndClipSchedule):
     """
     http://arxiv.org/abs/2111.00173

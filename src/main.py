@@ -69,13 +69,23 @@ def main():
     )
 
     print("Starting...")
-    run = wandb.init(
-        project=wandb_config.project,
-        entity=wandb_config.entity,
-        id=wandb_config.restart_run_id,
-        mode=wandb_config.mode,
-        resume="allow",
-    )
+    if wandb_config.restart_run_id is None:
+        run = wandb.init(
+            project=wandb_config.project,
+            entity=wandb_config.entity,
+            id=wandb_config.restart_run_id,
+            mode=wandb_config.mode,
+            config=sweep_config.to_wandb_sweep(),
+        )
+    else:
+        # Don't overwrite config
+        run = wandb.init(
+            project=wandb_config.project,
+            entity=wandb_config.entity,
+            id=wandb_config.restart_run_id,
+            mode=wandb_config.mode,
+            resume="allow",
+        )
 
     # @partial(checkify.checkify, errors=checkify.nan_checks)
     @eqx.filter_jit

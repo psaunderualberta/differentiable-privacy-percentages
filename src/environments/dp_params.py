@@ -1,11 +1,12 @@
-from networks.util import Network
-from jaxtyping import Array
 import equinox as eqx
-from conf.config import EnvConfig
 import jax.numpy as jnp
-from util.dataloaders import get_datasets
+from jaxtyping import Array
+
+from conf.config import EnvConfig
 from conf.singleton_conf import SingletonConfig
 from networks.net_factory import net_factory_from_config
+from networks.util import Network
+from util.dataloaders import get_datasets
 
 
 class DP_RL_Params(eqx.Module):
@@ -17,7 +18,6 @@ class DP_RL_Params(eqx.Module):
     optimizer: str = "sgd"
     lr: float = 0.01  # Learning rate for the optimizer
     network: Network = Network()  # Network architecture for the environment
-    C: float = 1.0
     max_steps_in_episode: int = 500  # Maximum number of steps in an episode
 
     @classmethod
@@ -39,7 +39,6 @@ class DP_RL_Params(eqx.Module):
             optimizer=conf.optimizer,
             network=network_arch,
             dummy_batch=jnp.arange(conf.batch_size),
-            C=conf.C,
             max_steps_in_episode=conf.max_steps_in_episode,
         )
 

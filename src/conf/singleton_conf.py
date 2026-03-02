@@ -19,7 +19,6 @@ def get_wandb_run_conf(wandb_conf: WandbConfig) -> dict:
     run = wandb.Api().run(
         f"{wandb_conf.entity}/{wandb_conf.project}/{wandb_conf.restart_run_id}"
     )
-
     return run.config
 
 
@@ -30,24 +29,24 @@ def _populate_conf_from_dict(conf: Config, dictionary: dict) -> Config:
                 conf, **{key: dist_config_helper(value=item, distribution="constant")}
             )
         elif isinstance(item, dict):
-            # nested configuration class
             conf = replace(
                 conf, **{key: _populate_conf_from_dict(getattr(conf, key), item)}
             )
         else:
             conf = replace(conf, **{key: item})
-
     return conf
 
 
 def _get_config():
-    SingletonConfig.config = tyro.cli(Config, config=(tyro.conf.SuppressFixed,))
+    SingletonConfig.config = tyro.cli(
+        Config,
+        config=(tyro.conf.SuppressFixed, tyro.conf.CascadeSubcommandArgs),
+    )
     wandb_conf = SingletonConfig.get_wandb_config_instance()
     if wandb_conf.restart_run_id is not None:
         conf = get_wandb_run_conf(wandb_conf)
         SingletonConfig.config = replace(
             SingletonConfig.config,
-            # replace the experiment portion, wandb remains the same
             sweep=_populate_conf_from_dict(SingletonConfig.config.sweep, conf),
         )
 
@@ -84,7 +83,6 @@ class SingletonConfig:
 
 
 if __name__ == "__main__":
-    # This is just for testing purposes
     pprint(SingletonConfig.get_instance())
     pprint(SingletonConfig.get_sweep_config_instance())
     pprint(SingletonConfig.get_environment_config_instance())

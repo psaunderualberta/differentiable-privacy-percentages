@@ -18,16 +18,16 @@ class MLP(eqx.Module, Network):
         self.layers = layers
 
     @classmethod
-    def from_config(cls, conf: MLPConfig) -> "MLP":
-        key = jr.PRNGKey(conf.key)
-        key, _key = jr.split(key)
+    def from_config(
+        cls, conf: MLPConfig, din: int, nclasses: int, key: int = 0
+    ) -> "MLP":
+        rng = jr.PRNGKey(key)
+        rng, _key = jr.split(rng)
         has_hidden = len(conf.hidden_sizes) > 0
-        layer_out = conf.hidden_sizes[0] if has_hidden else conf.nclasses
+        layer_out = conf.hidden_sizes[0] if has_hidden else nclasses
         layers = [
             [
-                Linear(
-                    conf.din, layer_out, key=_key, initialization=conf.initialization
-                ),
+                Linear(din, layer_out, key=_key, initialization=conf.initialization),
                 eqx.nn.LayerNorm(layer_out),
             ]
         ]
@@ -35,7 +35,7 @@ class MLP(eqx.Module, Network):
         layer_in = layer_out
         if has_hidden:
             for layer_out in conf.hidden_sizes[1:]:
-                key, _key = jr.split(key)
+                rng, _key = jr.split(rng)
                 layers.append(
                     [
                         jax.nn.tanh,
@@ -48,16 +48,15 @@ class MLP(eqx.Module, Network):
                         eqx.nn.LayerNorm(layer_out),
                     ]
                 )
-
                 layer_in = layer_out
 
-            key, _key = jr.split(key)
+            rng, _key = jr.split(rng)
             layers.append(
                 [
                     jax.nn.tanh,
                     Linear(
                         layer_out,
-                        conf.nclasses,
+                        nclasses,
                         key=_key,
                         initialization=conf.initialization,
                     ),
@@ -71,7 +70,6 @@ class MLP(eqx.Module, Network):
 
         rngs = jax.random.split(key, len(net_flat))
 
-        # Using an existing network means that the linear layer sizes are statically known
         new_net_flat = [
             (
                 Linear(layer.weight.shape[0], layer.weight.shape[1], key=rng)
@@ -107,9 +105,6 @@ class MLP(eqx.Module, Network):
         def get_out_dim(arr):
             if arr is None:
                 return 0
-
-            # only look at bias matrices, as o/w
-            # we'll double count weight & bias matricess
             return jax.lax.select(len(arr.shape) > 1, 0, arr.shape[0])
 
         model_arrays, _ = eqx.partition(self.layers, eqx.is_array)
@@ -117,39 +112,3 @@ class MLP(eqx.Module, Network):
             get_out_dim, model_arrays, is_leaf=lambda x: x is None
         )
         return jax.tree.reduce(lambda x, y: x + y, hidden_dims).item()
-
-
-if __name__ == "__main__":
-    LR = 1e-3
-    EPOCHS = 100
-    x = jnp.ones((10, 5))
-    y = jnp.ones((10, 1))
-
-    from conf.singleton_conf import SingletonConfig
-
-    model_conf = SingletonConfig.get_environment_config_instance().mlp
-
-    model = MLP.from_config(model_conf)
-    optim = optax.sgd(LR)
-    opt_state = optim.init(eqx.filter(model, eqx.is_array))
-
-    @eqx.filter_jit
-    def loss_fn(model, x, y):
-        pred_y = jax.vmap(model)(x)
-        return jnp.mean((pred_y - y) ** 2)
-
-    def train_step(model, opt_state, x, y):
-        loss, grads = eqx.filter_value_and_grad(loss_fn)(model, x, y)
-        updates, opt_state = optim.update(
-            grads, opt_state, eqx.filter(model, eqx.is_array)
-        )
-        model = eqx.apply_updates(model, updates)
-
-        return model, opt_state, loss
-
-    losses = []
-    for _ in range(EPOCHS):
-        model, opt_state, loss = train_step(model, opt_state, x, y)
-        losses.append(loss)
-
-    print(losses)

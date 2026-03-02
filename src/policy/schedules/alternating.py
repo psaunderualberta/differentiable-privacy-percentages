@@ -9,12 +9,14 @@ from jaxtyping import Array
 from conf.singleton_conf import SingletonConfig
 from policy.base_schedules.abstract import AbstractSchedule
 from policy.base_schedules.factory import base_schedule_factory
+from policy.schedules._registry import register
 from policy.schedules.abstract import AbstractNoiseAndClipSchedule
 from policy.schedules.config import AlternatingSigmaAndClipScheduleConfig
 from privacy.gdp_privacy import GDPPrivacyParameters
 from util.logger import Loggable, LoggableArray, LoggingSchema
 
 
+@register(AlternatingSigmaAndClipScheduleConfig)
 class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
     noise_schedule: AbstractSchedule
     clip_schedule: AbstractSchedule
@@ -39,10 +41,10 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         conf: AlternatingSigmaAndClipScheduleConfig,
         privacy_params: GDPPrivacyParameters,
     ) -> "AlternatingSigmaAndClipSchedule":
-        noise_schedule = base_schedule_factory(conf.noise)
-        clip_schedule = base_schedule_factory(conf.clip)
-
-        return cls(noise_schedule, clip_schedule, privacy_params)
+        T = privacy_params.T
+        noise_schedule = base_schedule_factory(conf.noise, T)
+        clip_schedule = base_schedule_factory(conf.clip, T)
+        return cls(noise_schedule, clip_schedule, privacy_params, conf.diff_clips_first)
 
     def __diff_clips_select(self, a, b):
         def tree_select(a, b):
@@ -63,11 +65,7 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
     def get_private_weights(self) -> Array:
         private_sigmas = self.get_private_sigmas()
         clips = self.get_private_clips()
-
         return self.privacy_params.project_weights(clips / private_sigmas).squeeze()
-
-        # weights = self.privacy_params.sigma_schedule_to_weights(clips, private_sigmas)
-        # return proj_weights.squeeze()
 
     def apply_updates(self, updates) -> Self:
         updated_noise = eqx.apply_updates(self.noise_schedule, updates.noise_schedule)
@@ -91,13 +89,6 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
         new_noises = private_clips / private_weights
         new_clips = private_weights * private_sigmas
-
-        # new_noises = self.privacy_params.weights_to_sigma_schedule(
-        #     private_clips, private_weights
-        # )
-        # new_clips = self.privacy_params.weights_to_clip_schedule(
-        #     private_sigmas, private_weights
-        # )
 
         new_noise_schedule = self.noise_schedule.__class__.from_projection(
             self.noise_schedule, new_noises

@@ -4,6 +4,7 @@ from jax import vmap
 from jaxtyping import Array, ArrayLike
 
 from conf.singleton_conf import SingletonConfig
+from policy.stateful_schedules._registry import register
 from policy.stateful_schedules.abstract import (
     AbstractScheduleState,
     AbstractStatefulNoiseAndClipSchedule,
@@ -13,6 +14,7 @@ from privacy.gdp_privacy import GDPPrivacyParameters
 from util.logger import Loggable, LoggableArray, LoggingSchema
 
 
+@register(StatefulMedianGradientNoiseAndClipConfig)
 class StatefulMedianGradientNoiseAndClipSchedule(AbstractStatefulNoiseAndClipSchedule):
     """
     https://proceedings.neurips.cc/paper_files/paper/2021/file/91cff01af640a24e7f9f7a5ab407889f-Paper.pdf

@@ -2,11 +2,12 @@ import jax.lax as jlax
 import jax.numpy as jnp
 from jaxtyping import Array
 
-from conf.singleton_conf import SingletonConfig
+from policy.base_schedules._registry import register
 from policy.base_schedules.abstract import AbstractSchedule
 from policy.base_schedules.config import ConstantScheduleConfig
 
 
+@register(ConstantScheduleConfig)
 class ConstantSchedule(AbstractSchedule):
     placeholder: Array
     value: Array
@@ -17,8 +18,7 @@ class ConstantSchedule(AbstractSchedule):
         self.value = jnp.asarray(value)
 
     @classmethod
-    def from_config(cls, conf: ConstantScheduleConfig) -> "ConstantSchedule":
-        T = SingletonConfig.get_environment_config_instance().max_steps_in_episode
+    def from_config(cls, conf: ConstantScheduleConfig, T: int) -> "ConstantSchedule":
         return cls(conf.init_value, T)
 
     def get_valid_schedule(self) -> Array:

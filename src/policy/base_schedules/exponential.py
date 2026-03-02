@@ -2,11 +2,12 @@ import jax.lax as jlax
 import jax.numpy as jnp
 from jaxtyping import Array
 
-from conf.singleton_conf import SingletonConfig
+from policy.base_schedules._registry import register
 from policy.base_schedules.abstract import AbstractSchedule
 from policy.base_schedules.config import InterpolatedExponentialScheduleConfig
 
 
+@register(InterpolatedExponentialScheduleConfig)
 class InterpolatedExponentialSchedule(AbstractSchedule):
     keypoints: Array
     values: Array
@@ -19,12 +20,10 @@ class InterpolatedExponentialSchedule(AbstractSchedule):
 
     @classmethod
     def from_config(
-        cls, conf: InterpolatedExponentialScheduleConfig
+        cls, conf: InterpolatedExponentialScheduleConfig, T: int
     ) -> "InterpolatedExponentialSchedule":
-        T = SingletonConfig.get_environment_config_instance().max_steps_in_episode
         keypoints = jnp.linspace(0, T, conf.num_keypoints, dtype=jnp.int32)
         values = jnp.zeros_like(keypoints, dtype=jnp.float32) + conf.init_value
-
         return cls(keypoints, values, T)
 
     def get_valid_schedule(self) -> Array:

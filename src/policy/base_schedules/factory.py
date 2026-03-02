@@ -1,20 +1,11 @@
-from policy.base_schedules.abstract import AbstractSchedule
-from policy.base_schedules.clipped import InterpolatedClippedSchedule
-from policy.base_schedules.config import (
-    ConstantScheduleConfig,
-    InterpolatedClippedScheduleConfig,
-    InterpolatedExponentialScheduleConfig,
-)
-from policy.base_schedules.constant import ConstantSchedule
-from policy.base_schedules.exponential import InterpolatedExponentialSchedule
+"""Public factory for base schedules.
 
+Importing this module triggers registration of all concrete base schedule
+classes via their @register decorators.
+"""
 
-def base_schedule_factory(conf) -> AbstractSchedule:
-    if isinstance(conf, ConstantScheduleConfig):
-        return ConstantSchedule.from_config(conf)
-    elif isinstance(conf, InterpolatedClippedScheduleConfig):
-        return InterpolatedClippedSchedule.from_config(conf)
-    elif isinstance(conf, InterpolatedExponentialScheduleConfig):
-        return InterpolatedExponentialSchedule.from_config(conf)
+# Imports trigger @register side-effects — order does not matter.
+from policy.base_schedules import clipped, constant, exponential  # noqa: F401
+from policy.base_schedules._registry import build as base_schedule_factory
 
-    raise ValueError(f"Configuration not of expected type: {conf.__class__}")
+__all__ = ["base_schedule_factory"]

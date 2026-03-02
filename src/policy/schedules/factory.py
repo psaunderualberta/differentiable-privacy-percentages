@@ -1,27 +1,16 @@
-from policy.schedules.abstract import AbstractNoiseAndClipSchedule
-from policy.schedules.alternating import AlternatingSigmaAndClipSchedule
-from policy.schedules.config import (
-    AlternatingSigmaAndClipScheduleConfig,
-    DynamicDPSGDScheduleConfig,
-    PolicyAndClipScheduleConfig,
-    SigmaAndClipScheduleConfig,
+"""Public factory for noise-and-clip schedules.
+
+Importing this module triggers registration of all concrete schedule classes
+via their @register decorators.
+"""
+
+# Imports trigger @register side-effects — order does not matter.
+from policy.schedules import (  # noqa: F401
+    alternating,
+    dynamic_dpsgd,
+    policy_and_clip,
+    sigma_and_clip,
 )
-from policy.schedules.dynamic_dpsgd import DynamicDPSGDSchedule
-from policy.schedules.policy_and_clip import PolicyAndClipSchedule
-from policy.schedules.sigma_and_clip import SigmaAndClipSchedule
-from privacy.gdp_privacy import GDPPrivacyParameters
+from policy.schedules._registry import build as schedule_factory
 
-
-def schedule_factory(
-    conf, privacy_params: GDPPrivacyParameters
-) -> AbstractNoiseAndClipSchedule:
-    if isinstance(conf, AlternatingSigmaAndClipScheduleConfig):
-        return AlternatingSigmaAndClipSchedule.from_config(conf, privacy_params)
-    elif isinstance(conf, SigmaAndClipScheduleConfig):
-        return SigmaAndClipSchedule.from_config(conf, privacy_params)
-    elif isinstance(conf, PolicyAndClipScheduleConfig):
-        return PolicyAndClipSchedule.from_config(conf, privacy_params)
-    elif isinstance(conf, DynamicDPSGDScheduleConfig):
-        return DynamicDPSGDSchedule.from_config(conf, privacy_params)
-
-    raise ValueError(f"Configuration not of expected type: {conf.__class__}")
+__all__ = ["schedule_factory"]

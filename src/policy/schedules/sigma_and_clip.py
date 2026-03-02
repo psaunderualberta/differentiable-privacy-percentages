@@ -6,6 +6,7 @@ from jaxtyping import Array
 from conf.singleton_conf import SingletonConfig
 from policy.base_schedules.abstract import AbstractSchedule
 from policy.base_schedules.factory import base_schedule_factory
+from policy.schedules._registry import register
 from policy.schedules.abstract import AbstractNoiseAndClipSchedule
 from policy.schedules.config import SigmaAndClipScheduleConfig
 from privacy.gdp_privacy import GDPPrivacyParameters
@@ -13,6 +14,7 @@ from util.logger import Loggable, LoggableArray, LoggingSchema
 from util.util import pytree_has_inf
 
 
+@register(SigmaAndClipScheduleConfig)
 class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
     noise_schedule: AbstractSchedule
     clip_schedule: AbstractSchedule
@@ -32,9 +34,9 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
     def from_config(
         cls, conf: SigmaAndClipScheduleConfig, privacy_params: GDPPrivacyParameters
     ) -> "SigmaAndClipSchedule":
-        noise_schedule = base_schedule_factory(conf.noise)
-        clip_schedule = base_schedule_factory(conf.clip)
-
+        T = privacy_params.T
+        noise_schedule = base_schedule_factory(conf.noise, T)
+        clip_schedule = base_schedule_factory(conf.clip, T)
         return cls(noise_schedule, clip_schedule, privacy_params)
 
     def get_private_sigmas(self) -> Array:
@@ -46,7 +48,6 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
     def get_private_weights(self) -> Array:
         private_sigmas = self.get_private_sigmas()
         clips = self.get_private_clips()
-
         return self.privacy_params.project_weights(clips / private_sigmas).squeeze()
 
     def apply_updates(self, updates) -> Self:

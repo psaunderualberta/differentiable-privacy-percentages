@@ -1,16 +1,11 @@
-from policy.stateful_schedules.abstract import AbstractStatefulNoiseAndClipSchedule
-from policy.stateful_schedules.config import StatefulMedianGradientNoiseAndClipConfig
-from policy.stateful_schedules.median_gradient import (
-    StatefulMedianGradientNoiseAndClipSchedule,
-)
-from privacy.gdp_privacy import GDPPrivacyParameters
+"""Public factory for stateful noise-and-clip schedules.
 
+Importing this module triggers registration of all concrete stateful schedule
+classes via their @register decorators.
+"""
 
-def stateful_schedule_factory(
-    conf, privacy_params: GDPPrivacyParameters
-) -> AbstractStatefulNoiseAndClipSchedule:
-    if isinstance(conf, StatefulMedianGradientNoiseAndClipConfig):
-        return StatefulMedianGradientNoiseAndClipSchedule.from_config(
-            conf, privacy_params
-        )
-    raise ValueError(f"Configuration not of expected type: {conf.__class__}")
+# Import triggers @register side-effect.
+from policy.stateful_schedules import median_gradient  # noqa: F401
+from policy.stateful_schedules._registry import build as stateful_schedule_factory
+
+__all__ = ["stateful_schedule_factory"]

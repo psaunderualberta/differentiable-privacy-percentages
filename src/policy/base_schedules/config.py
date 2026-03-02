@@ -1,6 +1,8 @@
+import dataclasses
 from dataclasses import dataclass
+from typing import Annotated, Union
 
-from tyro.conf import Fixed
+import tyro
 
 from conf.config_util import to_wandb_sweep_params
 
@@ -12,7 +14,6 @@ class AbstractScheduleConfig:
 @dataclass
 class ConstantScheduleConfig(AbstractScheduleConfig):
     init_value: float = 1.0
-    attrs: Fixed[tuple[str, ...]] = ("init_value",)
 
     def to_wandb_sweep(self):
         return to_wandb_sweep_params(self)
@@ -22,7 +23,6 @@ class ConstantScheduleConfig(AbstractScheduleConfig):
 class InterpolatedExponentialScheduleConfig(AbstractScheduleConfig):
     num_keypoints: int = 50
     init_value: float = 1.0
-    attrs: Fixed[tuple[str, ...]] = ("num_keypoints", "init_value")
 
     def to_wandb_sweep(self):
         return to_wandb_sweep_params(self)
@@ -32,7 +32,20 @@ class InterpolatedExponentialScheduleConfig(AbstractScheduleConfig):
 class InterpolatedClippedScheduleConfig(AbstractScheduleConfig):
     num_keypoints: int = 50
     init_value: float = 1.0
-    attrs: Fixed[tuple[str, ...]] = ("num_keypoints", "init_value")
 
     def to_wandb_sweep(self):
         return to_wandb_sweep_params(self)
+
+
+# Union type used by schedule configs to select a base schedule parametrisation.
+# tyro treats a Union of dataclasses as subcommands automatically; only the
+# selected variant is ever constructed.
+BaseScheduleConfig = Union[
+    Annotated[ConstantScheduleConfig, tyro.conf.subcommand("constant")],
+    Annotated[
+        InterpolatedExponentialScheduleConfig, tyro.conf.subcommand("interplated-exp")
+    ],
+    Annotated[
+        InterpolatedClippedScheduleConfig, tyro.conf.subcommand("interpolated-clipped")
+    ],
+]

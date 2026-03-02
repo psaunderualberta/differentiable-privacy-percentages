@@ -10,5 +10,7 @@ def policy_factory(conf, privacy_params: GDPPrivacyParameters):
         return schedule_factory(conf, privacy_params)
     elif isinstance(conf, AbstractStatefulScheduleConfig):
         return stateful_schedule_factory(conf, privacy_params)
-
-    raise ValueError(f"Configuration not of expected type: {conf.__class__}")
+    raise ValueError(
+        f"Config type '{type(conf).__name__}' is neither a schedule nor a "
+        f"stateful schedule config."
+    )

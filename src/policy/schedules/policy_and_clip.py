@@ -5,12 +5,14 @@ from jaxtyping import Array
 
 from policy.base_schedules.abstract import AbstractSchedule
 from policy.base_schedules.factory import base_schedule_factory
+from policy.schedules._registry import register
 from policy.schedules.abstract import AbstractNoiseAndClipSchedule
 from policy.schedules.config import PolicyAndClipScheduleConfig
 from privacy.gdp_privacy import GDPPrivacyParameters
 from util.logger import Loggable, LoggableArray, LoggingSchema
 
 
+@register(PolicyAndClipScheduleConfig)
 class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
     policy_schedule: AbstractSchedule
     clip_schedule: AbstractSchedule
@@ -30,25 +32,22 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
     def from_config(
         cls, conf: PolicyAndClipScheduleConfig, privacy_params: GDPPrivacyParameters
     ) -> "PolicyAndClipSchedule":
-        noise_schedule = base_schedule_factory(conf.policy)
-        clip_schedule = base_schedule_factory(conf.clip)
-
-        return cls(noise_schedule, clip_schedule, privacy_params)
+        T = privacy_params.T
+        policy_schedule = base_schedule_factory(conf.policy, T)
+        clip_schedule = base_schedule_factory(conf.clip, T)
+        return cls(policy_schedule, clip_schedule, privacy_params)
 
     def get_private_sigmas(self) -> Array:
         clips = self.clip_schedule.get_valid_schedule()
         policies = self.policy_schedule.get_valid_schedule()
-
-        private_sigmas = self.privacy_params.weights_to_sigma_schedule(clips, policies)
-        return private_sigmas.squeeze()
+        return self.privacy_params.weights_to_sigma_schedule(clips, policies).squeeze()
 
     def get_private_clips(self) -> Array:
         return self.clip_schedule.get_valid_schedule().squeeze()
 
     def get_private_weights(self) -> Array:
         weights = self.policy_schedule.get_valid_schedule()
-        proj_weights = self.privacy_params.project_weights(weights)
-        return proj_weights.squeeze()
+        return self.privacy_params.project_weights(weights).squeeze()
 
     def apply_updates(self, updates) -> Self:
         return eqx.apply_updates(self, updates)
@@ -59,7 +58,6 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
         new_policy_schedule = self.policy_schedule.__class__.from_projection(
             self.policy_schedule, private_weights
         )
-
         return self.__class__(
             policy_schedule=new_policy_schedule,
             clip_schedule=self.clip_schedule,
