@@ -143,12 +143,6 @@ class TestMLPFromConfig:
         )
         arrays = eqx_partition_array(mlp.layers)
         flat = jax.tree.leaves(arrays)
-        # Linear weights and biases are zero; LayerNorm is initialised by eqx.
-        linear_layers = [
-            a
-            for a in flat
-            if a.ndim == 2 or (a.ndim == 1 and a.shape[0] in (DIN, *HIDDEN, NCLASSES))
-        ]
         # Just verify that 2D weight matrices are zero.
         weight_matrices = [a for a in flat if a.ndim == 2]
         assert all(jnp.all(w == 0) for w in weight_matrices)

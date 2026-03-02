@@ -302,6 +302,7 @@ class TestMuScheduleConversions:
         recovered = params.weights_to_mu_schedule(
             params.mu_schedule_to_weights(mu_schedule)
         )
+        assert jnp.allclose(recovered, mu_schedule, atol=1e-5)
 
     def test_larger_weight_gives_larger_mu(self, params):
         w1 = jnp.array([0.5])

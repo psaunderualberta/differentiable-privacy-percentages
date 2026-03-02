@@ -118,11 +118,11 @@ class TestIsFixedField:
         @dataclass
         class Cfg:
             x: Annotated[int, tyro.conf.Fixed] = 42
-            l: tyro.conf.Fixed[int] = 42
+            t: tyro.conf.Fixed[int] = 42
             y: int = 0
 
         assert _is_fixed_field(Cfg, "x") is True
-        assert _is_fixed_field(Cfg, "l") is True
+        assert _is_fixed_field(Cfg, "t") is True
         assert _is_fixed_field(Cfg, "y") is False
 
     def test_non_existent_field_returns_false(self):
