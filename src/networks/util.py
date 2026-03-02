@@ -1,11 +1,13 @@
+from typing import Sequence
+
 import chex
 import equinox as eqx
 import jax.lax as jlax
 import jax.numpy as jnp
 import jax.random as jr
-from typing import Sequence
-from jaxtyping import Array, PRNGKeyArray
 from jax.experimental import checkify
+from jaxtyping import Array, PRNGKeyArray
+
 
 class Network:
     pass
@@ -19,8 +21,10 @@ class Flatten(eqx.Module):
 class Linear(eqx.Module):
     weight: chex.Array
     bias: chex.Array
+    initialization: str
 
     def __init__(self, din, dout, key: chex.PRNGKey, initialization: str = "glorot"):
+        self.initialization = initialization
         if initialization == "glorot":
             layer = eqx.nn.Linear(din, dout, key=key)
             assert layer.bias is not None

@@ -82,21 +82,26 @@ class MLP(eqx.Module, Network):
         return MLP(layers)
 
     def reinitialize(self, key: chex.PRNGKey) -> "MLP":
-        net_flat, net_treedef = jax.tree.flatten(self.layers)
 
-        rngs = jax.random.split(key, len(net_flat))
+        new_blocks = []
+        for block in self.layers:
+            new_block = []
+            for layer in block:
+                key, _key = jr.split(key)
+                if isinstance(layer, Linear):
+                    new_block.append(
+                        Linear(
+                            din=layer.weight.shape[1],
+                            dout=layer.weight.shape[0],
+                            initialization=layer.initialization,
+                            key=key,
+                        )
+                    )
+                else:
+                    new_block.append(layer)
+            new_blocks.append(new_block)
 
-        new_net_flat = [
-            (
-                Linear(layer.weight.shape[0], layer.weight.shape[1], key=rng)
-                if hasattr(layer, "weight")
-                else layer
-            )
-            for layer, rng in zip(net_flat, rngs)
-        ]
-
-        new_net_layers = jax.tree.unflatten(net_treedef, new_net_flat)
-        return MLP(new_net_layers)
+        return MLP(new_blocks)
 
     def __call__(self, x: chex.Array):
         x = x.reshape(-1, 1).squeeze()

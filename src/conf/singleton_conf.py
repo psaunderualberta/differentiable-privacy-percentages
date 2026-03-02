@@ -1,4 +1,5 @@
 import dataclasses
+import importlib
 from dataclasses import replace
 from pprint import pprint
 
@@ -25,11 +26,9 @@ def get_wandb_run_conf(wandb_conf: WandbConfig) -> dict:
 def _get_config_classes() -> dict[str, type]:
     """Build a name→config-class map from all existing registries.
 
-    Imports are deferred until call time to avoid circular-import issues:
-    schedule classes transitively import SingletonConfig, so they must not
-    be imported at module load time.
+    Deferred until call time to avoid circular-import issues at module load.
+    Uses importlib so that the trigger imports are not stripped by linters.
     """
-    # Trigger @register decorators before reading _REGISTRY keys.
     from networks._registry import _REGISTRY as _network_reg
     from policy.base_schedules._registry import _REGISTRY as _base_reg
     from policy.schedules._registry import _REGISTRY as _sched_reg

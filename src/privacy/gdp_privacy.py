@@ -101,8 +101,6 @@ class GDPPrivacyParameters(eqx.Module):
             A 1D array representing the adjusted schedule.
         """
 
-        eps = self.compute_eps()
-
         schedule = schedule**2
         return jnp.sqrt(jnp.log(schedule * (jnp.exp(self.mu_0**2) - 1) + 1))
 
@@ -205,7 +203,7 @@ class GDPPrivacyParameters(eqx.Module):
     def project_weights(self, weights: Array, tol: float | Array = 1e-6) -> Array:
         """
         post-GD weights (i.e. after updating sigma, clip, policy, or any three)
-        returns: projected weights W s.t. 1^T @ W = self.T && W \in [self.w_min, self.w_max]
+        returns: projected weights W s.t. 1^T @ W = self.T && W in [self.w_min, self.w_max]
         """
 
         # Ensure jnp array

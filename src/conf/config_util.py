@@ -90,7 +90,6 @@ def to_wandb_sweep_params(obj) -> dict[str, object]:
     """Derive W&B sweep parameters from a dataclass by inspecting its fields.
 
     Fields annotated with tyro.conf.Fixed are excluded automatically.
-    No manual 'attrs' tuple is needed.
     """
     if not dataclasses.is_dataclass(obj):
         raise TypeError(f"Expected a dataclass instance, got {type(obj)}")
