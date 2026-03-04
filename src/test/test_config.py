@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Annotated, Union
 
 import pytest
+import tyro
 
 from conf.config import (
     EnvConfig,
@@ -42,6 +43,7 @@ from policy.schedules.config import (
     DynamicDPSGDScheduleConfig,
     PolicyAndClipScheduleConfig,
     SigmaAndClipScheduleConfig,
+    WarmupAlternatingSigmaAndClipScheduleConfig,
 )
 from policy.stateful_schedules.config import StatefulMedianGradientNoiseAndClipConfig
 
@@ -54,6 +56,7 @@ for _mod in [
     "policy.schedules.sigma_and_clip",
     "policy.schedules.policy_and_clip",
     "policy.schedules.dynamic_dpsgd",
+    "policy.schedules.warmup_alternating",
     "policy.stateful_schedules.median_gradient",
     "networks.mlp.MLP",
     "networks.cnn.CNN",
@@ -113,7 +116,6 @@ class TestDistributionConfig:
 
 class TestIsFixedField:
     def test_fixed_field_detected(self):
-        import tyro
 
         @dataclass
         class Cfg:
@@ -275,6 +277,7 @@ class TestGetConfigClasses:
             "SigmaAndClipScheduleConfig",
             "PolicyAndClipScheduleConfig",
             "DynamicDPSGDScheduleConfig",
+            "WarmupAlternatingSigmaAndClipScheduleConfig",
             "StatefulMedianGradientNoiseAndClipConfig",
             "MLPConfig",
             "CNNConfig",
@@ -575,6 +578,15 @@ class TestConfigDefaults:
         assert conf.rho_mu == pytest.approx(0.5)
         assert conf.rho_c == pytest.approx(0.5)
         assert conf.c_0 == pytest.approx(1.5)
+
+    def test_warmup_alternating_schedule_config_defaults(self):
+        conf = WarmupAlternatingSigmaAndClipScheduleConfig()
+        assert isinstance(conf.noise_tail, InterpolatedExponentialScheduleConfig)
+        assert isinstance(conf.clip_tail, InterpolatedExponentialScheduleConfig)
+        assert conf.warmup_noise_init == pytest.approx(1.0)
+        assert conf.warmup_clip_init == pytest.approx(1.0)
+        assert conf.warmup_pct == pytest.approx(0.3)
+        assert conf.diff_clips_first is False
 
     def test_stateful_median_gradient_config_defaults(self):
         conf = StatefulMedianGradientNoiseAndClipConfig()

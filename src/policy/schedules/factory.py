@@ -10,6 +10,7 @@ from policy.schedules import (  # noqa: F401
     dynamic_dpsgd,
     policy_and_clip,
     sigma_and_clip,
+    warmup_alternating,
 )
 from policy.schedules._registry import build as schedule_factory
 

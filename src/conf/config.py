@@ -17,6 +17,7 @@ from policy.schedules.config import (
     DynamicDPSGDScheduleConfig,
     PolicyAndClipScheduleConfig,
     SigmaAndClipScheduleConfig,
+    WarmupAlternatingSigmaAndClipScheduleConfig,
 )
 from policy.stateful_schedules.config import StatefulMedianGradientNoiseAndClipConfig
 
@@ -37,6 +38,10 @@ ScheduleConfig = Union[
     Annotated[
         StatefulMedianGradientNoiseAndClipConfig,
         tyro.conf.subcommand("median-gradient"),
+    ],
+    Annotated[
+        WarmupAlternatingSigmaAndClipScheduleConfig,
+        tyro.conf.subcommand("warmup-alternating"),
     ],
 ]
 

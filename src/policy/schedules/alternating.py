@@ -97,9 +97,10 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
             self.clip_schedule, new_clips
         )
 
-        clip_schedule = self.__diff_clips_select(new_clip_schedule, self.clip_schedule)
+        # Only project the object we did *not* differentiate
+        clip_schedule = self.__diff_clips_select(self.clip_schedule, new_clip_schedule)
         noise_schedule = self.__diff_clips_select(
-            self.noise_schedule, new_noise_schedule
+            new_noise_schedule, self.noise_schedule
         )
 
         return self.__class__(
