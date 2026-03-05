@@ -15,6 +15,7 @@ class Network:
 
 class Flatten(eqx.Module):
     def __call__(self, x: chex.Array):
+        """Flatten `x` to a 1-D array."""
         return jnp.ravel(x)
 
 
@@ -24,6 +25,14 @@ class Linear(eqx.Module):
     initialization: str
 
     def __init__(self, din, dout, key: chex.PRNGKey, initialization: str = "glorot"):
+        """Create a linear layer with the specified initialization scheme.
+
+        Args:
+            din: Input feature dimension.
+            dout: Output feature dimension.
+            key: PRNG key used for weight initialization.
+            initialization: Weight init scheme; one of 'glorot' or 'zeros'.
+        """
         self.initialization = initialization
         if initialization == "glorot":
             layer = eqx.nn.Linear(din, dout, key=key)
@@ -39,6 +48,7 @@ class Linear(eqx.Module):
             )
 
     def __call__(self, x):
+        """Apply the linear transformation: weight @ x + bias."""
         weight = self.weight @ x
         return weight + self.bias
 

@@ -38,6 +38,18 @@ class WarmupAlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         step_count: int | Array = 0,
         warmup_steps: int = 30,
     ):
+        """Initialise the schedule with constant warmup schedules and learnable tail schedules.
+
+        Args:
+            noise_warmup: Constant σ schedule used during warmup.
+            clip_warmup: Constant clip schedule used during warmup.
+            noise_tail: Learnable σ schedule activated after warmup.
+            clip_tail: Learnable clip schedule activated after warmup.
+            privacy_params: GDP privacy budget and subsampling parameters.
+            diff_clips: If True, differentiate through clips and stop-gradient noise; alternated each step.
+            step_count: Current outer-loop step counter (used to track warmup/tail phase).
+            warmup_steps: Number of outer-loop steps to spend in the warmup phase.
+        """
         self.noise_warmup = noise_warmup
         self.clip_warmup = clip_warmup
         self.noise_tail = noise_tail
@@ -72,9 +84,11 @@ class WarmupAlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         )
 
     def _is_warmup(self) -> Array:
+        """Return True while the outer-loop step count is within the warmup phase."""
         return jnp.all(self.step_count < self.warmup_steps)
 
     def __select(self, condition: Array, a, b):
+        """Select elementwise between pytrees `a` and `b` based on a boolean JAX array condition."""
         def tree_select(x, y):
             if x is None:
                 return x

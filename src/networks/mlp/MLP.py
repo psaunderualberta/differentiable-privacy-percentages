@@ -17,6 +17,11 @@ class MLP(eqx.Module, Network):
     layers: list
 
     def __init__(self, layers: List[Any]):
+        """Store the pre-built list of layer blocks.
+
+        Args:
+            layers: Nested list of callable layers/activations grouped into blocks.
+        """
         self.layers = layers
 
     @classmethod
@@ -27,6 +32,14 @@ class MLP(eqx.Module, Network):
         output_shape: tuple[int, ...],
         key: int = 0,
     ) -> "MLP":
+        """Construct an MLP from a config and dataset shapes.
+
+        Args:
+            conf: MLPConfig specifying hidden sizes and initialization.
+            input_shape: Shape of the input batch (N, *features).
+            output_shape: Shape of the output batch (N, nclasses).
+            key: Integer seed for weight initialization.
+        """
         import jax.numpy as jnp
 
         din = int(jnp.prod(jnp.asarray(input_shape[1:])))
@@ -37,6 +50,14 @@ class MLP(eqx.Module, Network):
     def from_config(
         cls, conf: MLPConfig, din: int, nclasses: int, key: int = 0
     ) -> "MLP":
+        """Build the layer list from a config and explicit dimensions.
+
+        Args:
+            conf: MLPConfig specifying hidden sizes and initialization.
+            din: Flattened input dimension.
+            nclasses: Number of output classes.
+            key: Integer seed for weight initialization.
+        """
         rng = jr.PRNGKey(key)
         rng, _key = jr.split(rng)
         has_hidden = len(conf.hidden_sizes) > 0
@@ -82,7 +103,11 @@ class MLP(eqx.Module, Network):
         return MLP(layers)
 
     def reinitialize(self, key: chex.PRNGKey) -> "MLP":
+        """Return a new MLP with freshly randomized Linear weights; non-Linear layers are unchanged.
 
+        Args:
+            key: PRNG key used to draw new weights.
+        """
         new_blocks = []
         for block in self.layers:
             new_block = []
@@ -104,6 +129,7 @@ class MLP(eqx.Module, Network):
         return MLP(new_blocks)
 
     def __call__(self, x: chex.Array):
+        """Run a forward pass through all layer blocks and return the output."""
         x = x.reshape(-1, 1).squeeze()
         for block in self.layers:
             for layer in block:
@@ -111,11 +137,13 @@ class MLP(eqx.Module, Network):
         return x
 
     def forward_through_block(self, x: chex.Array, block_idx: int):
+        """Run a forward pass through a single block identified by `block_idx`."""
         for layer in self.layers[block_idx]:
             x = layer(x)
         return x
 
     def hidden_outputs(self, x: chex.Array):
+        """Return the concatenated outputs of every block (excluding the input)."""
         outputs = jnp.zeros(1)
         for layer in self.layers:
             x = layer(x)
@@ -123,6 +151,7 @@ class MLP(eqx.Module, Network):
         return outputs[1:]
 
     def get_num_hidden_units(self):
+        """Return the total number of scalar hidden units across all weight arrays."""
         def get_out_dim(arr):
             if arr is None:
                 return 0

@@ -17,6 +17,11 @@ class CNN(eqx.Module, Network):
     layers: list
 
     def __init__(self, layers: List[Any]):
+        """Store the pre-built list of layer blocks.
+
+        Args:
+            layers: Nested list of callable layers/activations grouped into blocks.
+        """
         self.layers = layers
 
     @classmethod
@@ -27,6 +32,14 @@ class CNN(eqx.Module, Network):
         output_shape: tuple[int, ...],
         key: int = 0,
     ) -> "CNN":
+        """Construct a CNN from a config and dataset shapes.
+
+        Args:
+            conf: CNNConfig specifying convolutional and MLP sub-network parameters.
+            input_shape: Shape of the input batch (N, C, H, W).
+            output_shape: Shape of the output batch (N, nclasses).
+            key: Integer seed for weight initialization.
+        """
         nchannels = input_shape[1]
         dummy_data = jnp.zeros(input_shape[1:])
         nclasses = output_shape[1]
@@ -43,6 +56,17 @@ class CNN(eqx.Module, Network):
         nclasses: int,
         key: int = 0,
     ) -> "CNN":
+        """Build the convolutional trunk and MLP head from explicit dimensions.
+
+        Runs a dummy forward pass to determine the flattened dimension fed into the MLP.
+
+        Args:
+            conf: CNNConfig specifying channels, kernel sizes, paddings, strides, and MLP config.
+            nchannels: Number of input channels.
+            dummy_data: Zero-valued array with shape (C, H, W) used to infer the MLP input size.
+            nclasses: Number of output classes.
+            key: Integer seed for weight initialization.
+        """
         rng = jr.PRNGKey(key)
         in_channels = nchannels
         blocks = []
@@ -86,6 +110,11 @@ class CNN(eqx.Module, Network):
         return cnn
 
     def reinitialize(self, key: chex.PRNGKey) -> "CNN":
+        """Return a new CNN with freshly randomized Conv2d and MLP weights; other layers are unchanged.
+
+        Args:
+            key: PRNG key used to draw new weights.
+        """
         new_blocks = []
         for block in self.layers:
             new_block = []
@@ -111,17 +140,20 @@ class CNN(eqx.Module, Network):
         return CNN(new_blocks)
 
     def __call__(self, x: jnp.ndarray):
+        """Run a forward pass through all layer blocks and return the output."""
         for block in self.layers:
             for layer in block:
                 x = layer(x)
         return x
 
     def forward_through_block(self, x: jnp.ndarray, block_idx: int):
+        """Run a forward pass through a single block identified by `block_idx`."""
         for layer in self.layers[block_idx]:
             x = layer(x)
         return x
 
     def hidden_outputs(self, x: jnp.ndarray):
+        """Return the concatenated outputs of every block (excluding the input)."""
         outputs = jnp.zeros(1)
         for layer in self.layers:
             x = layer(x)
@@ -129,6 +161,7 @@ class CNN(eqx.Module, Network):
         return outputs[1:]
 
     def get_num_hidden_units(self):
+        """Return the total number of scalar hidden units across all weight arrays."""
         def get_out_dim(arr):
             if arr is None:
                 return 0

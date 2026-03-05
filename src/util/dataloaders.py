@@ -15,6 +15,15 @@ __DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data
 
 
 def image_ds_saver(ds, x_file, y_file):
+    """Save a HuggingFace image dataset split to .npy files.
+
+    Converts images to JAX arrays and one-hot encodes labels before saving.
+
+    Args:
+        ds: HuggingFace dataset split (train or test).
+        x_file: Path to save the images array.
+        y_file: Path to save the one-hot labels array.
+    """
     # https://huggingface.co/docs/datasets/en/use_with_jax
     dds = ds.with_format("jax")
     image_key = "image" if "image" in dds.features else "img"
@@ -28,6 +37,17 @@ def image_ds_saver(ds, x_file, y_file):
 
 
 def _dataloader_california(degree=1):
+    """Load the California Housing dataset as a binary classification problem.
+
+    Applies polynomial feature expansion and z-score normalization.
+    The regression target is binarised by comparing each value to the median.
+
+    Args:
+        degree: Polynomial degree for feature expansion (default 1 = no expansion).
+
+    Returns:
+        Tuple of (X, y) JAX arrays with shapes (N, features) and (N, 2).
+    """
     X, y = fetch_california_housing(return_X_y=True)
     X = (X - X.mean(axis=0)) / X.std(axis=0)
     X = PolynomialFeatures(degree=degree, include_bias=False).fit_transform(X)
@@ -39,6 +59,15 @@ def _dataloader_california(degree=1):
 
 
 def _dataloader_mnist(_=None, test=False) -> Tuple[chex.Array, chex.Array]:
+    """Load MNIST, downloading and caching as .npy files if necessary.
+
+    Args:
+        _: Unused (polynomial degree placeholder for API consistency).
+        test: If True, return the test split instead of the training split.
+
+    Returns:
+        Tuple of (images, labels) with shapes (N, 1, 28, 28) and (N, 10).
+    """
     mnist_datadir = os.path.join(__DATA_DIR, "mnist")
     os.makedirs(mnist_datadir, exist_ok=True)
     image_train_file = os.path.join(mnist_datadir, "mnist-train.npy")
@@ -73,6 +102,18 @@ def _dataloader_mnist(_=None, test=False) -> Tuple[chex.Array, chex.Array]:
 
 
 def _dataloader_cifar_10(_=None, test=False) -> Tuple[chex.Array, chex.Array]:
+    """Load CIFAR-10, downloading and caching as .npy files if necessary.
+
+    Images are converted from (N, H, W, C) to (N, C, H, W) channel-first format
+    and normalised to [0, 1].
+
+    Args:
+        _: Unused (polynomial degree placeholder for API consistency).
+        test: If True, return the test split instead of the training split.
+
+    Returns:
+        Tuple of (images, labels) with shapes (N, 3, 32, 32) and (N, 10).
+    """
     ds = load_dataset("uoft-cs/cifar10", split="train")
     # https://huggingface.co/docs/datasets/en/use_with_jax
     cifar_datadir = os.path.join(__DATA_DIR, "cifar-10")
@@ -107,6 +148,15 @@ def _dataloader_cifar_10(_=None, test=False) -> Tuple[chex.Array, chex.Array]:
 
 
 def _dataloader_fashion_mnist(_=None, test=False) -> Tuple[chex.Array, chex.Array]:
+    """Load Fashion-MNIST, downloading and caching as .npy files if necessary.
+
+    Args:
+        _: Unused (polynomial degree placeholder for API consistency).
+        test: If True, return the test split instead of the training split.
+
+    Returns:
+        Tuple of (images, labels) with shapes (N, 1, 28, 28) and (N, 10).
+    """
     mnist_datadir = os.path.join(__DATA_DIR, "fashion-mnist")
     os.makedirs(mnist_datadir, exist_ok=True)
     image_train_file = os.path.join(mnist_datadir, "fashion-mnist-train.npy")
@@ -149,6 +199,11 @@ DATALOADERS = {
 
 
 def get_datasets():
+    """Load train and test splits for the dataset specified in the singleton config.
+
+    Returns:
+        Tuple of (X_train, y_train, X_test, y_test) JAX arrays.
+    """
     sweep_config = SingletonConfig.get_sweep_config_instance()
     X, y = DATALOADERS[sweep_config.dataset](sweep_config.dataset_poly_d)
     X_test, y_test = DATALOADERS[sweep_config.dataset](
@@ -158,6 +213,11 @@ def get_datasets():
 
 
 def get_dataset_shapes():
+    """Return the shapes of the train and validation splits from the configured dataset.
+
+    Returns:
+        Tuple of (X_shape, y_shape, valX_shape, valy_shape).
+    """
     X, y, valX, valy = get_datasets()
     return X.shape, y.shape, valX.shape, valy.shape
 

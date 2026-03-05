@@ -23,6 +23,13 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
         clip_schedule: AbstractSchedule,
         privacy_params: GDPPrivacyParameters,
     ):
+        """Initialise the schedule with a policy (weight) sub-schedule and a clip sub-schedule.
+
+        Args:
+            policy_schedule: Parametric schedule whose outputs are GDP weight values.
+            clip_schedule: Parametric schedule that produces per-step clip thresholds.
+            privacy_params: GDP privacy budget and subsampling parameters.
+        """
         self.policy_schedule = policy_schedule
         self.clip_schedule = clip_schedule
         self.privacy_params = privacy_params

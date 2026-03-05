@@ -25,6 +25,12 @@ class StatefulMedianGradientNoiseAndClipSchedule(AbstractStatefulNoiseAndClipSch
         sigma: Array
 
         def __init__(self, C: Array, sigma: Array):
+            """Store the current clip threshold and noise scale.
+
+            Args:
+                C: Current gradient clipping threshold.
+                sigma: Current Gaussian noise standard deviation.
+            """
             self.C = C
             self.sigma = sigma
 
@@ -43,6 +49,13 @@ class StatefulMedianGradientNoiseAndClipSchedule(AbstractStatefulNoiseAndClipSch
     def __init__(
         self, c_0: ArrayLike, eta_c: ArrayLike, privacy_params: GDPPrivacyParameters
     ):
+        """Initialise the median-gradient adaptive clipping schedule.
+
+        Args:
+            c_0: Initial gradient clipping threshold.
+            eta_c: Learning rate for the exponential clip update rule.
+            privacy_params: GDP privacy parameters used to derive σ from C and μ₀.
+        """
         self.c_0 = jnp.asarray(c_0)
         self.eta_c = jnp.asarray(eta_c)
         self.privacy_params = privacy_params

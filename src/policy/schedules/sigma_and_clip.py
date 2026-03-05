@@ -23,6 +23,13 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         clip_schedule: AbstractSchedule,
         privacy_params: GDPPrivacyParameters,
     ):
+        """Initialise the schedule with jointly-optimised noise and clip sub-schedules.
+
+        Args:
+            noise_schedule: Parametric schedule that produces per-step σ values.
+            clip_schedule: Parametric schedule that produces per-step clip thresholds.
+            privacy_params: GDP privacy budget and subsampling parameters.
+        """
         self.noise_schedule = noise_schedule
         self.clip_schedule = clip_schedule
         self.privacy_params = privacy_params

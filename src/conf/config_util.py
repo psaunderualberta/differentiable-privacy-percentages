@@ -17,6 +17,7 @@ class DistributionConfig:
     ]  # type of distribution, in wandb-format (i.e. uniform, log_uniform_values, etc.)
 
     def sample(self) -> float:
+        """Sample a value from this distribution, or return the constant value."""
         if self.distribution == "constant":
             return self.value
 
@@ -30,6 +31,7 @@ class DistributionConfig:
         return np.random.uniform(low=self.min, high=self.min)
 
     def to_wandb_sweep(self):
+        """Serialise this distribution to the W&B sweep parameter format."""
         if self.distribution == "constant":
             return {"distribution": self.distribution, "value": self.value}
 
@@ -40,7 +42,6 @@ class DistributionConfig:
         }
 
 
-# wandb cannot create sweeps if any distribution has min >= max
 def dist_config_helper(
     min: float = 0.0,
     max: float = 0.0,
@@ -49,6 +50,7 @@ def dist_config_helper(
         "constant", "log_uniform_values", "int_uniform", "uniform"
     ] = "constant",
 ) -> DistributionConfig:
+    """Construct a DistributionConfig, nudging max above min if they are equal (W&B requirement)."""
     if min >= max:
         max += 1e-10
     return DistributionConfig(min=min, max=max, value=value, distribution=distribution)

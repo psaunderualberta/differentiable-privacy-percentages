@@ -33,6 +33,7 @@ from util.util import (
 
 
 def get_private_model_training_schemas() -> list[LoggingSchema]:
+    """Return logging schemas for the inner-loop train-loss and accuracy tables."""
     return [
         LoggingSchema(
             table_name="train_losses",
@@ -63,6 +64,25 @@ def training_step(
     Array,
     Array,  # Scan outputs
 ]:
+    """Perform a single DP-SGD (or non-private) training step.
+
+    Samples a Poisson minibatch, computes per-sample gradients, optionally clips
+    and noises them, then applies an optax update.
+
+    Args:
+        model: Current model parameters as an equinox pytree.
+        optimizer: Optax gradient transformation.
+        opt_state: Current optimizer state.
+        mb_key: PRNG key for minibatch sampling.
+        noise_key: PRNG key for spherical Gaussian noise.
+        noise: Per-step σ value for the Gaussian mechanism.
+        clip: Per-step gradient clipping threshold.
+        params: DP environment parameters (dataset, batch size, etc.).
+        private: If False, skip clipping and noise (non-private SGD).
+
+    Returns:
+        Tuple of (new_model, new_opt_state, mb_key, noise_key, loss, accuracy).
+    """
     mb_key, _key = jr.split(mb_key)
     batch_x, batch_y = sample_batch_uniform(
         params.X, params.y, params.dummy_batch, _key
@@ -123,6 +143,7 @@ def train_with_noise(
         tuple[PyTree, optax.OptState, PRNGKeyArray, PRNGKeyArray],  # Carry values
         tuple[Array, Array],  # Scan outputs
     ]:
+        """Single scan body: run one DP-SGD step and return updated carry and per-step outputs."""
         net_params, opt_state_params, mb_key, noise_key = carry
         model = eqx.combine(net_params, net_static)
         opt_state = eqx.combine(opt_state_params, opt_state_static)
@@ -193,6 +214,7 @@ def train_with_stateful_noise(
         ],  # Carry values
         tuple[Array, Array],  # Scan outputs
     ]:
+        """Single scan body: update the stateful schedule then run one DP-SGD step."""
         net_params, opt_state_params, schedule_state, mb_key, noise_key = carry
         model = eqx.combine(net_params, net_static)
         opt_state = eqx.combine(opt_state_params, opt_state_static)

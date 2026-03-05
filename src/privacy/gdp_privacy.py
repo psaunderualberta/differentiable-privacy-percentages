@@ -46,6 +46,14 @@ class GDPPrivacyParameters(eqx.Module):
     __w_max: Array
 
     def __init__(self, eps: float, delta: float, p: float, T: int):
+        """Compute GDP parameters from (ε, δ)-DP and subsampling settings.
+
+        Args:
+            eps: The ε parameter of (ε, δ)-DP.
+            delta: The δ parameter of (ε, δ)-DP.
+            p: Poisson subsampling probability (batch_size / dataset_size).
+            T: Total number of DP-SGD steps.
+        """
         self.eps = eps
         self.delta = delta
         self.__mu = approx_to_gdp(eps, delta)
@@ -80,15 +88,25 @@ class GDPPrivacyParameters(eqx.Module):
         return jlax.stop_gradient(self.__w_max)
 
     def compute_mu_0(self) -> Array:
+        """Compute the per-step GDP μ₀ such that T uniform steps compose to the total μ."""
         return jnp.sqrt(jnp.log(self.mu**2 / (self.p**2 * self.T) + 1))
 
     def compute_eps(self, max_sigma: float | None = None) -> Array:
+        """Compute the effective epsilon ratio between the maximum sigma and the per-step μ₀.
+
+        Args:
+            max_sigma: Upper bound on σ. Defaults to `max_sigma` from the policy config.
+
+        Returns:
+            The ratio (exp(1/max_sigma²) - 1) / (exp(μ₀²) - 1).
+        """
         if max_sigma is None:
             max_sigma = SingletonConfig.get_policy_config_instance().max_sigma
 
         return (jnp.exp(1 / max_sigma**2) - 1) / (jnp.exp(self.mu_0**2) - 1)
 
     def compute_expenditure(self, sigmas: Array, clips: Array) -> Array:
+        """Compute the total GDP μ expenditure for a given σ/clip schedule."""
         return jnp.sum(self.p * jnp.sqrt(jnp.exp((clips / sigmas) ** 2) - 1))
 
     def weights_to_mu_schedule(self, schedule: Array) -> Array:
@@ -133,6 +151,7 @@ class GDPPrivacyParameters(eqx.Module):
         return C / mu
 
     def _validated_mu_schedule(self, weights: Array) -> Array:
+        """Convert weights to a μ schedule with runtime Inf/zero guards."""
         weights = eqx.error_if(weights, pytree_has_inf(weights), "weights have Inf!")
         weights = eqx.error_if(weights, (weights == 0).any(), "weights have 0!")
         mu_schedule = self.weights_to_mu_schedule(weights)
@@ -248,6 +267,14 @@ class GDPPrivacyParameters(eqx.Module):
 
 
 def get_privacy_params(dataset_length: int) -> GDPPrivacyParameters:
+    """Build a GDPPrivacyParameters instance from the current singleton config.
+
+    Args:
+        dataset_length: Number of training examples; used to compute the subsampling probability p.
+
+    Returns:
+        GDPPrivacyParameters for the configured (ε, δ, batch_size, T).
+    """
     sweep_config = SingletonConfig.get_sweep_config_instance()
     epsilon = sweep_config.env.eps
     delta = sweep_config.env.delta

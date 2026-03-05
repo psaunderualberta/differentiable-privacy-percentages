@@ -28,6 +28,14 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         privacy_params: GDPPrivacyParameters,
         diff_clips: bool | Array = False,
     ):
+        """Initialise the schedule with independent noise and clip sub-schedules.
+
+        Args:
+            noise_schedule: Parametric schedule that produces per-step σ values.
+            clip_schedule: Parametric schedule that produces per-step clip thresholds.
+            privacy_params: GDP privacy budget and subsampling parameters.
+            diff_clips: If True, differentiate through clips and stop-gradient noise; alternated each step.
+        """
         self.noise_schedule = noise_schedule
         self.clip_schedule = clip_schedule
         self.privacy_params = privacy_params
@@ -45,6 +53,7 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         return cls(noise_schedule, clip_schedule, privacy_params, conf.diff_clips_first)
 
     def __diff_clips_select(self, a, b):
+        """Select elementwise between pytrees `a` and `b` based on `self.diff_clips`."""
         def tree_select(a, b):
             if a is None:
                 return a

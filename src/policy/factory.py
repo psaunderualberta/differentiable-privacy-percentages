@@ -6,6 +6,18 @@ from privacy.gdp_privacy import GDPPrivacyParameters
 
 
 def policy_factory(conf, privacy_params: GDPPrivacyParameters):
+    """Instantiate the correct schedule (stateful or non-stateful) from a config.
+
+    Args:
+        conf: An `AbstractNoiseAndClipScheduleConfig` or `AbstractStatefulScheduleConfig`.
+        privacy_params: GDP privacy budget and subsampling parameters.
+
+    Returns:
+        The constructed schedule object.
+
+    Raises:
+        ValueError: If `conf` is neither a schedule nor a stateful schedule config.
+    """
     if isinstance(conf, AbstractNoiseAndClipScheduleConfig):
         return schedule_factory(conf, privacy_params)
     elif isinstance(conf, AbstractStatefulScheduleConfig):

@@ -45,6 +45,14 @@ class LoggingSchema(eqx.Module):
         freq: int | None = None,
         add_step_column: bool = True,
     ):
+        """Create a logging schema for a named W&B table.
+
+        Args:
+            table_name: W&B table name used as a key throughout the logger.
+            cols: Column names (not including the automatic step column).
+            freq: Log every `freq` calls. Defaults to the config's plotting_interval.
+            add_step_column: If True, a 'step' column is prepended automatically.
+        """
         if freq is None:
             freq = SingletonConfig.get_sweep_config_instance().plotting_interval
 
@@ -62,6 +70,7 @@ class WandbTableLogger(eqx.Module):
     counts: dict[str, int]
 
     def __init__(self):
+        """Initialise the logger with empty per-table file, writer, and counter dicts."""
         self.files = dict()
         self.writers = dict()
         self.cols = dict()
@@ -69,6 +78,7 @@ class WandbTableLogger(eqx.Module):
         self.counts = dict()
 
     def add_schema(self, schema: LoggingSchema):
+        """Register a new table schema, creating the backing temp CSV file and DictWriter."""
         assert schema.table_name not in self.writers, (
             f"Table name '{schema.table_name}' already exists in logger."
         )
@@ -86,6 +96,11 @@ class WandbTableLogger(eqx.Module):
         self,
         item: Loggable | LoggableArray,
     ) -> bool:
+        """Log an item to its table, respecting the configured frequency.
+
+        Returns:
+            True if the item was actually written this call, False if skipped.
+        """
         # Convert to loggable
         if isinstance(item, LoggableArray):
             return self.log_array(item)
@@ -120,6 +135,7 @@ class WandbTableLogger(eqx.Module):
         self,
         item: LoggableArray,
     ) -> bool:
+        """Convert a LoggableArray to a Loggable dict and delegate to `log`."""
         name = item.table_name
         arr = item.array
         aux = item.aux
@@ -138,6 +154,7 @@ class WandbTableLogger(eqx.Module):
         return self.log(loggable_item)
 
     def commit(self, metrics: Mapping[str, int] | None = None):
+        """Flush additional scalar metrics to W&B via wandb.log."""
         if metrics is None:
             metrics = dict()
         assert len(self.writers.keys() & metrics) == 0, "Name Overlap"
@@ -147,6 +164,7 @@ class WandbTableLogger(eqx.Module):
         wandb.log(metrics)
 
     def finish(self):
+        """Upload all accumulated CSV tables to W&B as immutable W&B Tables and close temp files."""
         final_tables_pd = {
             tablename: pd.read_csv(filename.name)
             for tablename, filename in self.files.items()
@@ -162,6 +180,12 @@ class WandbTableLogger(eqx.Module):
             file.close()
 
     def line_plot(self, table_name: str, data: dict[str, list] | None = None):
+        """Render and log a multi-line plot for a table to W&B.
+
+        Args:
+            table_name: Name of the registered table to plot.
+            data: Optional single-row dict to plot instead of reading the full CSV.
+        """
         if data is not None:
             cols = self.cols[table_name]
             data_ordered = [data[col] for col in cols]
@@ -174,6 +198,7 @@ class WandbTableLogger(eqx.Module):
         wandb.log({f"{table_name}-plot": fig})
 
     def bulk_line_plots(self, table_name: str):
+        """Parse the last CSV row as a 2-D array and log one line per inner row to W&B."""
         dataframe = pd.read_csv(self.files[table_name].name).iloc[-1]
         data = dataframe.drop("step").values
 

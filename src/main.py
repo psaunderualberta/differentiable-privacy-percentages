@@ -28,6 +28,7 @@ from util.util import ensure_valid_pytree, get_optimal_mesh
 
 
 def main():
+    """Run the outer gradient-based RL loop that learns the DP-SGD noise/clip schedule."""
     sweep_config = SingletonConfig.get_sweep_config_instance()
     wandb_config = SingletonConfig.get_wandb_config_instance()
 

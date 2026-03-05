@@ -1,6 +1,7 @@
 from typing import Self
 
 import equinox as eqx
+import jax.lax as jlax
 import jax.numpy as jnp
 from jaxtyping import Array, ArrayLike
 from scipy import optimize
@@ -33,6 +34,15 @@ class DynamicDPSGDSchedule(AbstractNoiseAndClipSchedule):
         privacy_params: GDPPrivacyParameters,
         eps: Array | float = 0.01,
     ):
+        """Initialise the dynamic DP-SGD schedule and solve for μ₀ at construction time.
+
+        Args:
+            rho_mu: Decay rate for the per-step GDP μ schedule.
+            rho_C: Decay rate for the per-step clipping threshold.
+            c_0: Initial clipping threshold.
+            privacy_params: GDP privacy budget and subsampling parameters.
+            eps: Minimum clamp value applied during projection to keep parameters positive.
+        """
         T = privacy_params.T
         self.__iters = jnp.arange(1, T + 1)
         self.rho_mu = jnp.asarray(rho_mu)
@@ -50,6 +60,7 @@ class DynamicDPSGDSchedule(AbstractNoiseAndClipSchedule):
         return cls(conf.rho_mu, conf.rho_c, conf.c_0, privacy_params)
 
     def __find_mu_0(self, tol=1e-12):
+        """Solve for μ₀ such that the total GDP μ matches the privacy budget (Eq. 10 in reference)."""
         mu_tot = self.privacy_params.mu
         p = self.privacy_params.p
         pows = self.rho_mu ** (self.iters / self.iters.size)
@@ -66,14 +77,17 @@ class DynamicDPSGDSchedule(AbstractNoiseAndClipSchedule):
 
     @property
     def iters(self) -> Array:
+        """Iteration indices 1..T, detached from the gradient graph."""
         return jlax.stop_gradient(self.__iters)
 
     @property
     def eps(self) -> Array:
+        """Minimum clamp value for learnable parameters, detached from the gradient graph."""
         return jlax.stop_gradient(self.__eps)
 
     @property
     def mu_0(self) -> Array:
+        """Solved initial per-step GDP μ, detached from the gradient graph."""
         return jlax.stop_gradient(self.__mu_0)
 
     def get_private_sigmas(self) -> Array:
@@ -96,6 +110,7 @@ class DynamicDPSGDSchedule(AbstractNoiseAndClipSchedule):
         return eqx.apply_updates(self, updates)
 
     def project(self) -> Self:
+        """Clamp all learnable parameters to a minimum of `eps` to keep them positive."""
         rho_mu = jnp.maximum(self.rho_mu, self.eps)
         rho_C = jnp.maximum(self.rho_C, self.eps)
         C_0 = jnp.maximum(self.C_0, self.eps)

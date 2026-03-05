@@ -18,6 +18,7 @@ from conf.config_util import DistributionConfig, dist_config_helper
 
 
 def get_wandb_run_conf(wandb_conf: WandbConfig) -> dict:
+    """Fetch the saved config dict for a prior W&B run."""
     run = wandb.Api().run(
         f"{wandb_conf.entity}/{wandb_conf.project}/{wandb_conf.restart_run_id}"
     )
@@ -93,6 +94,7 @@ def _reconstruct_from_dict(obj, d: dict):
 
 
 def _get_config():
+    """Parse CLI args into SingletonConfig, merging a prior W&B run's config if requested."""
     SingletonConfig.config = tyro.cli(
         Config,
         config=(tyro.conf.SuppressFixed, tyro.conf.CascadeSubcommandArgs),
@@ -134,6 +136,7 @@ class SingletonConfig:
 
     @classmethod
     def get_object(cls, obj):
+        """Convert a dataclass instance to a plain dict."""
         return dataclasses.asdict(obj)
 
 
