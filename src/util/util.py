@@ -195,7 +195,7 @@ def pytree_has_nan(tree: PyTree) -> Array:
 def pytree_has_inf(tree: PyTree) -> Array:
     def f(t: PyTree) -> bool:
         if t is None:
-            return None
+            return False
         return jnp.isinf(t).any(axis=None)
 
     return jt.reduce(lambda x, y: jnp.logical_or(x, y), jt.map(f, tree), False)

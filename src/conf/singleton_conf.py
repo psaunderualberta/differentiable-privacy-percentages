@@ -1,6 +1,7 @@
 import dataclasses
 import importlib
 from dataclasses import replace
+from functools import lru_cache
 from pprint import pprint
 
 import tyro
@@ -23,6 +24,7 @@ def get_wandb_run_conf(wandb_conf: WandbConfig) -> dict:
     return run.config
 
 
+@lru_cache(maxsize=None)
 def _get_config_classes() -> dict[str, type]:
     """Build a name→config-class map from all existing registries.
 

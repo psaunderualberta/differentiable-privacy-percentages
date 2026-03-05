@@ -132,18 +132,7 @@ class GDPPrivacyParameters(eqx.Module):
 
         return C / mu
 
-    def weights_to_sigma_schedule(self, C: Array, weights: Array) -> Array:
-        """Convert a vector of non-negative weights summing to T to a sigma schedule for G-DP.
-
-        Args:
-            schedule: A 1D array representing the weights. Assumed to be non-negative and sum to T.
-            mu: The mu parameter of GDP. Assumed to be a non-negative float or array.
-            p: The sampling probability for poisson sampling
-            T: The number of training iterations
-
-        Returns:
-            The Gaussian noise scale sigma.
-        """
+    def _validated_mu_schedule(self, weights: Array) -> Array:
         weights = eqx.error_if(weights, pytree_has_inf(weights), "weights have Inf!")
         weights = eqx.error_if(weights, (weights == 0).any(), "weights have 0!")
         mu_schedule = self.weights_to_mu_schedule(weights)
@@ -153,30 +142,15 @@ class GDPPrivacyParameters(eqx.Module):
         mu_schedule = eqx.error_if(
             mu_schedule, (mu_schedule == 0).any(), "Some mus are 0!"
         )
-        return self.gdp_to_sigma(C, mu_schedule)
+        return mu_schedule
+
+    def weights_to_sigma_schedule(self, C: Array, weights: Array) -> Array:
+        """Convert weights to a per-step sigma schedule for G-DP."""
+        return self.gdp_to_sigma(C, self._validated_mu_schedule(weights))
 
     def weights_to_clip_schedule(self, sigmas: Array, weights: Array) -> Array:
-        """Convert a vector of non-negative weights summing to T to a sigma schedule for G-DP.
-
-        Args:
-            schedule: A 1D array representing the weights. Assumed to be non-negative and sum to T.
-            mu: The mu parameter of GDP. Assumed to be a non-negative float or array.
-            p: The sampling probability for poisson sampling
-            T: The number of training iterations
-
-        Returns:
-            The Gaussian noise scale sigma.
-        """
-        weights = eqx.error_if(weights, pytree_has_inf(weights), "weights have Inf!")
-        weights = eqx.error_if(weights, (weights == 0).any(), "weights have 0!")
-        mu_schedule = self.weights_to_mu_schedule(weights)
-        mu_schedule = eqx.error_if(
-            mu_schedule, pytree_has_inf(mu_schedule), "mu schedule has Inf!"
-        )
-        mu_schedule = eqx.error_if(
-            mu_schedule, (mu_schedule == 0).any(), "Some mus are 0!"
-        )
-        return sigmas * mu_schedule
+        """Convert weights to a per-step clip schedule for G-DP."""
+        return sigmas * self._validated_mu_schedule(weights)
 
     def sigma_schedule_to_weights(self, C: Array, schedule: Array):
         """Convert a sigma schedule vector to a vector of non-negative weights summing to T for G-DP.
@@ -281,28 +255,3 @@ def get_privacy_params(dataset_length: int) -> GDPPrivacyParameters:
     T = SingletonConfig.get_environment_config_instance().max_steps_in_episode
 
     return GDPPrivacyParameters(epsilon, delta, p, T)
-
-    # def h(mu: Array) -> Array:
-    #     # 'mu' as in KKT literature, not privacy literature
-    #     clipped = jnp.clip(weights - mu, self.w_min, self.w_max)
-    #     return jnp.sum(clipped) - weights.size
-
-    # def cond(lo_hi: tuple[Array, Array]) -> Array:
-    #     lo, hi = lo_hi
-    #     return jnp.any(hi - lo > tol)
-
-    # def body(lo_hi: tuple[Array, Array]) -> tuple[Array, Array]:
-    #     mid = safe_avg(lo_hi)
-    #     obj_derivative = h(mid)
-
-    #     lo, hi = lo_hi
-    #     _cond = jnp.all(obj_derivative < 0)
-    #     new_lo = jlax.select(_cond, lo, mid)
-    #     new_hi = jlax.select(_cond, mid, hi)
-
-    #     return (new_lo, new_hi)
-
-    # # initial boundary values for bisection
-    # # dh/dmu outside this interval is 0, i.e. everything is clipped
-    # min_val = jnp.min(weights) - self.w_max
-    # max_val = jnp.max(weights) - self.w_min

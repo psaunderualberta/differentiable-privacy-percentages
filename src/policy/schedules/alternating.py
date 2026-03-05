@@ -6,14 +6,12 @@ import jax.numpy as jnp
 import jax.tree as jtree
 from jaxtyping import Array
 
-from conf.singleton_conf import SingletonConfig
 from policy.base_schedules.abstract import AbstractSchedule
 from policy.base_schedules.factory import base_schedule_factory
 from policy.schedules._registry import register
 from policy.schedules.abstract import AbstractNoiseAndClipSchedule
 from policy.schedules.config import AlternatingSigmaAndClipScheduleConfig
 from privacy.gdp_privacy import GDPPrivacyParameters
-from util.logger import Loggable, LoggableArray, LoggingSchema
 
 
 @register(AlternatingSigmaAndClipScheduleConfig)
@@ -110,33 +108,10 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
             diff_clips=~self.diff_clips,
         )
 
-    def get_logging_schemas(self) -> list[LoggingSchema]:
-        plot_interval = SingletonConfig.get_sweep_config_instance().plotting_interval
-        col_names = [str(step) for step in range(len(self.get_private_sigmas()))]
-        return [
-            LoggingSchema(table_name="sigmas", cols=col_names, freq=plot_interval),
-            LoggingSchema(table_name="clips", cols=col_names, freq=plot_interval),
-            LoggingSchema(table_name="mus", cols=col_names, freq=plot_interval),
-        ]
+    def _get_log_arrays(self) -> dict[str, Array]:
+        return {
+            "sigmas": self.get_private_sigmas(),
+            "clips": self.get_private_clips(),
+            "mus": self.get_private_weights(),
+        }
 
-    def get_loggables(self, force=False) -> list[Loggable | LoggableArray]:
-        return [
-            LoggableArray(
-                table_name="sigmas",
-                array=self.get_private_sigmas(),
-                plot=True,
-                force=force,
-            ),
-            LoggableArray(
-                table_name="clips",
-                array=self.get_private_clips(),
-                plot=True,
-                force=force,
-            ),
-            LoggableArray(
-                table_name="mus",
-                array=self.get_private_weights(),
-                plot=True,
-                force=force,
-            ),
-        ]

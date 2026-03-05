@@ -1,5 +1,4 @@
 from functools import partial
-from pprint import pprint
 
 import equinox as eqx
 import optax
@@ -31,7 +30,6 @@ from util.util import ensure_valid_pytree, get_optimal_mesh
 def main():
     sweep_config = SingletonConfig.get_sweep_config_instance()
     wandb_config = SingletonConfig.get_wandb_config_instance()
-    # exit()
 
     total_timesteps = sweep_config.total_timesteps
     env_prng_seed = sweep_config.prng_seed.sample()
@@ -173,7 +171,6 @@ def main():
             grads = ensure_valid_pytree(grads, "grads in main")
             updates, opt_state = optimizer.update(grads, opt_state, schedule)
             schedule = schedule.apply_updates(updates)
-            # schedule = eqx.apply_updates(updates)
 
             schedule = ensure_valid_pytree(schedule, "policy in main after updates")
 
@@ -187,10 +184,6 @@ def main():
             iterator.set_description(f"Training Progress - Loss: {loss:.4f}")
 
     except Exception as e:
-        # print("WARNING: Error raised during training: ", e.args[0])
-
-        # if not isinstance(e, KeyboardInterrupt):
-        #     raise e
         raise e
 
     # Plot final learnables
