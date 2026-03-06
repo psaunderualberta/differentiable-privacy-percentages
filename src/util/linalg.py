@@ -1,5 +1,6 @@
+from collections.abc import Callable
 from functools import partial
-from typing import Any, Callable
+from typing import Any
 
 import chex
 import jax.numpy as jnp
@@ -27,7 +28,9 @@ def hvp(J, w, v):
 
 @partial(jit, static_argnames=("f",))
 def vhp(
-    f: Callable[..., chex.Array], x: tuple[chex.Array], v: tuple[chex.Array]
+    f: Callable[..., chex.Array],
+    x: tuple[chex.Array],
+    v: tuple[chex.Array],
 ) -> Callable[[chex.Array], chex.Array]:
     """
     Vector-Hessian product of f at x in the direction of v.

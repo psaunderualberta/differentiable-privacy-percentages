@@ -37,6 +37,8 @@ class ConstantSchedule(AbstractSchedule):
 
     @classmethod
     def from_projection(
-        cls, schedule: "AbstractSchedule", projection: Array
+        cls,
+        schedule: "AbstractSchedule",
+        projection: Array,
     ) -> "ConstantSchedule":
         return ConstantSchedule(projection.mean(), schedule.placeholder.size)

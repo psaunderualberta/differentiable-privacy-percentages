@@ -1,7 +1,6 @@
 import dataclasses
-import importlib
 from dataclasses import replace
-from functools import lru_cache
+from functools import cache
 from pprint import pprint
 
 import tyro
@@ -20,12 +19,12 @@ from conf.config_util import DistributionConfig, dist_config_helper
 def get_wandb_run_conf(wandb_conf: WandbConfig) -> dict:
     """Fetch the saved config dict for a prior W&B run."""
     run = wandb.Api().run(
-        f"{wandb_conf.entity}/{wandb_conf.project}/{wandb_conf.restart_run_id}"
+        f"{wandb_conf.entity}/{wandb_conf.project}/{wandb_conf.restart_run_id}",
     )
     return run.config
 
 
-@lru_cache(maxsize=None)
+@cache
 def _get_config_classes() -> dict[str, type]:
     """Build a name→config-class map from all existing registries.
 
@@ -40,7 +39,7 @@ def _get_config_classes() -> dict[str, type]:
     return {
         config_cls.__name__: config_cls
         for registry in (_base_reg, _sched_reg, _stateful_reg, _network_reg)
-        for config_cls in registry.keys()
+        for config_cls in registry
     }
 
 
@@ -77,7 +76,7 @@ def _reconstruct_from_dict(obj, d: dict):
             if cls_name not in config_classes:
                 raise ValueError(
                     f"Cannot reconstruct field '{key}': unknown config class '{cls_name}'. "
-                    f"Known: {sorted(config_classes)}"
+                    f"Known: {sorted(config_classes)}",
                 )
             target_cls = config_classes[cls_name]
             # Build a default instance then recurse with the remaining keys.
@@ -147,6 +146,6 @@ if __name__ == "__main__":
     pprint(SingletonConfig.get_wandb_config_instance())
 
     sweep_config = SingletonConfig.get_object(
-        SingletonConfig.get_sweep_config_instance()
+        SingletonConfig.get_sweep_config_instance(),
     )
     pprint(sweep_config)

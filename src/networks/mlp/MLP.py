@@ -1,11 +1,10 @@
-from typing import Any, List
+from typing import Any
 
 import chex
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
-import optax
 
 from networks._registry import register
 from networks.mlp.config import MLPConfig
@@ -16,7 +15,7 @@ from networks.util import Linear, Network
 class MLP(eqx.Module, Network):
     layers: list
 
-    def __init__(self, layers: List[Any]):
+    def __init__(self, layers: list[Any]):
         """Store the pre-built list of layer blocks.
 
         Args:
@@ -48,7 +47,11 @@ class MLP(eqx.Module, Network):
 
     @classmethod
     def from_config(
-        cls, conf: MLPConfig, din: int, nclasses: int, key: int = 0
+        cls,
+        conf: MLPConfig,
+        din: int,
+        nclasses: int,
+        key: int = 0,
     ) -> "MLP":
         """Build the layer list from a config and explicit dimensions.
 
@@ -66,7 +69,7 @@ class MLP(eqx.Module, Network):
             [
                 Linear(din, layer_out, key=_key, initialization=conf.initialization),
                 eqx.nn.LayerNorm(layer_out),
-            ]
+            ],
         ]
 
         layer_in = layer_out
@@ -83,7 +86,7 @@ class MLP(eqx.Module, Network):
                             initialization=conf.initialization,
                         ),
                         eqx.nn.LayerNorm(layer_out),
-                    ]
+                    ],
                 )
                 layer_in = layer_out
 
@@ -97,7 +100,7 @@ class MLP(eqx.Module, Network):
                         key=_key,
                         initialization=conf.initialization,
                     ),
-                ]
+                ],
             )
 
         return MLP(layers)
@@ -120,7 +123,7 @@ class MLP(eqx.Module, Network):
                             dout=layer.weight.shape[0],
                             initialization=layer.initialization,
                             key=key,
-                        )
+                        ),
                     )
                 else:
                     new_block.append(layer)
@@ -152,6 +155,7 @@ class MLP(eqx.Module, Network):
 
     def get_num_hidden_units(self):
         """Return the total number of scalar hidden units across all weight arrays."""
+
         def get_out_dim(arr):
             if arr is None:
                 return 0
@@ -159,6 +163,8 @@ class MLP(eqx.Module, Network):
 
         model_arrays, _ = eqx.partition(self.layers, eqx.is_array)
         hidden_dims = jax.tree.map(
-            get_out_dim, model_arrays, is_leaf=lambda x: x is None
+            get_out_dim,
+            model_arrays,
+            is_leaf=lambda x: x is None,
         )
         return jax.tree.reduce(lambda x, y: x + y, hidden_dims).item()

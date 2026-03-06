@@ -20,9 +20,9 @@ def policy_factory(conf, privacy_params: GDPPrivacyParameters):
     """
     if isinstance(conf, AbstractNoiseAndClipScheduleConfig):
         return schedule_factory(conf, privacy_params)
-    elif isinstance(conf, AbstractStatefulScheduleConfig):
+    if isinstance(conf, AbstractStatefulScheduleConfig):
         return stateful_schedule_factory(conf, privacy_params)
     raise ValueError(
         f"Config type '{type(conf).__name__}' is neither a schedule nor a "
-        f"stateful schedule config."
+        f"stateful schedule config.",
     )

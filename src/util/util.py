@@ -1,15 +1,13 @@
 import ast
-from typing import Any
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
-import numpy as np
 from jax import tree as jt
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
-from jaxtyping import Array, PRNGKeyArray, PyTree, PyTreeDef
+from jaxtyping import Array, PRNGKeyArray, PyTree
 
 from conf.singleton_conf import SingletonConfig
 
@@ -71,14 +69,15 @@ def clip_grads_abadi(grads: eqx.Module, C: Array) -> eqx.Module:
 
     def get_multiplier(grad: eqx.Module):
         l22_norm = jnp.sqrt(
-            1e-8 + sum(jnp.sum(jnp.abs(x) ** 2) for x in jax.tree.leaves(grad))
+            1e-8 + sum(jnp.sum(jnp.abs(x) ** 2) for x in jax.tree.leaves(grad)),
         )
         return C / (l22_norm + 1 / (l22_norm + 1))
 
     batch_size = SingletonConfig.get_environment_config_instance().batch_size
     multipliers = jax.vmap(get_multiplier)(grads) / batch_size
     mean_clipped = jax.tree.map(
-        lambda g: jnp.tensordot(multipliers, g, axes=1), grads_flat
+        lambda g: jnp.tensordot(multipliers, g, axes=1),
+        grads_flat,
     )
 
     return jax.tree.unflatten(grads_treedef, mean_clipped)
@@ -115,41 +114,6 @@ def uniform_subsample_batch(
     return _x, _y
 
 
-@eqx.filter_jit
-def dp_mse_loss_poisson(
-    model: eqx.Module,
-    x: Array,
-    y: Array,
-    key: PRNGKeyArray,
-    idxs: Array,
-    C: float,
-):
-    """Compute the DP MSE loss on a Poisson-subsampled minibatch.
-
-    Args:
-        model: The model to evaluate.
-        x: Full dataset features of shape (N, *).
-        y: Full dataset labels of shape (N, *).
-        key: PRNG key for minibatch subsampling.
-        idxs: Dummy array whose length determines the batch size.
-        C: Gradient clipping threshold (passed to dp_mse_loss).
-
-    Returns:
-        Scalar MSE loss on the subsampled batch.
-    """
-    # get random subset of idxs for training
-    key, _key = jr.split(key)
-    probs = jr.uniform(_key, (x.shape[0],))
-
-    # https://arxiv.org/abs/2206.14286 for implementation of approx_max_k
-    # jitted_approx_max_k = jax.lax.approx_max_k, static_argnums=(1,))
-    _, subsample_idxs = jax.lax.approx_max_k(probs, idxs.shape[0])
-    _x = x[subsample_idxs]
-    _y = y[subsample_idxs]
-
-    return dp_mse_loss(model, _x, _y, C)
-
-
 # Create random PRNG keys w/ same pytree structure as model
 @eqx.filter_jit
 def pytree_keys(model: eqx.Module, key: PRNGKeyArray) -> PRNGKeyArray:
@@ -183,7 +147,10 @@ def reinit_model(model: eqx.Module, key: PRNGKeyArray) -> eqx.Module:
 
 @eqx.filter_jit
 def get_spherical_noise(
-    grads: eqx.Module, action: float | Array, clip: float | Array, key: PRNGKeyArray
+    grads: eqx.Module,
+    action: float | Array,
+    clip: float | Array,
+    key: PRNGKeyArray,
 ) -> eqx.Module:
     """Generate isotropic Gaussian noise scaled by `action` / batch_size for DP-SGD.
 
@@ -215,6 +182,7 @@ def add_pytrees(a: PyTree, b: PyTree) -> PyTree:
 @eqx.filter_jit
 def subtract_pytrees(a: PyTree, b: PyTree) -> PyTree:
     """Element-wise subtract pytree `b` from `a`; returns None for None leaves."""
+
     def func(x, y):
         if x is None or y is None:
             return None
@@ -235,6 +203,7 @@ def dot_pytrees(a: PyTree, b: PyTree) -> PyTree:
 
     None leaves contribute 0.
     """
+
     def func(x, y):
         if x is None or y is None:
             return 0.0
@@ -249,6 +218,7 @@ def pytree_max(a: PyTree) -> PyTree:
 
     None leaves are treated as -100.0 so they never win.
     """
+
     def func(x):
         if x is None:
             return -100.0
@@ -267,6 +237,7 @@ def index_pytree(structure: PyTree, index: int) -> PyTree:
     Returns:
         Pytree with the same structure but each array leaf replaced by `leaf[index]`.
     """
+
     def f(x):
         if x is None:
             return None
@@ -310,16 +281,23 @@ def ensure_valid_pytree(tree: PyTree, tree_name: str) -> PyTree:
         Tree: Original Pytree unmodified, must be used to ensure DCE isn't applied to this function.
     """
     tree = eqx.error_if(
-        tree, pytree_has_inf(tree), "Tree '" + tree_name + "' has infinite values!"
+        tree,
+        pytree_has_inf(tree),
+        "Tree '" + tree_name + "' has infinite values!",
     )
-    tree = eqx.error_if(
-        tree, pytree_has_nan(tree), "Tree '" + tree_name + "' has NaN values!"
+    return eqx.error_if(
+        tree,
+        pytree_has_nan(tree),
+        "Tree '" + tree_name + "' has NaN values!",
     )
-    return tree
 
 
 def subset_classification_accuracy(
-    model: eqx.Module, x: Array, y: Array, percent: float, key: PRNGKeyArray
+    model: eqx.Module,
+    x: Array,
+    y: Array,
+    percent: float,
+    key: PRNGKeyArray,
 ) -> Array:
     """Compute classification accuracy on a random subset of the dataset.
 
@@ -368,10 +346,9 @@ def recursive_list_to_jnp_array(obj: dict | list | str | int):
     """
     if isinstance(obj, dict):
         return {k: recursive_list_to_jnp_array(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
+    if isinstance(obj, list):
         return jnp.array(obj)
-    else:
-        return obj
+    return obj
 
 
 def str_to_jnp_array(s: str, sep: str = ", ", with_brackets: bool = True) -> Array:
@@ -391,7 +368,9 @@ def str_to_jnp_array(s: str, sep: str = ", ", with_brackets: bool = True) -> Arr
 
 
 def determine_optimal_num_devices(
-    devices, num_training_runs, printing=True
+    devices,
+    num_training_runs,
+    printing=True,
 ) -> tuple[NamedSharding, int]:
     """Maximize # of devices s.t. |runs| % |devices| = 0
     (otherwise JAX will throw an error when trying to distribute runs).
@@ -428,6 +407,8 @@ def get_optimal_mesh(devices_, num_training_runs, printing=True):
         A `jax.sharding.Mesh` over the chosen devices with axis name 'x'.
     """
     _, num_gpus = determine_optimal_num_devices(
-        devices_, num_training_runs, printing=printing
+        devices_,
+        num_training_runs,
+        printing=printing,
     )
     return Mesh(devices_[:num_gpus], "x")

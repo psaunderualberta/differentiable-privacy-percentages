@@ -1,4 +1,4 @@
-from typing import Any, List
+from typing import Any
 
 import chex
 import equinox as eqx
@@ -16,7 +16,7 @@ from networks.util import Network
 class CNN(eqx.Module, Network):
     layers: list
 
-    def __init__(self, layers: List[Any]):
+    def __init__(self, layers: list[Any]):
         """Store the pre-built list of layer blocks.
 
         Args:
@@ -44,7 +44,11 @@ class CNN(eqx.Module, Network):
         dummy_data = jnp.zeros(input_shape[1:])
         nclasses = output_shape[1]
         return cls.from_config(
-            conf, nchannels=nchannels, dummy_data=dummy_data, nclasses=nclasses, key=key
+            conf,
+            nchannels=nchannels,
+            dummy_data=dummy_data,
+            nclasses=nclasses,
+            key=key,
         )
 
     @classmethod
@@ -71,14 +75,14 @@ class CNN(eqx.Module, Network):
         in_channels = nchannels
         blocks = []
         assert (
-            len(conf.channels)
-            == len(conf.kernel_sizes)
-            == len(conf.paddings)
-            == len(conf.strides)
+            len(conf.channels) == len(conf.kernel_sizes) == len(conf.paddings) == len(conf.strides)
         ), "channels and kernel_sizes must have the same length!"
 
         for out_channels, kernel_size, padding, stride in zip(
-            conf.channels, conf.kernel_sizes, conf.paddings, conf.strides
+            conf.channels,
+            conf.kernel_sizes,
+            conf.paddings,
+            conf.strides,
         ):
             rng, _key = jr.split(rng)
             new_layer = [
@@ -105,7 +109,7 @@ class CNN(eqx.Module, Network):
         rng, _key = jr.split(rng)
         mlp = MLP.from_config(conf.mlp, din=mlp_din, nclasses=nclasses, key=_key.sum().item())
 
-        cnn = CNN(blocks + [[mlp]])
+        cnn = CNN([*blocks, [mlp]])
         cnn.reinitialize(rng)
         return cnn
 
@@ -129,7 +133,7 @@ class CNN(eqx.Module, Network):
                             key=_key,
                             padding=layer.padding,
                             stride=layer.stride,
-                        )
+                        ),
                     )
                 elif isinstance(layer, MLP):
                     new_block.append(layer.reinitialize(key))
@@ -162,6 +166,7 @@ class CNN(eqx.Module, Network):
 
     def get_num_hidden_units(self):
         """Return the total number of scalar hidden units across all weight arrays."""
+
         def get_out_dim(arr):
             if arr is None:
                 return 0
@@ -169,6 +174,8 @@ class CNN(eqx.Module, Network):
 
         model_arrays, _ = eqx.partition(self.layers, eqx.is_array)
         hidden_dims = jax.tree.map(
-            get_out_dim, model_arrays, is_leaf=lambda x: x is None
+            get_out_dim,
+            model_arrays,
+            is_leaf=lambda x: x is None,
         )
         return jax.tree.reduce(lambda x, y: x + y, hidden_dims).item()

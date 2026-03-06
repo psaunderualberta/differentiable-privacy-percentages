@@ -13,7 +13,7 @@ Covers:
 import dataclasses
 import importlib
 from dataclasses import dataclass
-from typing import Annotated, Union
+from typing import Annotated
 
 import pytest
 import tyro
@@ -175,14 +175,14 @@ class TestIsUnionField:
     def test_plain_union_annotation(self):
         @dataclass
         class Cfg:
-            x: Union[int, str] = 0
+            x: int | str = 0
 
         assert _is_union_field(Cfg, "x") is True
 
     def test_annotated_union_unwrapped(self):
         @dataclass
         class Cfg:
-            x: Annotated[Union[int, str], "meta"] = 0
+            x: Annotated[int | str, "meta"] = 0
 
         assert _is_union_field(Cfg, "x") is True
 
@@ -217,7 +217,7 @@ class TestToWandbSweepParams:
         schedule_params = result["parameters"]["schedule"]["parameters"]
         assert "_type" in schedule_params
         assert schedule_params["_type"] == {
-            "value": "AlternatingSigmaAndClipScheduleConfig"
+            "value": "AlternatingSigmaAndClipScheduleConfig",
         }
 
     def test_non_union_nested_no_type_discriminator(self):
@@ -320,7 +320,8 @@ class TestReconstructFromDict:
         conf = ConstantScheduleConfig(init_value=1.0)
         # _type should not be treated as a field name.
         result = _reconstruct_from_dict(
-            conf, {"_type": "ConstantScheduleConfig", "init_value": 2.0}
+            conf,
+            {"_type": "ConstantScheduleConfig", "init_value": 2.0},
         )
         assert result.init_value == pytest.approx(2.0)
 
@@ -341,7 +342,7 @@ class TestReconstructFromDict:
             "schedule": {
                 "_type": "AlternatingSigmaAndClipScheduleConfig",
                 "diff_clips_first": True,
-            }
+            },
         }
         result = _reconstruct_from_dict(conf, run_conf)
         assert isinstance(result.schedule, AlternatingSigmaAndClipScheduleConfig)
@@ -363,7 +364,7 @@ class TestReconstructFromDict:
                     "num_keypoints": 20,
                     "init_value": 0.5,
                 },
-            }
+            },
         }
         result = _reconstruct_from_dict(conf, run_conf)
         assert isinstance(result.schedule, SigmaAndClipScheduleConfig)
@@ -392,7 +393,7 @@ class TestReconstructFromDict:
             "network": {
                 "_type": "CNNConfig",
                 "pool_kernel_size": 3,
-            }
+            },
         }
         result = _reconstruct_from_dict(conf, run_conf)
         assert isinstance(result.network, CNNConfig)
@@ -419,7 +420,8 @@ class TestReconstructFromDict:
                 schedule=SigmaAndClipScheduleConfig(
                     noise=ConstantScheduleConfig(init_value=2.0),
                     clip=InterpolatedExponentialScheduleConfig(
-                        num_keypoints=25, init_value=0.8
+                        num_keypoints=25,
+                        init_value=0.8,
                     ),
                 ),
                 batch_size=4,
@@ -452,7 +454,8 @@ class TestReconstructFromDict:
         run_conf = _unwrap_params(sweep_spec)
 
         reconstructed = _reconstruct_from_dict(
-            SweepConfig(env=EnvConfig(), policy=PolicyConfig()), run_conf
+            SweepConfig(env=EnvConfig(), policy=PolicyConfig()),
+            run_conf,
         )
 
         assert reconstructed.total_timesteps == 300
@@ -462,7 +465,8 @@ class TestReconstructFromDict:
         assert isinstance(reconstructed.policy.schedule.noise, ConstantScheduleConfig)
         assert reconstructed.policy.schedule.noise.init_value == pytest.approx(2.0)
         assert isinstance(
-            reconstructed.policy.schedule.clip, InterpolatedExponentialScheduleConfig
+            reconstructed.policy.schedule.clip,
+            InterpolatedExponentialScheduleConfig,
         )
         assert reconstructed.policy.schedule.clip.num_keypoints == 25
         assert reconstructed.policy.max_sigma == pytest.approx(20.0)
@@ -526,7 +530,9 @@ class TestSweepConfig:
 
     def test_to_wandb_sweep_description_included_when_set(self):
         sweep = SweepConfig(
-            env=EnvConfig(), policy=PolicyConfig(), description="A test sweep"
+            env=EnvConfig(),
+            policy=PolicyConfig(),
+            description="A test sweep",
         )
         result = sweep.to_wandb_sweep()
         assert result["description"] == "A test sweep"

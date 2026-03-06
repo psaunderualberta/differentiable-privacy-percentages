@@ -4,7 +4,7 @@ import wandb
 from conf.singleton_conf import SingletonConfig
 
 __CC_ROOT = os.environ["PROJECT_ROOT"] = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "cc")
+    os.path.join(os.path.dirname(__file__), "..", "cc"),
 )
 
 

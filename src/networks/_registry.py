@@ -15,8 +15,7 @@ def register(config_cls: type):
     Usage::
 
         @register(MLPConfig)
-        class MLP(eqx.Module, Network):
-            ...
+        class MLP(eqx.Module, Network): ...
     """
 
     def decorator(network_cls: type) -> type:
@@ -39,7 +38,6 @@ def build(conf, input_shape: tuple[int, ...], output_shape: tuple[int, ...], key
     if cls is None:
         known = [c.__name__ for c in _REGISTRY]
         raise ValueError(
-            f"No network registered for config type '{type(conf).__name__}'. "
-            f"Known types: {known}"
+            f"No network registered for config type '{type(conf).__name__}'. Known types: {known}",
         )
     return cls.build(conf, input_shape, output_shape, key)

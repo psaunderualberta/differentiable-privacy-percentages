@@ -47,7 +47,10 @@ class StatefulMedianGradientNoiseAndClipSchedule(AbstractStatefulNoiseAndClipSch
     gamma: float = 0.5
 
     def __init__(
-        self, c_0: ArrayLike, eta_c: ArrayLike, privacy_params: GDPPrivacyParameters
+        self,
+        c_0: ArrayLike,
+        eta_c: ArrayLike,
+        privacy_params: GDPPrivacyParameters,
     ):
         """Initialise the median-gradient adaptive clipping schedule.
 

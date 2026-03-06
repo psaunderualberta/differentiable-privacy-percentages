@@ -36,7 +36,9 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
 
     @classmethod
     def from_config(
-        cls, conf: PolicyAndClipScheduleConfig, privacy_params: GDPPrivacyParameters
+        cls,
+        conf: PolicyAndClipScheduleConfig,
+        privacy_params: GDPPrivacyParameters,
     ) -> "PolicyAndClipSchedule":
         T = privacy_params.T
         policy_schedule = base_schedule_factory(conf.policy, T)
@@ -62,7 +64,8 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
     def project(self) -> Self:
         private_weights = self.get_private_weights()
         new_policy_schedule = self.policy_schedule.__class__.from_projection(
-            self.policy_schedule, private_weights
+            self.policy_schedule,
+            private_weights,
         )
         return self.__class__(
             policy_schedule=new_policy_schedule,

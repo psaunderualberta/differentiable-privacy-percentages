@@ -1,5 +1,4 @@
 import os
-from typing import Tuple
 
 import chex
 import jax.numpy as jnp
@@ -8,8 +7,8 @@ import pandas as pd
 from datasets import load_dataset
 from sklearn.datasets import fetch_california_housing
 from sklearn.preprocessing import PolynomialFeatures
-from conf.singleton_conf import SingletonConfig
 
+from conf.singleton_conf import SingletonConfig
 
 __DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
 
@@ -58,7 +57,7 @@ def _dataloader_california(degree=1):
     return jnp.asarray(X), jnp.asarray(y)
 
 
-def _dataloader_mnist(_=None, test=False) -> Tuple[chex.Array, chex.Array]:
+def _dataloader_mnist(_=None, test=False) -> tuple[chex.Array, chex.Array]:
     """Load MNIST, downloading and caching as .npy files if necessary.
 
     Args:
@@ -101,7 +100,7 @@ def _dataloader_mnist(_=None, test=False) -> Tuple[chex.Array, chex.Array]:
     return images, labels
 
 
-def _dataloader_cifar_10(_=None, test=False) -> Tuple[chex.Array, chex.Array]:
+def _dataloader_cifar_10(_=None, test=False) -> tuple[chex.Array, chex.Array]:
     """Load CIFAR-10, downloading and caching as .npy files if necessary.
 
     Images are converted from (N, H, W, C) to (N, C, H, W) channel-first format
@@ -147,7 +146,7 @@ def _dataloader_cifar_10(_=None, test=False) -> Tuple[chex.Array, chex.Array]:
     return images, labels
 
 
-def _dataloader_fashion_mnist(_=None, test=False) -> Tuple[chex.Array, chex.Array]:
+def _dataloader_fashion_mnist(_=None, test=False) -> tuple[chex.Array, chex.Array]:
     """Load Fashion-MNIST, downloading and caching as .npy files if necessary.
 
     Args:
@@ -207,7 +206,8 @@ def get_datasets():
     sweep_config = SingletonConfig.get_sweep_config_instance()
     X, y = DATALOADERS[sweep_config.dataset](sweep_config.dataset_poly_d)
     X_test, y_test = DATALOADERS[sweep_config.dataset](
-        sweep_config.dataset_poly_d, test=True
+        sweep_config.dataset_poly_d,
+        test=True,
     )
     return X, y, X_test, y_test
 

@@ -1,8 +1,6 @@
 import os
-from typing import Callable, Type
+from collections.abc import Callable
 
-import equinox as eqx
-import jax.numpy as jnp
 import jax.random as jr
 import pandas as pd
 import plotly.express as px
@@ -16,9 +14,7 @@ from environments.dp import (
 )
 from policy.schedules.abstract import AbstractNoiseAndClipSchedule
 from policy.schedules.dynamic_dpsgd import DynamicDPSGDSchedule
-from policy.schedules.policy_and_clip import PolicyAndClipSchedule
 from policy.stateful_schedules.abstract import (
-    AbstractScheduleState,
     AbstractStatefulNoiseAndClipSchedule,
 )
 from policy.stateful_schedules.median_gradient import (
@@ -53,7 +49,9 @@ class Baseline:
         return
 
     def combine_dataset(
-        self, df: pd.DataFrame | None, schedule_name: str = "Learned Policy"
+        self,
+        df: pd.DataFrame | None,
+        schedule_name: str = "Learned Policy",
     ) -> pd.DataFrame:
         if df is None:
             return self.df
@@ -62,7 +60,7 @@ class Baseline:
         df["type"] = schedule_name
 
         self.df = pd.concat([self.df, df], axis=0).reset_index(
-            drop=True
+            drop=True,
         )  # concatenating along rows
         return self.df
 
@@ -132,7 +130,11 @@ class Baseline:
             key, noise_key = jr.split(key)
             if isinstance(schedule, AbstractNoiseAndClipSchedule):
                 _, val_loss, losses, accuracies, val_acc = train_with_noise(
-                    schedule, self.env_params, mb_key, init_key, noise_key
+                    schedule,
+                    self.env_params,
+                    mb_key,
+                    init_key,
+                    noise_key,
                 )
             else:
                 _, val_loss, losses, accuracies, val_acc = train_with_stateful_noise(
@@ -159,8 +161,8 @@ class Baseline:
         key: PRNGKeyArray,
         params: list[Callable[[PRNGKeyArray], Array]],
         name: str,
-        schedule_class: Type[AbstractNoiseAndClipSchedule]
-        | Type[AbstractStatefulNoiseAndClipSchedule],
+        schedule_class: type[AbstractNoiseAndClipSchedule]
+        | type[AbstractStatefulNoiseAndClipSchedule],
         num_runs_in_sweep: int = 20,
         with_progress_bar: bool = True,
     ) -> pd.DataFrame:
@@ -176,7 +178,11 @@ class Baseline:
 
             schedule = schedule_class(*run_params)
             df = self.generate_schedule_data(
-                schedule, name, key, with_progress_bar=False, iterations=10
+                schedule,
+                name,
+                key,
+                with_progress_bar=False,
+                iterations=10,
             )
 
             run_accuracy = df["accuracy"].mean()
@@ -189,7 +195,9 @@ class Baseline:
         return self.generate_schedule_data(schedule, name, key, with_progress_bar=True)
 
     def generate_baseline_data(
-        self, key: PRNGKeyArray, with_progress_bar: bool = True
+        self,
+        key: PRNGKeyArray,
+        with_progress_bar: bool = True,
     ) -> pd.DataFrame:
         name = "Clip to Median Gradient Norm"
         params = [

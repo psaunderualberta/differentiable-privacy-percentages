@@ -40,7 +40,7 @@ class AbstractStatefulNoiseAndClipSchedule(eqx.Module):
     @abstractmethod
     def get_logging_schemas(self) -> list[LoggingSchema]:
         raise NotImplementedError(
-            "Subclasses must implement get_logging_schemas method."
+            "Subclasses must implement get_logging_schemas method.",
         )
 
     @abstractmethod

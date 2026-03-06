@@ -1,6 +1,6 @@
 import csv
 import tempfile
-from typing import Mapping
+from collections.abc import Mapping
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -71,11 +71,11 @@ class WandbTableLogger(eqx.Module):
 
     def __init__(self):
         """Initialise the logger with empty per-table file, writer, and counter dicts."""
-        self.files = dict()
-        self.writers = dict()
-        self.cols = dict()
-        self.freqs = dict()
-        self.counts = dict()
+        self.files = {}
+        self.writers = {}
+        self.cols = {}
+        self.freqs = {}
+        self.counts = {}
 
     def add_schema(self, schema: LoggingSchema):
         """Register a new table schema, creating the backing temp CSV file and DictWriter."""
@@ -83,7 +83,7 @@ class WandbTableLogger(eqx.Module):
             f"Table name '{schema.table_name}' already exists in logger."
         )
         name = schema.table_name
-        cols = ["step"] + schema.cols if schema.add_step_column else schema.cols
+        cols = ["step", *schema.cols] if schema.add_step_column else schema.cols
         file = tempfile.NamedTemporaryFile(newline="", suffix=".csv", mode="w")
         self.files[name] = file
         self.writers[name] = csv.DictWriter(file, fieldnames=cols)
@@ -119,9 +119,7 @@ class WandbTableLogger(eqx.Module):
             if item.add_timestep:
                 data["step"] = self.counts[name]
 
-            data_ordered = {
-                col: jnp.asarray(data[col]).tolist() for col in self.cols[name]
-            }
+            data_ordered = {col: jnp.asarray(data[col]).tolist() for col in self.cols[name]}
             writer.writerow(data_ordered)
             self.files[name].flush()
 
@@ -143,7 +141,7 @@ class WandbTableLogger(eqx.Module):
         force = item.force
         cols = {str(j): item for (j, item) in enumerate(arr)}
 
-        aux = aux if isinstance(aux, dict) else dict()
+        aux = aux if isinstance(aux, dict) else {}
         loggable_item = Loggable(
             table_name=name,
             data=cols | aux,
@@ -156,7 +154,7 @@ class WandbTableLogger(eqx.Module):
     def commit(self, metrics: Mapping[str, int] | None = None):
         """Flush additional scalar metrics to W&B via wandb.log."""
         if metrics is None:
-            metrics = dict()
+            metrics = {}
         assert len(self.writers.keys() & metrics) == 0, "Name Overlap"
 
         # For type checker
@@ -166,8 +164,7 @@ class WandbTableLogger(eqx.Module):
     def finish(self):
         """Upload all accumulated CSV tables to W&B as immutable W&B Tables and close temp files."""
         final_tables_pd = {
-            tablename: pd.read_csv(filename.name)
-            for tablename, filename in self.files.items()
+            tablename: pd.read_csv(filename.name) for tablename, filename in self.files.items()
         }
         final_tables = {
             name: wandb.Table(dataframe=table, log_mode="IMMUTABLE")

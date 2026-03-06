@@ -65,7 +65,8 @@ def main():
     # Get mesh over accessible GPUs
     mesh = get_optimal_mesh(devices("gpu"), policy_batch_size)
     vmapped_train_with_noise = eqx.filter_vmap(
-        train_with_noise, in_axes=(None, None, None, None, 0)
+        train_with_noise,
+        in_axes=(None, None, None, None, 0),
     )
 
     print("Starting...")
@@ -108,7 +109,11 @@ def main():
 
         # Train all networks
         _, to_diff, losses, accuracies, val_acc = vmapped_train_with_noise(
-            schedule, env_params, mb_key, init_key, noise_keys
+            schedule,
+            env_params,
+            mb_key,
+            init_key,
+            noise_keys,
         )
 
         # Average over all shard-mapped networks
@@ -123,7 +128,9 @@ def main():
     opt_state = optimizer.init(schedule)  # type: ignore
 
     iterator = tqdm.tqdm(
-        range(total_timesteps), desc="Training Progress", total=total_timesteps
+        range(total_timesteps),
+        desc="Training Progress",
+        total=total_timesteps,
     )
 
     key = jr.PRNGKey(env_prng_seed)
@@ -142,14 +149,19 @@ def main():
             if not sweep_config.train_on_single_network:
                 key, init_key = jr.split(key)
             (loss, (losses, accuracies, val_accs)), grads = get_policy_loss(
-                schedule, mb_key, init_key, jr.split(noise_key, policy_batch_size)
+                schedule,
+                mb_key,
+                init_key,
+                jr.split(noise_key, policy_batch_size),
             )
 
             loggable_losses = Loggable(
-                table_name="train_losses", data={"losses": losses}
+                table_name="train_losses",
+                data={"losses": losses},
             )
             loggable_accuracies = Loggable(
-                table_name="accuracies", data={"accuracies": accuracies}
+                table_name="accuracies",
+                data={"accuracies": accuracies},
             )
             # Log iteration results to file
             _ = logger.log(loggable_losses)
@@ -162,7 +174,7 @@ def main():
                     "val-accuracy": val_accs.mean(),
                     "train-loss": losses[:, -1].mean(),
                     "train-accuracies": accuracies[:, -1].mean(),
-                }
+                },
             )
 
             # Ensure gradients are real numbers
@@ -206,7 +218,7 @@ def main():
             {
                 "Baseline - Final Losses": final_loss_fig,
                 "Baseline - Accuracy": accuracy_fig,
-            }
+            },
         )
 
     # Cleanup, finish wandb run

@@ -17,8 +17,7 @@ def register(config_cls: type):
     Usage::
 
         @register(AlternatingSigmaAndClipScheduleConfig)
-        class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
-            ...
+        class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule): ...
     """
 
     def decorator(schedule_cls: type) -> type:
@@ -39,7 +38,6 @@ def build(conf, privacy_params: GDPPrivacyParameters):
     if cls is None:
         known = [c.__name__ for c in _REGISTRY]
         raise ValueError(
-            f"No schedule registered for config type '{type(conf).__name__}'. "
-            f"Known types: {known}"
+            f"No schedule registered for config type '{type(conf).__name__}'. Known types: {known}",
         )
     return cls.from_config(conf, privacy_params)

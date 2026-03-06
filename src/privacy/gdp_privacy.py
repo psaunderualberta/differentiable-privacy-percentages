@@ -2,7 +2,6 @@ import equinox as eqx
 import jax.lax as jlax
 import jax.numpy as jnp
 import jax.scipy.stats as jstats
-import optax
 from jaxtyping import Array
 from scipy import optimize
 
@@ -28,7 +27,7 @@ def approx_to_gdp(eps, delta, tol=1e-12) -> float:
 
     def f(current_mu):
         current_delta = jstats.norm.cdf(-eps / current_mu + current_mu / 2) - jnp.exp(
-            eps
+            eps,
         ) * jstats.norm.cdf(-eps / current_mu - current_mu / 2)
         return current_delta - delta
 
@@ -156,12 +155,15 @@ class GDPPrivacyParameters(eqx.Module):
         weights = eqx.error_if(weights, (weights == 0).any(), "weights have 0!")
         mu_schedule = self.weights_to_mu_schedule(weights)
         mu_schedule = eqx.error_if(
-            mu_schedule, pytree_has_inf(mu_schedule), "mu schedule has Inf!"
+            mu_schedule,
+            pytree_has_inf(mu_schedule),
+            "mu schedule has Inf!",
         )
-        mu_schedule = eqx.error_if(
-            mu_schedule, (mu_schedule == 0).any(), "Some mus are 0!"
+        return eqx.error_if(
+            mu_schedule,
+            (mu_schedule == 0).any(),
+            "Some mus are 0!",
         )
-        return mu_schedule
 
     def weights_to_sigma_schedule(self, C: Array, weights: Array) -> Array:
         """Convert weights to a per-step sigma schedule for G-DP."""
@@ -188,7 +190,9 @@ class GDPPrivacyParameters(eqx.Module):
         schedule = jnp.where(schedule > max_sigma, max_sigma, schedule)
         schedule = eqx.error_if(schedule, (schedule == 0).any(), "schedule has 0!")
         schedule = eqx.error_if(
-            schedule, jnp.isinf(C / schedule).any(), "schedule has Inf!"
+            schedule,
+            jnp.isinf(C / schedule).any(),
+            "schedule has Inf!",
         )
         return self.mu_schedule_to_weights(C / schedule)
 
@@ -229,7 +233,9 @@ class GDPPrivacyParameters(eqx.Module):
 
         def get_c_i_tildes(mu: Array) -> Array:
             c_i_tildes, _ = jlax.while_loop(
-                c_i_tildes_cond, c_i_tildes_body, (weights, mu)
+                c_i_tildes_cond,
+                c_i_tildes_body,
+                (weights, mu),
             )
 
             return c_i_tildes

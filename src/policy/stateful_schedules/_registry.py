@@ -24,6 +24,6 @@ def build(conf, privacy_params: GDPPrivacyParameters):
         known = [c.__name__ for c in _REGISTRY]
         raise ValueError(
             f"No stateful schedule registered for config type '{type(conf).__name__}'. "
-            f"Known types: {known}"
+            f"Known types: {known}",
         )
     return cls.from_config(conf, privacy_params)

@@ -6,10 +6,10 @@ from tempfile import NamedTemporaryFile
 import tyro
 
 os.environ["PROJECT_ROOT"] = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..")
+    os.path.join(os.path.dirname(__file__), "..", ".."),
 )
 os.environ["PROJECT_SOURCE_ROOT"] = os.path.abspath(
-    os.path.join(os.environ["PROJECT_ROOT"], "src")
+    os.path.join(os.environ["PROJECT_ROOT"], "src"),
 )
 
 
@@ -32,7 +32,7 @@ class Runtime:
         minutes = minutes % 60
         days = self.days + hours // 24
         hours = hours % 24
-        return "{:02}-{:02}:{:02}:{:02}".format(days, hours, minutes, seconds)
+        return f"{days:02}-{hours:02}:{minutes:02}:{seconds:02}"
 
 
 @dataclass
@@ -41,7 +41,11 @@ class SlurmConfig:
     run_id: str
     jobname: str = "test"
     logfile: str = os.path.join(
-        os.environ["PROJECT_ROOT"], "cc", "logs", "%j", "%x.log"
+        os.environ["PROJECT_ROOT"],
+        "cc",
+        "logs",
+        "%j",
+        "%x.log",
     )
     project_dir: str = os.environ["PROJECT_SOURCE_ROOT"]
     cpus_per_task: int = 2
@@ -92,7 +96,9 @@ if __name__ == "__main__":
 
         print(f"sbatch {f.name}")
         process_out = subprocess.run(
-            f"sbatch {f.name}", shell=True, capture_output=True
+            f"sbatch {f.name}",
+            shell=True,
+            capture_output=True,
         )
         process_stderr = process_out.stderr.decode("utf-8").strip()
         if len(process_stderr) != 0:
@@ -100,7 +106,7 @@ if __name__ == "__main__":
         output = process_out.stdout.decode("utf-8").strip()
         slurm_job_id = output[-8:].strip()
         out_dir = os.path.abspath(
-            os.path.dirname(conf.logfile.replace("%j", slurm_job_id))
+            os.path.dirname(conf.logfile.replace("%j", slurm_job_id)),
         )
         os.makedirs(out_dir, exist_ok=True)
 

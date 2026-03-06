@@ -54,6 +54,7 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
     def __diff_clips_select(self, a, b):
         """Select elementwise between pytrees `a` and `b` based on `self.diff_clips`."""
+
         def tree_select(a, b):
             if a is None:
                 return a
@@ -98,16 +99,19 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         new_clips = private_weights * private_sigmas
 
         new_noise_schedule = self.noise_schedule.__class__.from_projection(
-            self.noise_schedule, new_noises
+            self.noise_schedule,
+            new_noises,
         )
         new_clip_schedule = self.clip_schedule.__class__.from_projection(
-            self.clip_schedule, new_clips
+            self.clip_schedule,
+            new_clips,
         )
 
         # Only project the object we did *not* differentiate
         clip_schedule = self.__diff_clips_select(self.clip_schedule, new_clip_schedule)
         noise_schedule = self.__diff_clips_select(
-            new_noise_schedule, self.noise_schedule
+            new_noise_schedule,
+            self.noise_schedule,
         )
 
         return self.__class__(
@@ -123,4 +127,3 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
             "clips": self.get_private_clips(),
             "mus": self.get_private_weights(),
         }
-

@@ -58,12 +58,13 @@ NetworkConfig = Union[
 @dataclass
 class PolicyConfig:
     schedule: ScheduleConfig = dataclasses.field(
-        default_factory=AlternatingSigmaAndClipScheduleConfig
+        default_factory=AlternatingSigmaAndClipScheduleConfig,
     )
     batch_size: int = 1
     lr: DistributionConfig = dist_config_helper(value=1.0, distribution="constant")
     momentum: DistributionConfig = dist_config_helper(
-        value=0.1, distribution="constant"
+        value=0.1,
+        distribution="constant",
     )
     max_sigma: float = 10.0
 

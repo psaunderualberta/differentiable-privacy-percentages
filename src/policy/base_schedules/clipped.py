@@ -22,7 +22,9 @@ class InterpolatedClippedSchedule(AbstractSchedule):
 
     @classmethod
     def from_config(
-        cls, conf: InterpolatedClippedScheduleConfig, T: int
+        cls,
+        conf: InterpolatedClippedScheduleConfig,
+        T: int,
     ) -> "InterpolatedClippedSchedule":
         keypoints = jnp.linspace(0, T, conf.num_keypoints, dtype=jnp.int32)
         values = jnp.zeros_like(keypoints, dtype=jnp.float32) + conf.init_value
@@ -31,7 +33,9 @@ class InterpolatedClippedSchedule(AbstractSchedule):
     def get_valid_schedule(self) -> Array:
         clipped_values = jnp.clip(self.values, min=self.eps)
         return jnp.interp(
-            self.points, jlax.stop_gradient(self.keypoints), clipped_values
+            self.points,
+            jlax.stop_gradient(self.keypoints),
+            clipped_values,
         )
 
     def get_raw_schedule(self) -> Array:
@@ -39,7 +43,9 @@ class InterpolatedClippedSchedule(AbstractSchedule):
 
     @classmethod
     def from_projection(
-        cls, schedule: "InterpolatedClippedSchedule", projection: Array
+        cls,
+        schedule: "InterpolatedClippedSchedule",
+        projection: Array,
     ) -> "InterpolatedClippedSchedule":
         return InterpolatedClippedSchedule(
             keypoints=schedule.keypoints,

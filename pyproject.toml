@@ -119,3 +119,82 @@ dependencies = [
     "yarl==1.20.1",
     "zipp==3.23.0",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# src/ is not a package root; treat it as the source tree
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes (unused imports, undefined names)
+    "I",      # isort (import ordering)
+    "UP",     # pyupgrade (modernise syntax)
+    "B",      # flake8-bugbear (common footguns)
+    "C4",     # flake8-comprehensions (unnecessary list/dict/set calls)
+    "RUF",    # ruff-specific rules
+    "SIM",    # flake8-simplify
+    "RET",    # flake8-return
+]
+ignore = [
+    # ── Docstrings / annotations – too noisy for research code ──
+    "D",       # all pydocstyle rules
+    "ANN",     # all type-annotation rules
+
+    # ── ML / JAX naming conventions ──
+    "N802",    # function name should be lowercase (MLP, CNN, etc.)
+    "N803",    # argument name should be lowercase (X, C, etc.)
+    "N806",    # variable in function should be lowercase (X_train, etc.)
+    "N801",    # class name should use CapWords (MLP.py class)
+    "N811",    # constant imported as non-constant
+    "N999",    # invalid module name (MLP.py, CNN.py)
+
+    # ── Research-code pragmatics ──
+    "S101",    # use of assert (heavy in JAX/equinox patterns)
+    "T201",    # print statements (used for experiment logging)
+    "ERA001",  # commented-out code (common during experimentation)
+    "PLR2004", # magic value comparison (common in ML thresholds)
+    "FBT001",  # boolean positional args
+    "FBT002",  # boolean default values
+    "FBT003",  # boolean positional value in call
+    "EM101",   # raw string in exception
+    "EM102",   # f-string in exception
+    "TRY003",  # long exception messages
+
+    # ── Intentional patterns in this codebase ──
+    "PLC0415", # import-outside-top-level (used in registries to avoid circular imports)
+    "BLE001",  # blind except (used in outer loop error handling)
+    "RUF002",  # ambiguous unicode in docstring (math symbols: μ, σ, ε)
+    "RUF003",  # ambiguous unicode in comment (math symbols)
+    "B905",    # zip() without strict= (JAX arrays always have matching shapes)
+
+    # ── Formatter handles these ──
+    "E501",    # line too long (ruff format handles wrapping)
+    "COM812",  # trailing comma (ruff format handles this; conflicts if both enabled)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/test/**" = [
+    "PLR2004", # magic values fine in test assertions
+    "ARG001",  # unused function args (pytest fixtures)
+    "ARG002",
+]
+"cc/slurm/**" = [
+    "PTH",     # os.path fine in SLURM scripts
+]
+# tyro requires Union[Annotated[X, subcommand(...)], ...] syntax (not X | Y) for
+# subcommand dispatch, and evaluates dataclass defaults at class-definition time
+# (so field(default_factory=...) would break tyro introspection).
+"src/conf/config.py" = ["UP007", "RUF009"]
+"src/policy/base_schedules/config.py" = ["UP007"]
+# NamedTemporaryFile is intentionally kept open across multiple method calls;
+# a context manager would close it too early.
+"src/util/logger.py" = ["SIM115"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true

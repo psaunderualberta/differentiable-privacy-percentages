@@ -21,7 +21,7 @@ from policy.stateful_schedules.abstract import (
     AbstractScheduleState,
     AbstractStatefulNoiseAndClipSchedule,
 )
-from util.logger import Loggable, LoggingSchema
+from util.logger import LoggingSchema
 from util.util import (
     classification_accuracy,
     clip_grads_abadi,
@@ -85,7 +85,10 @@ def training_step(
     """
     mb_key, _key = jr.split(mb_key)
     batch_x, batch_y = sample_batch_uniform(
-        params.X, params.y, params.dummy_batch, _key
+        params.X,
+        params.y,
+        params.dummy_batch,
+        _key,
     )
 
     if private:
@@ -134,7 +137,8 @@ def train_with_noise(
     opt_state_params = eqx.filter_jit(jax.lax.pvary)(opt_state_params, "x")
 
     @partial(
-        jax.checkpoint, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable
+        jax.checkpoint,
+        policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable,
     )
     def scanned_training_step(
         carry: tuple[PyTree, PyTree, PRNGKeyArray, PRNGKeyArray],
@@ -149,7 +153,13 @@ def train_with_noise(
         opt_state = eqx.combine(opt_state_params, opt_state_static)
 
         new_model, new_opt_state, mb_key, noise_key, new_loss, accuracy = training_step(
-            model, optimizer, opt_state, mb_key, noise_key, *noise_and_clip, params
+            model,
+            optimizer,
+            opt_state,
+            mb_key,
+            noise_key,
+            *noise_and_clip,
+            params,
         )
 
         new_net_params, _ = eqx.partition(new_model, eqx.is_array)
@@ -169,7 +179,10 @@ def train_with_noise(
     mb_key, batch_key = jr.split(mb_key)
     network_final = eqx.combine(net_params, net_static)
     batch_x, batch_y = sample_batch_uniform(
-        params.X, params.y, params.dummy_batch, batch_key
+        params.X,
+        params.y,
+        params.dummy_batch,
+        batch_key,
     )
     final_loss, _ = loss(network_final, batch_x, batch_y)
     losses = jnp.concat([losses, jnp.asarray([final_loss])])
@@ -203,14 +216,19 @@ def train_with_stateful_noise(
     opt_state_params = eqx.filter_jit(jax.lax.pvary)(opt_state_params, "x")
 
     @partial(
-        jax.checkpoint, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable
+        jax.checkpoint,
+        policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable,
     )
     def scanned_training_step(
         carry: tuple[PyTree, PyTree, AbstractScheduleState, PRNGKeyArray, PRNGKeyArray],
         iter: Array,
     ) -> tuple[
         tuple[
-            PyTree, optax.OptState, AbstractScheduleState, PRNGKeyArray, PRNGKeyArray
+            PyTree,
+            optax.OptState,
+            AbstractScheduleState,
+            PRNGKeyArray,
+            PRNGKeyArray,
         ],  # Carry values
         tuple[Array, Array],  # Scan outputs
     ]:
@@ -221,13 +239,20 @@ def train_with_stateful_noise(
 
         mb_key, _key = jr.split(mb_key)
         batch_x, batch_y = sample_batch_uniform(
-            params.X, params.y, params.dummy_batch, _key
+            params.X,
+            params.y,
+            params.dummy_batch,
+            _key,
         )
         new_loss, grads = vmapped_loss(model, batch_x, batch_y)
 
         # update state
         new_schedule_state = schedule.update_state(
-            schedule_state, grads, iter, batch_x, batch_y
+            schedule_state,
+            grads,
+            iter,
+            batch_x,
+            batch_y,
         )
         clip = new_schedule_state.get_clip()
         noise = new_schedule_state.get_noise()
@@ -247,7 +272,11 @@ def train_with_stateful_noise(
         # Subsample each with probability p
         mb_key, _key = jr.split(mb_key)
         accuracy = subset_classification_accuracy(
-            new_model, params.X, params.y, 0.01, _key
+            new_model,
+            params.X,
+            params.y,
+            0.01,
+            _key,
         )
 
         new_net_params, _ = eqx.partition(new_model, eqx.is_array)
@@ -279,7 +308,10 @@ def train_with_stateful_noise(
     mb_key, batch_key = jr.split(mb_key)
     network_final = eqx.combine(net_params, net_static)
     batch_x, batch_y = sample_batch_uniform(
-        params.X, params.y, params.dummy_batch, batch_key
+        params.X,
+        params.y,
+        params.dummy_batch,
+        batch_key,
     )
     final_loss, _ = loss(network_final, batch_x, batch_y)
     losses = jnp.concat([losses, jnp.asarray([final_loss])])

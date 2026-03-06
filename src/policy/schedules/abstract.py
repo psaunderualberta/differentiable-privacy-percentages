@@ -12,7 +12,7 @@ class AbstractNoiseAndClipSchedule(eqx.Module):
     @abstractmethod
     def get_private_sigmas(self) -> Array:
         raise NotImplementedError(
-            "Subclasses must implement get_private_sigmas method."
+            "Subclasses must implement get_private_sigmas method.",
         )
 
     @abstractmethod
@@ -22,13 +22,13 @@ class AbstractNoiseAndClipSchedule(eqx.Module):
     @abstractmethod
     def get_private_weights(self) -> Array:
         raise NotImplementedError(
-            "Subclasses must implement get_private_weights method."
+            "Subclasses must implement get_private_weights method.",
         )
 
     @abstractmethod
     def apply_updates(self, updates) -> Self:
         raise NotImplementedError(
-            "Subclasses must implement get_private_weights method."
+            "Subclasses must implement get_private_weights method.",
         )
 
     @abstractmethod
@@ -45,8 +45,7 @@ class AbstractNoiseAndClipSchedule(eqx.Module):
         arrays = self._get_log_arrays()
         col_names = [str(i) for i in range(len(next(iter(arrays.values()))))]
         return [
-            LoggingSchema(table_name=name, cols=col_names, freq=plot_interval)
-            for name in arrays
+            LoggingSchema(table_name=name, cols=col_names, freq=plot_interval) for name in arrays
         ]
 
     def get_loggables(self, force=False) -> list[Loggable | LoggableArray]:

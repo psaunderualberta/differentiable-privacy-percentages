@@ -20,7 +20,9 @@ class InterpolatedExponentialSchedule(AbstractSchedule):
 
     @classmethod
     def from_config(
-        cls, conf: InterpolatedExponentialScheduleConfig, T: int
+        cls,
+        conf: InterpolatedExponentialScheduleConfig,
+        T: int,
     ) -> "InterpolatedExponentialSchedule":
         keypoints = jnp.linspace(0, T, conf.num_keypoints, dtype=jnp.int32)
         values = jnp.zeros_like(keypoints, dtype=jnp.float32) + conf.init_value
@@ -38,7 +40,9 @@ class InterpolatedExponentialSchedule(AbstractSchedule):
 
     @classmethod
     def from_projection(
-        cls, schedule: "InterpolatedExponentialSchedule", projection: Array
+        cls,
+        schedule: "InterpolatedExponentialSchedule",
+        projection: Array,
     ) -> "InterpolatedExponentialSchedule":
         reset_projection = jnp.log(jnp.exp(projection) - 1 + 1e-6)
         return InterpolatedExponentialSchedule(

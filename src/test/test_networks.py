@@ -69,7 +69,10 @@ def mlp_no_hidden() -> MLP:
 @pytest.fixture
 def cnn() -> CNN:
     return CNN.from_config(
-        CNNConfig(), nchannels=NCHANNELS, dummy_data=DUMMY_DATA, nclasses=NCLASSES
+        CNNConfig(),
+        nchannels=NCHANNELS,
+        dummy_data=DUMMY_DATA,
+        nclasses=NCLASSES,
     )
 
 
@@ -149,10 +152,16 @@ class TestMLPFromConfig:
 
     def test_different_keys_give_different_networks(self):
         mlp0 = MLP.from_config(
-            MLPConfig(hidden_sizes=HIDDEN), din=DIN, nclasses=NCLASSES, key=0
+            MLPConfig(hidden_sizes=HIDDEN),
+            din=DIN,
+            nclasses=NCLASSES,
+            key=0,
         )
         mlp1 = MLP.from_config(
-            MLPConfig(hidden_sizes=HIDDEN), din=DIN, nclasses=NCLASSES, key=1
+            MLPConfig(hidden_sizes=HIDDEN),
+            din=DIN,
+            nclasses=NCLASSES,
+            key=1,
         )
         w0 = eqx_partition_array(mlp0.layers)
         w1 = eqx_partition_array(mlp1.layers)
@@ -162,16 +171,20 @@ class TestMLPFromConfig:
 
     def test_same_key_gives_identical_networks(self):
         mlp0 = MLP.from_config(
-            MLPConfig(hidden_sizes=HIDDEN), din=DIN, nclasses=NCLASSES, key=42
+            MLPConfig(hidden_sizes=HIDDEN),
+            din=DIN,
+            nclasses=NCLASSES,
+            key=42,
         )
         mlp1 = MLP.from_config(
-            MLPConfig(hidden_sizes=HIDDEN), din=DIN, nclasses=NCLASSES, key=42
+            MLPConfig(hidden_sizes=HIDDEN),
+            din=DIN,
+            nclasses=NCLASSES,
+            key=42,
         )
         w0 = eqx_partition_array(mlp0.layers)
         w1 = eqx_partition_array(mlp1.layers)
-        assert all(
-            jnp.allclose(a, b) for a, b in zip(jax.tree.leaves(w0), jax.tree.leaves(w1))
-        )
+        assert all(jnp.allclose(a, b) for a, b in zip(jax.tree.leaves(w0), jax.tree.leaves(w1)))
 
 
 # ---------------------------------------------------------------------------
@@ -227,20 +240,18 @@ class TestMLPReinitialize:
         reinit = mlp_single.reinitialize(jr.PRNGKey(99))
         w_orig = eqx_partition_array(mlp_single.layers)
         w_new = eqx_partition_array(reinit.layers)
-        flat_orig = [a for a in jax.tree.leaves(w_orig)]
-        flat_new = [a for a in jax.tree.leaves(w_new)]
+        flat_orig = list(jax.tree.leaves(w_orig))
+        flat_new = list(jax.tree.leaves(w_new))
         chex.assert_trees_all_equal_shapes_and_dtypes(flat_orig, flat_new)
-        assert not any(
-            jnp.allclose(a, b) for a, b in zip(flat_orig, flat_new) if a.ndim >= 2
-        )
+        assert not any(jnp.allclose(a, b) for a, b in zip(flat_orig, flat_new) if a.ndim >= 2)
 
     def test_different_keys_give_different_reinits(self, mlp_single):
         r1 = mlp_single.reinitialize(jr.PRNGKey(1))
         r2 = mlp_single.reinitialize(jr.PRNGKey(2))
         w1 = eqx_partition_array(r1.layers)
         w2 = eqx_partition_array(r2.layers)
-        flat1 = [a for a in jax.tree.leaves(w1)]
-        flat2 = [a for a in jax.tree.leaves(w2)]
+        flat1 = list(jax.tree.leaves(w1))
+        flat2 = list(jax.tree.leaves(w2))
         assert any(not jnp.allclose(a, b, atol=1e-3) for a, b in zip(flat1, flat2))
 
     def test_same_key_gives_identical_reinits(self, mlp_single):
@@ -343,7 +354,10 @@ class TestCNNFromConfig:
             pool_kernel_size=2,
         )
         net = CNN.from_config(
-            conf, nchannels=NCHANNELS, dummy_data=DUMMY_DATA, nclasses=NCLASSES
+            conf,
+            nchannels=NCHANNELS,
+            dummy_data=DUMMY_DATA,
+            nclasses=NCLASSES,
         )
         # 1 conv stage + ravel + mlp = 3 blocks
         assert len(net.layers) == 3

@@ -15,8 +15,7 @@ def register(config_cls: type):
     Usage::
 
         @register(ConstantScheduleConfig)
-        class ConstantSchedule(AbstractSchedule):
-            ...
+        class ConstantSchedule(AbstractSchedule): ...
     """
 
     def decorator(schedule_cls: type) -> type:
@@ -38,6 +37,6 @@ def build(conf, T: int):
         known = [c.__name__ for c in _REGISTRY]
         raise ValueError(
             f"No base schedule registered for config type '{type(conf).__name__}'. "
-            f"Known types: {known}"
+            f"Known types: {known}",
         )
     return cls.from_config(conf, T)

@@ -3,7 +3,6 @@ import typing
 from dataclasses import dataclass
 from typing import Annotated, Literal, Union, get_args, get_origin
 
-import equinox as eqx
 import numpy as np
 
 
@@ -13,7 +12,10 @@ class DistributionConfig:
     max: float  # maximum of distribution
     value: float  # constant value if distribution == 'constant'
     distribution: Literal[
-        "constant", "log_uniform_values", "int_uniform", "uniform"
+        "constant",
+        "log_uniform_values",
+        "int_uniform",
+        "uniform",
     ]  # type of distribution, in wandb-format (i.e. uniform, log_uniform_values, etc.)
 
     def sample(self) -> float:
@@ -21,11 +23,11 @@ class DistributionConfig:
         if self.distribution == "constant":
             return self.value
 
-        elif self.distribution == "log_uniform_values":
+        if self.distribution == "log_uniform_values":
             return np.exp(
-                np.random.uniform(low=np.log(self.min), high=np.log(self.max))
+                np.random.uniform(low=np.log(self.min), high=np.log(self.max)),
             )
-        elif self.distribution == "int_uniform":
+        if self.distribution == "int_uniform":
             return np.random.randint(low=self.min, high=self.max)
 
         return np.random.uniform(low=self.min, high=self.min)
@@ -47,7 +49,10 @@ def dist_config_helper(
     max: float = 0.0,
     value: float = 0.0,
     distribution: Literal[
-        "constant", "log_uniform_values", "int_uniform", "uniform"
+        "constant",
+        "log_uniform_values",
+        "int_uniform",
+        "uniform",
     ] = "constant",
 ) -> DistributionConfig:
     """Construct a DistributionConfig, nudging max above min if they are equal (W&B requirement)."""

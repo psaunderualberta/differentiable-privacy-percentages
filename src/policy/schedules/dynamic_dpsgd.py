@@ -55,7 +55,9 @@ class DynamicDPSGDSchedule(AbstractNoiseAndClipSchedule):
 
     @classmethod
     def from_config(
-        cls, conf: DynamicDPSGDScheduleConfig, privacy_params: GDPPrivacyParameters
+        cls,
+        conf: DynamicDPSGDScheduleConfig,
+        privacy_params: GDPPrivacyParameters,
     ) -> "DynamicDPSGDSchedule":
         return cls(conf.rho_mu, conf.rho_c, conf.c_0, privacy_params)
 
@@ -68,7 +70,7 @@ class DynamicDPSGDSchedule(AbstractNoiseAndClipSchedule):
         def f(current_mu_0):
             # Eq'n 10 in reference material
             current_mu_tot = jnp.sqrt(
-                p**2 * jnp.sum(jnp.exp((pows * current_mu_0) ** 2) - 1)
+                p**2 * jnp.sum(jnp.exp((pows * current_mu_0) ** 2) - 1),
             )
             return current_mu_tot - mu_tot
 

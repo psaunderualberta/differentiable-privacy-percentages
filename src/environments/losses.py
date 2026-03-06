@@ -1,14 +1,13 @@
+from collections.abc import Callable
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jax.experimental import checkify
-from jaxtyping import PyTree, Array
-from typing import Callable
-from functools import partial
+from jaxtyping import Array
+from optax import softmax_cross_entropy
+
 from conf.singleton_conf import SingletonConfig
 from util.linalg import hvp
-from optax import softmax_cross_entropy
-from util.util import pytree_has_inf
 
 
 def __py_y_loss(pred_y: jnp.ndarray, y: jnp.ndarray) -> Array:
@@ -64,8 +63,7 @@ def neural_net_gnhvp(
     _, model_vjp_vjp = jax.vjp(model_vjp, jnp.zeros_like(pred_y))
     J_v = model_vjp_vjp((v,))[0]
     H_J_v = hvp(lambda py: __py_y_loss(py, y), (pred_y,), (J_v,))
-    JT_H_J_v = model_vjp(H_J_v)[0]  # J^T @ H @ J @ v
-    return JT_H_J_v
+    return model_vjp(H_J_v)[0]  # J^T @ H @ J @ v
 
 
 @eqx.filter_jit
@@ -84,7 +82,9 @@ def loss(model: Callable[[Array], jnp.ndarray], x: Array, y: Array):
 
 @eqx.filter_jit
 def vmapped_loss(
-    model: Callable[[Array], jnp.ndarray], x: Array, y: Array
+    model: Callable[[Array], jnp.ndarray],
+    x: Array,
+    y: Array,
 ):
     """
     Compute the loss and gradients using vmap across the model, producing per-example gradients.
@@ -99,6 +99,9 @@ def vmapped_loss(
     """
     # model = eqx.error_if(model, jnp.logical_not(pytree_has_nan(model)), "Model has NaN values")
     losses, grads = jax.vmap(__loss_helper, in_axes=(None, 0, 0, None))(
-        model, x, y, False
+        model,
+        x,
+        y,
+        False,
     )
     return losses.mean(), grads

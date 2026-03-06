@@ -1,12 +1,11 @@
+import timeit
 from functools import partial
 
 import chex
 import equinox as eqx
-import jax.debug as debug
 import jax.lax as jlax
 import jax.numpy as jnp
 from jax import jit, vmap
-import timeit
 
 
 def renyi_add_sigma(rho: float, sigma: float) -> chex.Array:
@@ -84,11 +83,7 @@ def log_comb_opt(n, k):
 
 
 def log_comb_stirling(n, k):
-    return (
-        log_factorial_stirling(n)
-        - log_factorial_stirling(k)
-        - log_factorial_stirling(n - k)
-    )
+    return log_factorial_stirling(n) - log_factorial_stirling(k) - log_factorial_stirling(n - k)
 
 
 def _unsampled_gaussian_renyi_dp(alpha, std):
@@ -122,6 +117,7 @@ def _sampled_gaussian_renyi_dp(alpha, std, p):
     logsumexp = jlax.fori_loop(2, alpha + 1, stable_logaddexp, 0)
 
     return logsumexp / (alpha - 1)
+
 
 @jit
 def _vectorized_sampled_gaussian_renyi_dp(alphas, std, p, nCrs):
@@ -162,15 +158,17 @@ def _vectorized_sampled_gaussian_renyi_dp(alphas, std, p, nCrs):
 def get_all_nCr(alphas):
     def get_nCr(alpha, j):
         return log_comb_opt(alpha, j)
-        
+
     all_combinations_log_comb_opt = vmap(
-        vmap(get_nCr, in_axes=(None, 0)), in_axes=(0, None)
+        vmap(get_nCr, in_axes=(None, 0)),
+        in_axes=(0, None),
     )
 
     alphas_reshaped = alphas.reshape(-1, 1)
     num_alphas = alphas_reshaped.shape[0]
     return all_combinations_log_comb_opt(alphas_reshaped, alphas_reshaped).reshape(
-        num_alphas, num_alphas
+        num_alphas,
+        num_alphas,
     )
 
 
@@ -195,8 +193,8 @@ class PrivacyAccountant(eqx.Module):
         self.eps_bound = jnp.asarray(eps_bound).squeeze()
         self.sample_prob = jnp.asarray(sample_prob).squeeze()
         self.const_ncr = get_all_nCr(self.lambdas)
-        
-    def replace(self, **kwargs) -> 'PrivacyAccountant':
+
+    def replace(self, **kwargs) -> "PrivacyAccountant":
         """Replace attributes in the privacy accountant object with new values, akin to flax's 'dataclass.replace'"""
 
         els = list(kwargs.items())
@@ -213,16 +211,19 @@ class PrivacyAccountant(eqx.Module):
     @jit
     def add_sigma(self, state, sigma):
         added_moments = _vectorized_sampled_gaussian_renyi_dp(
-            self.lambdas, sigma, self.sample_prob, self.const_ncr
+            self.lambdas,
+            sigma,
+            self.sample_prob,
+            self.const_ncr,
         )
         return PrivacyAccountantState(moments=state.moments + added_moments)
 
-    @partial(jit, static_argnames=('return_new_state',))
+    @partial(jit, static_argnames=("return_new_state",))
     def get_correct_noise(self, state, sigma, return_new_state=True):
         correct_noise, new_state = self._bin_search_sigma(state, sigma)
         if return_new_state:
             return (correct_noise, new_state)
-        
+
         return correct_noise
 
     def _bin_search_sigma(self, state, sigma, tol=1e-2):
@@ -232,7 +233,7 @@ class PrivacyAccountant(eqx.Module):
         and add it instead. If sigma doesn't exceed the budget, then just return this.
 
         Note that the code is structured s.t. if 'sigma' doesn't exceed the budget,
-        only one call to '_vectorized_sampled_gaussian_renyi_dp' is performed. 
+        only one call to '_vectorized_sampled_gaussian_renyi_dp' is performed.
         """
         max_noise = 15
 
@@ -242,7 +243,7 @@ class PrivacyAccountant(eqx.Module):
 
             return jnp.logical_and(
                 (noise_value < max_noise).squeeze(),  # guard against many iterations of doubling
-                self.is_done(new_state)
+                self.is_done(new_state),
             )
 
         def doubling_body(tup):
@@ -252,7 +253,9 @@ class PrivacyAccountant(eqx.Module):
             return (new_noise_value, new_state)
 
         current_state = self.add_sigma(state, sigma)
-        high, upper_bound_state = jlax.while_loop(doubling_cond, doubling_body, (sigma, current_state))
+        high, upper_bound_state = jlax.while_loop(
+            doubling_cond, doubling_body, (sigma, current_state)
+        )
 
         # Binary Search
         def cond(loop_state):
@@ -312,14 +315,14 @@ def test_sampled_gaussian_renyi_dp():
             1.53926581116,
             12.4017327101,
             22.6483441426,
-        ]
+        ],
     )
 
     moments_to_test = [3, 4, 5, 6]
     for i in moments_to_test:
         moments = jnp.arange(2, i).reshape(1, -1)
         nCrs = get_all_nCr(moments)
-        target = answers[:i-2]
+        target = answers[: i - 2]
         test_close(jitted(moments, std, p, nCrs), target)
     # test_close(jitted(jnp.arange(2, 11).reshape(1, -1), std, p), 12.4017327101)
     # test_close(jitted(jnp.arange(2, 16).reshape(1, -1), std, p), 22.6483441426)
@@ -338,8 +341,11 @@ def test_jittable_create_privacy_accountant():
     eps_bound = jnp.array(0.1)
     sample_prob = jnp.array(0.01)
 
-    jitted_accountant, jitted_state = jit(jitted)(
-        moments, delta_bound, eps_bound, sample_prob
+    _jitted_accountant, _jitted_state = jit(jitted)(
+        moments,
+        delta_bound,
+        eps_bound,
+        sample_prob,
     )
 
 
@@ -359,7 +365,8 @@ def test_add_sigma():
 
     # Check if the moments have been updated correctly
     expected_moments = prior_moments + vmap(
-        _sampled_gaussian_renyi_dp, in_axes=(1, None, None)
+        _sampled_gaussian_renyi_dp,
+        in_axes=(1, None, None),
     )(accountant.lambdas, sigma, accountant.sample_prob)
 
     chex.assert_trees_all_equal(state.moments, expected_moments)
@@ -375,7 +382,9 @@ def profile():
     state = accountant.reset_state()
 
     accountant.get_correct_noise(state, 1e-10)
-    print(timeit.timeit("accountant.get_correct_noise(state, 1e-10)", globals=locals(), number=1000))
+    print(
+        timeit.timeit("accountant.get_correct_noise(state, 1e-10)", globals=locals(), number=1000)
+    )
 
 
 if __name__ == "__main__":

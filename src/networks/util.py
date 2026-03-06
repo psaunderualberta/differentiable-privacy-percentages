@@ -1,12 +1,8 @@
-from typing import Sequence
-
 import chex
 import equinox as eqx
 import jax.lax as jlax
 import jax.numpy as jnp
 import jax.random as jr
-from jax.experimental import checkify
-from jaxtyping import Array, PRNGKeyArray
 
 
 class Network:
@@ -44,7 +40,7 @@ class Linear(eqx.Module):
             self.bias = jnp.zeros((dout,))
         else:
             raise ValueError(
-                f"Initialization for Linear Layer '{initialization}' not known"
+                f"Initialization for Linear Layer '{initialization}' not known",
             )
 
     def __call__(self, x):
@@ -54,7 +50,9 @@ class Linear(eqx.Module):
 
 
 def augment_image(
-    image: chex.Array, key: chex.PRNGKey, patch_size: int = 24
+    image: chex.Array,
+    key: chex.PRNGKey,
+    patch_size: int = 24,
 ) -> chex.Array:
     """
     Augment an image by randomly picking a 24 × 24 patch from the image,
@@ -86,6 +84,4 @@ def augment_image(
     image = image * (1 + contrast) + brightness
 
     # Clip the image to be in the range [0, 1]
-    image = jnp.clip(image, 0, 1)
-
-    return image
+    return jnp.clip(image, 0, 1)

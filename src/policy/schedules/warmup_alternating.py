@@ -89,6 +89,7 @@ class WarmupAlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
     def __select(self, condition: Array, a, b):
         """Select elementwise between pytrees `a` and `b` based on a boolean JAX array condition."""
+
         def tree_select(x, y):
             if x is None:
                 return x
@@ -121,7 +122,8 @@ class WarmupAlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
     def apply_updates(self, updates) -> Self:
         updated_noise_warmup = eqx.apply_updates(
-            self.noise_warmup, updates.noise_warmup
+            self.noise_warmup,
+            updates.noise_warmup,
         )
         updated_clip_warmup = eqx.apply_updates(self.clip_warmup, updates.clip_warmup)
         updated_noise_tail = eqx.apply_updates(self.noise_tail, updates.noise_tail)
@@ -129,16 +131,24 @@ class WarmupAlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
         # diff_clips=True: update clip, freeze noise; diff_clips=False: update noise, freeze clip
         new_noise_warmup = self.__select(
-            self.diff_clips, self.noise_warmup, updated_noise_warmup
+            self.diff_clips,
+            self.noise_warmup,
+            updated_noise_warmup,
         )
         new_clip_warmup = self.__select(
-            self.diff_clips, updated_clip_warmup, self.clip_warmup
+            self.diff_clips,
+            updated_clip_warmup,
+            self.clip_warmup,
         )
         new_noise_tail = self.__select(
-            self.diff_clips, self.noise_tail, updated_noise_tail
+            self.diff_clips,
+            self.noise_tail,
+            updated_noise_tail,
         )
         new_clip_tail = self.__select(
-            self.diff_clips, updated_clip_tail, self.clip_tail
+            self.diff_clips,
+            updated_clip_tail,
+            self.clip_tail,
         )
 
         return self.__class__(
@@ -160,7 +170,7 @@ class WarmupAlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         private_sigmas = self.get_private_sigmas()
         private_clips = self.get_private_clips()
         private_weights = self.privacy_params.project_weights(
-            private_clips / private_sigmas
+            private_clips / private_sigmas,
         ).squeeze()
 
         new_noises = private_clips / private_weights
@@ -171,29 +181,40 @@ class WarmupAlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         # so proj_noise_tail initialises the tail from the learned constant values.
         # Post-warmup, new_noises/new_clips come from the tail schedules.
         proj_noise_warmup = ConstantSchedule.from_projection(
-            self.noise_warmup, new_noises
+            self.noise_warmup,
+            new_noises,
         )
         proj_clip_warmup = ConstantSchedule.from_projection(self.clip_warmup, new_clips)
 
         proj_noise_tail = self.noise_tail.__class__.from_projection(
-            self.noise_tail, new_noises
+            self.noise_tail,
+            new_noises,
         )
         proj_clip_tail = self.clip_tail.__class__.from_projection(
-            self.clip_tail, new_clips
+            self.clip_tail,
+            new_clips,
         )
 
         # Apply diff_clips alternation: diff_clips=True → update clip, freeze noise.
         new_noise_warmup = self.__select(
-            self.diff_clips, proj_noise_warmup, self.noise_warmup
+            self.diff_clips,
+            proj_noise_warmup,
+            self.noise_warmup,
         )
         new_clip_warmup = self.__select(
-            self.diff_clips, self.clip_warmup, proj_clip_warmup
+            self.diff_clips,
+            self.clip_warmup,
+            proj_clip_warmup,
         )
         new_noise_tail_alt = self.__select(
-            self.diff_clips, proj_noise_tail, self.noise_tail
+            self.diff_clips,
+            proj_noise_tail,
+            self.noise_tail,
         )
         new_clip_tail_alt = self.__select(
-            self.diff_clips, self.clip_tail, proj_clip_tail
+            self.diff_clips,
+            self.clip_tail,
+            proj_clip_tail,
         )
 
         # Phase selection for warmup schedules: update during warmup, freeze post-warmup.
@@ -250,4 +271,3 @@ class WarmupAlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
             "clips": self.get_private_clips(),
             "mus": self.get_private_weights(),
         }
-

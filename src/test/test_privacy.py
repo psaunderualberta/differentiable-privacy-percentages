@@ -223,7 +223,7 @@ class TestComputeExpenditure:
         p1 = GDPPrivacyParameters(EPS, DELTA, p=0.1, T=T)
         p2 = GDPPrivacyParameters(EPS, DELTA, p=0.2, T=T)
         ratio = float(p2.compute_expenditure(sigmas, clips)) / float(
-            p1.compute_expenditure(sigmas, clips)
+            p1.compute_expenditure(sigmas, clips),
         )
         assert ratio == pytest.approx(2.0, rel=1e-4)
 
@@ -232,7 +232,7 @@ class TestComputeExpenditure:
         small_clips = jnp.ones(T) * 0.5
         large_clips = jnp.ones(T) * 1.5
         assert float(params.compute_expenditure(sigmas, large_clips)) > float(
-            params.compute_expenditure(sigmas, small_clips)
+            params.compute_expenditure(sigmas, small_clips),
         )
 
     def test_larger_sigma_decreases_expenditure(self, params):
@@ -240,7 +240,7 @@ class TestComputeExpenditure:
         small_sigma = jnp.ones(T) * 0.5
         large_sigma = jnp.ones(T) * 5.0
         assert float(params.compute_expenditure(large_sigma, clips)) < float(
-            params.compute_expenditure(small_sigma, clips)
+            params.compute_expenditure(small_sigma, clips),
         )
 
     def test_sums_over_steps(self, params):
@@ -290,17 +290,17 @@ class TestMuScheduleConversions:
     def test_round_trip_weights_to_mu_to_weights(self, params):
         original = jnp.linspace(0.5, 2.0, T)
         recovered = params.mu_schedule_to_weights(
-            params.weights_to_mu_schedule(original)
+            params.weights_to_mu_schedule(original),
         )
         recovered = params.mu_schedule_to_weights(
-            params.weights_to_mu_schedule(original)
+            params.weights_to_mu_schedule(original),
         )
         assert jnp.allclose(recovered, original, atol=1e-4)
 
     def test_round_trip_mu_to_weights_to_mu(self, params):
         mu_schedule = jnp.linspace(0.5, float(params.mu_0) * 1.5, T)
         recovered = params.weights_to_mu_schedule(
-            params.mu_schedule_to_weights(mu_schedule)
+            params.mu_schedule_to_weights(mu_schedule),
         )
         assert jnp.allclose(recovered, mu_schedule, atol=1e-5)
 
@@ -308,7 +308,7 @@ class TestMuScheduleConversions:
         w1 = jnp.array([0.5])
         w2 = jnp.array([2.0])
         assert float(params.weights_to_mu_schedule(w2)[0]) > float(
-            params.weights_to_mu_schedule(w1)[0]
+            params.weights_to_mu_schedule(w1)[0],
         )
 
 
@@ -373,7 +373,9 @@ class TestSigmaScheduleConversions:
         assert jnp.all(sigma > 0)
 
     def test_round_trip_sigma_to_weights_to_sigma(
-        self, params, singleton_with_max_sigma
+        self,
+        params,
+        singleton_with_max_sigma,
     ):
         # sigma → weights → sigma should recover the original (below max_sigma).
         max_sigma = singleton_with_max_sigma
@@ -385,7 +387,9 @@ class TestSigmaScheduleConversions:
         assert jnp.allclose(recovered_sigmas, original_sigmas, atol=1e-4)
 
     def test_sigma_schedule_to_weights_clips_at_max_sigma(
-        self, params, singleton_with_max_sigma
+        self,
+        params,
+        singleton_with_max_sigma,
     ):
         max_sigma = singleton_with_max_sigma
         C = jnp.array(1.0)

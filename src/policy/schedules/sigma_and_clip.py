@@ -36,7 +36,9 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
     @classmethod
     def from_config(
-        cls, conf: SigmaAndClipScheduleConfig, privacy_params: GDPPrivacyParameters
+        cls,
+        conf: SigmaAndClipScheduleConfig,
+        privacy_params: GDPPrivacyParameters,
     ) -> "SigmaAndClipSchedule":
         T = privacy_params.T
         noise_schedule = base_schedule_factory(conf.noise, T)
@@ -64,7 +66,8 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
         new_noises = private_clips / private_weights
         new_noise_schedule = self.noise_schedule.__class__.from_projection(
-            self.noise_schedule, new_noises
+            self.noise_schedule,
+            new_noises,
         )
 
         return self.__class__(
@@ -79,4 +82,3 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
             "clips": self.get_private_clips(),
             "mus": self.get_private_weights(),
         }
-

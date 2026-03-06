@@ -1,4 +1,3 @@
-import dataclasses
 from dataclasses import dataclass
 from typing import Annotated, Union
 
@@ -43,9 +42,11 @@ class InterpolatedClippedScheduleConfig(AbstractScheduleConfig):
 BaseScheduleConfig = Union[
     Annotated[ConstantScheduleConfig, tyro.conf.subcommand("constant")],
     Annotated[
-        InterpolatedExponentialScheduleConfig, tyro.conf.subcommand("interplated-exp")
+        InterpolatedExponentialScheduleConfig,
+        tyro.conf.subcommand("interplated-exp"),
     ],
     Annotated[
-        InterpolatedClippedScheduleConfig, tyro.conf.subcommand("interpolated-clipped")
+        InterpolatedClippedScheduleConfig,
+        tyro.conf.subcommand("interpolated-clipped"),
     ],
 ]
