@@ -1,9 +1,4 @@
-"""JAX Compatible  version of MountainCarContinuous-v0 OpenAI gym environment.
-
-
-Source:
-github.com/openai/gym/blob/master/gym/envs/classic_control/continuous_mountain_car.py
-"""
+"""DP-SGD inner training loop and associated utilities."""
 
 from functools import partial
 

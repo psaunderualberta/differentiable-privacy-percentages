@@ -7,6 +7,7 @@ import plotly.express as px
 import tqdm
 from jaxtyping import Array, PRNGKeyArray
 
+import wandb
 from environments.dp import (
     DP_RL_Params,
     train_with_noise,
@@ -193,6 +194,33 @@ class Baseline:
         schedule = schedule_class(*best_params)
 
         return self.generate_schedule_data(schedule, name, key, with_progress_bar=True)
+
+    def log_comparison(
+        self,
+        schedule: "AbstractNoiseAndClipSchedule | AbstractStatefulNoiseAndClipSchedule",
+        eval_key: PRNGKeyArray,
+        label: str = "Learned Policy",
+    ) -> None:
+        """Log the final baseline comparison, generating baseline data if needed.
+
+        If ``generate_baseline_data`` was already called during training,
+        discards any mid-training learned-policy rows before re-evaluating.
+        Otherwise generates fresh baseline data first.
+        """
+        if not hasattr(self, "original_df"):
+            self.generate_baseline_data(eval_key)
+        else:
+            self.delete_non_baseline_data()
+
+        eval_df = self.generate_schedule_data(schedule, label, eval_key)
+        final_loss_fig = self.baseline_comparison_final_loss_plotter(eval_df)
+        accuracy_fig = self.baseline_comparison_accuracy_plotter(eval_df)
+        wandb.log(
+            {
+                "Baseline vs. Losses": final_loss_fig,
+                "Baseline vs. Accuracy": accuracy_fig,
+            },
+        )
 
     def generate_baseline_data(
         self,

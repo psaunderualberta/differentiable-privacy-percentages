@@ -83,37 +83,6 @@ def clip_grads_abadi(grads: eqx.Module, C: Array) -> eqx.Module:
     return jax.tree.unflatten(grads_treedef, mean_clipped)
 
 
-@eqx.filter_jit
-def uniform_subsample_batch(
-    x: Array,
-    y: Array,
-    key: PRNGKeyArray,
-    idxs: Array,
-):
-    """Subsample a batch uniformly at random using approximate top-k.
-
-    Args:
-        x: Full dataset features of shape (N, *).
-        y: Full dataset labels of shape (N, *).
-        key: PRNG key for sampling.
-        idxs: Dummy array whose length determines the batch size.
-
-    Returns:
-        Tuple of (batch_x, batch_y) with batch_size rows each.
-    """
-    # get random subset of idxs for training
-    key, _key = jr.split(key)
-    probs = jr.uniform(_key, (x.shape[0],))
-
-    # https://arxiv.org/abs/2206.14286 for implementation of approx_max_k
-    # jitted_approx_max_k = jax.lax.approx_max_k, static_argnums=(1,))
-    _, subsample_idxs = jax.lax.approx_max_k(probs, idxs.shape[0])
-    _x = x[subsample_idxs]
-    _y = y[subsample_idxs]
-
-    return _x, _y
-
-
 # Create random PRNG keys w/ same pytree structure as model
 @eqx.filter_jit
 def pytree_keys(model: eqx.Module, key: PRNGKeyArray) -> PRNGKeyArray:
@@ -126,12 +95,6 @@ def pytree_keys(model: eqx.Module, key: PRNGKeyArray) -> PRNGKeyArray:
     treedef = jt.structure(model)
     keys = jr.split(key, treedef.num_leaves)
     return jt.unflatten(treedef, keys)
-
-
-@eqx.filter_jit
-def is_none(x: Array | None) -> bool:
-    """Return True if `x` is None."""
-    return x is None
 
 
 @eqx.filter_jit
