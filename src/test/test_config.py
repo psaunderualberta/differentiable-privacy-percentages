@@ -13,7 +13,7 @@ Covers:
 import dataclasses
 import importlib
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Union
 
 import pytest
 import tyro
@@ -176,6 +176,13 @@ class TestIsUnionField:
         @dataclass
         class Cfg:
             x: int | str = 0
+
+        assert _is_union_field(Cfg, "x") is True
+
+    def test_explicit_union_annotation(self):
+        @dataclass
+        class Cfg:
+            x: Union[int, str] = 0  # noqa: UP007
 
         assert _is_union_field(Cfg, "x") is True
 

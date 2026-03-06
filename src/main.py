@@ -22,6 +22,7 @@ from policy.factory import policy_factory
 from policy.schedules.abstract import AbstractNoiseAndClipSchedule
 from privacy.gdp_privacy import get_privacy_params
 from util.baselines import Baseline
+from util.checkpointing import load_checkpoint, make_state, save_checkpoint
 from util.dataloaders import get_dataset_shapes
 from util.logger import Loggable, WandbTableLogger
 from util.util import ensure_valid_pytree, get_optimal_mesh
@@ -48,7 +49,6 @@ def main():
     print(f"\tmu-GDP: {mu_tot}")
 
     # Initialize Policy model
-
     schedule_conf = SingletonConfig.get_policy_config_instance().schedule
     schedule = policy_factory(schedule_conf, gdp_params)
     schedule = schedule.project()
@@ -69,8 +69,60 @@ def main():
         in_axes=(None, None, None, None, 0),
     )
 
+    # Initialise optimizer and PRNG keys.  These may be overwritten below if a
+    # checkpoint is restored.
+    optimizer = optax.sgd(
+        learning_rate=sweep_config.policy.lr.sample(),
+        momentum=sweep_config.policy.momentum.sample(),
+    )
+    opt_state = optimizer.init(schedule)  # type: ignore
+
+    key = jr.PRNGKey(env_prng_seed)
+    key, init_key, mb_key = jr.split(key, 3)
+
+    # --- Checkpoint restore (happens before wandb.init so we know start_step) ---
+    start_step = 0
+    if wandb_config.checkpoint_run_id is not None:
+        state_template = make_state(schedule, opt_state, key, init_key, 0)
+        result = load_checkpoint(
+            wandb_config.checkpoint_run_id,
+            wandb_config.checkpoint_step,
+            state_template,
+            wandb_config.entity,
+            wandb_config.project,  # always look in the original project
+        )
+        if result is not None:
+            restored_state, start_step = result
+            schedule = restored_state["schedule"]
+            opt_state = restored_state["opt_state"]
+            key = restored_state["key"]
+            init_key = restored_state["init_key"]
+
+    # --- W&B init ---
+    # Three cases:
+    #   1. Branching from a specific historical step → new run in {project}-branched
+    #   2. Resuming the latest checkpoint of an existing run → continue that run
+    #   3. Fresh start → new run
     print("Starting...")
-    if wandb_config.restart_run_id is None:
+    is_branching = (
+        wandb_config.checkpoint_run_id is not None and wandb_config.checkpoint_step is not None
+    )
+
+    if is_branching:
+        branch_project = (wandb_config.project or "runs") + "-branched"
+        notes = (
+            f"Branched from run {wandb_config.checkpoint_run_id} "
+            f"at step {wandb_config.checkpoint_step} "
+            f"(original project: {wandb_config.project})"
+        )
+        run = wandb.init(
+            project=branch_project,
+            entity=wandb_config.entity,
+            mode=wandb_config.mode,
+            config=sweep_config.to_wandb_sweep(),
+            notes=notes,
+        )
+    elif wandb_config.restart_run_id is None:
         run = wandb.init(
             project=wandb_config.project,
             entity=wandb_config.entity,
@@ -80,7 +132,7 @@ def main():
             resume="allow",
         )
     else:
-        # Don't overwrite config
+        # Don't overwrite config when resuming an existing run
         run = wandb.init(
             project=wandb_config.project,
             entity=wandb_config.entity,
@@ -121,22 +173,36 @@ def main():
         to_diff = jlax.pmean(to_diff, "x").squeeze()
         return to_diff, (losses, accuracies, val_acc)
 
-    optimizer = optax.sgd(
-        learning_rate=sweep_config.policy.lr.sample(),
-        momentum=sweep_config.policy.momentum.sample(),
+    # --- Baseline setup ---
+    eval_num_iterations = 100
+    eval_key = jr.PRNGKey(0)
+    baseline = Baseline(env_params, gdp_params, eval_num_iterations)
+    log_baselines_during_training = (
+        sweep_config.with_baselines and sweep_config.baseline_log_interval > 0
     )
-    opt_state = optimizer.init(schedule)  # type: ignore
+    if log_baselines_during_training:
+        _ = baseline.generate_baseline_data(eval_key)
+
+    def _log_baseline_comparison(schedule):
+        eval_df = baseline.generate_schedule_data(schedule, "Learned Policy", eval_key)
+        final_loss_fig = baseline.baseline_comparison_final_loss_plotter(eval_df)
+        accuracy_fig = baseline.baseline_comparison_accuracy_plotter(eval_df)
+        wandb.log(
+            {
+                "Baseline vs. Losses": final_loss_fig,
+                "Baseline vs. Accuracy": accuracy_fig,
+            },
+        )
+        baseline.delete_non_baseline_data()
 
     iterator = tqdm.tqdm(
-        range(total_timesteps),
+        range(start_step, total_timesteps),
         desc="Training Progress",
-        total=total_timesteps,
+        total=total_timesteps - start_step,
     )
 
-    key = jr.PRNGKey(env_prng_seed)
-    key, init_key, mb_key = jr.split(key, 3)
     try:
-        for _ in iterator:
+        for t in iterator:
             # Generate random key for the current timestep
             key, _ = jr.split(key)
 
@@ -193,8 +259,15 @@ def main():
             # Ensure no Infs or NaNs were introduced
             schedule = ensure_valid_pytree(schedule, "policy in main after project")
 
-            # self-explanatory
             iterator.set_description(f"Training Progress - Loss: {loss:.4f}")
+
+            # Save checkpoint every N steps (state captured after project())
+            if (t + 1) % wandb_config.checkpoint_every == 0:
+                save_checkpoint(make_state(schedule, opt_state, key, init_key, t), t, run)
+
+            # Log baseline comparison at regular intervals during training
+            if log_baselines_during_training and (t + 1) % sweep_config.baseline_log_interval == 0:
+                _log_baseline_comparison(schedule)
 
     except Exception as e:
         raise e
@@ -203,21 +276,22 @@ def main():
     for loggable_item in schedule.get_loggables(force=True):
         _ = logger.log(loggable_item)
 
-    # Generate final results with lots of iterations
-    eval_num_iterations = 100
-    eval_key = jr.PRNGKey(0)
-
-    # Generate baseline if directed
+    # Generate final baseline comparison if directed
     if sweep_config.with_baselines:
-        baseline = Baseline(env_params, gdp_params, eval_num_iterations)
-        _ = baseline.generate_baseline_data(eval_key)
+        if baseline is None:
+            # baseline_log_interval == 0: build baseline data now (old behaviour)
+            baseline = Baseline(env_params, gdp_params, eval_num_iterations)
+            _ = baseline.generate_baseline_data(eval_key)
+        else:
+            # Discard any accumulated learned-policy rows from mid-training logs
+            baseline.delete_non_baseline_data()
         eval_df = baseline.generate_schedule_data(schedule, "Learned Policy", eval_key)
         final_loss_fig = baseline.baseline_comparison_final_loss_plotter(eval_df)
         accuracy_fig = baseline.baseline_comparison_accuracy_plotter(eval_df)
         wandb.log(
             {
-                "Baseline - Final Losses": final_loss_fig,
-                "Baseline - Accuracy": accuracy_fig,
+                "Baseline vs. Losses": final_loss_fig,
+                "Baseline vs. Accuracy": accuracy_fig,
             },
         )
 

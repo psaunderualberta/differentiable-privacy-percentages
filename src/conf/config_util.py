@@ -1,6 +1,7 @@
 import dataclasses
 import typing
 from dataclasses import dataclass
+from types import UnionType
 from typing import Annotated, Literal, Union, get_args, get_origin
 
 import numpy as np
@@ -90,7 +91,9 @@ def _is_union_field(cls: type, field_name: str) -> bool:
     # Unwrap Annotated[Union[...], ...] → Union[...]
     if get_origin(annotation) is Annotated:
         annotation = get_args(annotation)[0]
-    return get_origin(annotation) is Union
+
+    origin = get_origin(annotation)
+    return origin is Union or origin is UnionType
 
 
 def to_wandb_sweep_params(obj) -> dict[str, object]:

@@ -108,6 +108,9 @@ class SweepConfig:
     name: str | None = None
     description: str | None = None
     with_baselines: bool = False
+    # Only used when with_baselines=True. Evaluate and log baselines every this
+    # many outer steps (0 = only log at the end of training, i.e. old behaviour).
+    baseline_log_interval: int = 0
     dataset: Literal["mnist", "california", "cifar-10", "fashion-mnist"] = "mnist"
     dataset_poly_d: int | None = None
     total_timesteps: int = 100
@@ -148,6 +151,18 @@ class WandbConfig:
     entity: str | None = None
     mode: Literal["disabled", "online", "offline"] = "disabled"
     restart_run_id: str | None = None
+
+    # --- Checkpointing ---
+    # Run ID whose checkpoint artifact to restore.  Set to the same value as
+    # restart_run_id to resume a crashed job; set to a different run's ID to
+    # branch from another run's state.
+    checkpoint_run_id: str | None = None
+    # Specific outer-loop step to restore.  None means the latest checkpoint.
+    # If set to a value other than the latest step, a new W&B run is created
+    # in ``{project}-branched`` with a note referencing the original run.
+    checkpoint_step: int | None = None
+    # Save a checkpoint (locally + W&B artifact) every this many outer steps.
+    checkpoint_every: int = 10
 
 
 @dataclass
