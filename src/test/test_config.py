@@ -100,9 +100,8 @@ class TestDistributionConfig:
         assert result == {"values": [0.01, 0.1, 1.0]}
 
     def test_values_distribution_sample_raises(self):
-        dc = dist_config_helper(values=(0.01, 0.1, 1.0), distribution="values")
-        with pytest.raises(NotImplementedError, match="W&B agent"):
-            dc.sample()
+        dc = dist_config_helper(values=(0.01,), distribution="values")
+        assert dc.sample() == 0.01
 
     def test_values_distribution_in_policy_lr(self):
         """lr and momentum accept a values distribution and serialise correctly."""

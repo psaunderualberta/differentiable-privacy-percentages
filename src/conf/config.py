@@ -64,8 +64,8 @@ class PolicyConfig:
     batch_size: int = 1
     lr: DistributionConfig = dist_config_helper(value=1.0, distribution="constant")
     momentum: DistributionConfig = dist_config_helper(
-        value=0.1,
-        distribution="constant",
+        values=(0.0, 0.1, 0.7),
+        distribution="values",
     )
     max_sigma: float = 10.0
     # When non-empty, sweep over these schedule type names rather than fixing
@@ -124,7 +124,7 @@ class EnvConfig:
 class SweepConfig:
     env: EnvConfig
     policy: PolicyConfig
-    method: str = "random"
+    method: str = "grid"
     metric_name: str = "val-accuracy"
     metric_goal: str = "maximize"
     plotting_interval: int = 1
@@ -138,9 +138,8 @@ class SweepConfig:
     dataset_poly_d: int | None = None
     total_timesteps: int = 100
     prng_seed: DistributionConfig = dist_config_helper(
-        min=0,
-        max=10**9,
-        distribution="int_uniform",
+        values=(447831761, 159020393, 435372193),
+        distribution="values",
     )
     train_on_single_network: bool = False
 

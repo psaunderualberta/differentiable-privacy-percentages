@@ -33,11 +33,7 @@ class DistributionConfig:
         if self.distribution == "int_uniform":
             return np.random.randint(low=self.min, high=self.max)
         if self.distribution == "values":
-            raise NotImplementedError(
-                "DistributionConfig with distribution='values' is a W&B sweep parameter "
-                "spec — sampling is performed by the W&B agent, not locally. "
-                "For local runs, use distribution='constant' with a specific value.",
-            )
+            return np.random.choice(self.values)
 
         return np.random.uniform(low=self.min, high=self.min)
 

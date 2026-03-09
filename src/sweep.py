@@ -26,5 +26,4 @@ if __name__ == "__main__":
     wandb.agent(
         sweep_id,
         function=starter,
-        count=3,
     )
