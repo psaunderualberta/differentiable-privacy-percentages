@@ -700,7 +700,7 @@ class TestSweepConfig:
     def test_to_wandb_sweep_contains_method_and_metric(self):
         sweep = _make_sweep()
         result = sweep.to_wandb_sweep()
-        assert result["method"] == "random"
+        assert result["method"] == "grid"
         assert result["metric"]["name"] == "val-accuracy"
         assert result["metric"]["goal"] == "maximize"
 

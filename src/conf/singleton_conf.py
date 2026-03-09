@@ -29,8 +29,26 @@ def _get_config_classes() -> dict[str, type]:
     """Build a name→config-class map from all existing registries.
 
     Deferred until call time to avoid circular-import issues at module load.
-    Uses importlib so that the trigger imports are not stripped by linters.
+    Concrete modules are imported here so their @register decorators fire and
+    populate the registries before they are read.
     """
+    import importlib
+
+    for _mod in [
+        "policy.base_schedules.constant",
+        "policy.base_schedules.exponential",
+        "policy.base_schedules.clipped",
+        "policy.schedules.alternating",
+        "policy.schedules.sigma_and_clip",
+        "policy.schedules.policy_and_clip",
+        "policy.schedules.dynamic_dpsgd",
+        "policy.schedules.warmup_alternating",
+        "policy.stateful_schedules.median_gradient",
+        "networks.mlp.MLP",
+        "networks.cnn.CNN",
+    ]:
+        importlib.import_module(_mod)
+
     from networks._registry import _REGISTRY as _network_reg
     from policy.base_schedules._registry import _REGISTRY as _base_reg
     from policy.schedules._registry import _REGISTRY as _sched_reg
