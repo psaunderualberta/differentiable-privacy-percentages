@@ -9,6 +9,8 @@ Encapsulates the three-case branching logic for starting a run:
      without overwriting its stored config.
 """
 
+import os
+
 import wandb
 from conf.config import SweepConfig, WandbConfig
 
@@ -26,6 +28,10 @@ def init_wandb_run(
     sweep_config:
         Experiment config serialised into the W&B run config on fresh starts.
     """
+    # When running under SLURM, redirect all W&B local storage to the fast
+    # per-job temp directory so the shared filesystem doesn't fill up.
+    wandb_dir = os.environ.get("SLURM_TMPDIR", None)
+
     is_branching = (
         wandb_config.checkpoint_run_id is not None and wandb_config.checkpoint_step is not None
     )
@@ -43,6 +49,7 @@ def init_wandb_run(
             mode=wandb_config.mode,
             config=sweep_config.to_wandb_sweep(),
             notes=notes,
+            dir=wandb_dir,
         )
 
     if wandb_config.restart_run_id is None:
@@ -54,6 +61,7 @@ def init_wandb_run(
             mode=wandb_config.mode,
             config=sweep_config.to_wandb_sweep(),
             resume="allow",
+            dir=wandb_dir,
         )
 
     # Resuming an existing run — omit config so it is not overwritten.
@@ -63,4 +71,5 @@ def init_wandb_run(
         id=wandb_config.restart_run_id,
         mode=wandb_config.mode,
         resume="allow",
+        dir=wandb_dir,
     )
