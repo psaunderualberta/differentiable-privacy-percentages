@@ -17,7 +17,9 @@ class DistributionConfig:
         "log_uniform_values",
         "int_uniform",
         "uniform",
+        "values",
     ]  # type of distribution, in wandb-format (i.e. uniform, log_uniform_values, etc.)
+    values: tuple[float, ...] = ()  # pre-set values if distribution == 'values'
 
     def sample(self) -> float:
         """Sample a value from this distribution, or return the constant value."""
@@ -30,6 +32,12 @@ class DistributionConfig:
             )
         if self.distribution == "int_uniform":
             return np.random.randint(low=self.min, high=self.max)
+        if self.distribution == "values":
+            raise NotImplementedError(
+                "DistributionConfig with distribution='values' is a W&B sweep parameter "
+                "spec — sampling is performed by the W&B agent, not locally. "
+                "For local runs, use distribution='constant' with a specific value.",
+            )
 
         return np.random.uniform(low=self.min, high=self.min)
 
@@ -37,6 +45,9 @@ class DistributionConfig:
         """Serialise this distribution to the W&B sweep parameter format."""
         if self.distribution == "constant":
             return {"distribution": self.distribution, "value": self.value}
+
+        if self.distribution == "values":
+            return {"values": list(self.values)}
 
         return {
             "min": self.min,
@@ -49,17 +60,21 @@ def dist_config_helper(
     min: float = 0.0,
     max: float = 0.0,
     value: float = 0.0,
+    values: tuple[float, ...] = (),
     distribution: Literal[
         "constant",
         "log_uniform_values",
         "int_uniform",
         "uniform",
+        "values",
     ] = "constant",
 ) -> DistributionConfig:
     """Construct a DistributionConfig, nudging max above min if they are equal (W&B requirement)."""
     if min >= max:
         max += 1e-10
-    return DistributionConfig(min=min, max=max, value=value, distribution=distribution)
+    return DistributionConfig(
+        min=min, max=max, value=value, values=values, distribution=distribution
+    )
 
 
 def _is_fixed_field(cls: type, field_name: str) -> bool:

@@ -94,6 +94,28 @@ class TestDistributionConfig:
         assert result["max"] == pytest.approx(1e-1)
         assert "value" not in result
 
+    def test_values_distribution_to_wandb_sweep(self):
+        dc = dist_config_helper(values=(0.01, 0.1, 1.0), distribution="values")
+        result = dc.to_wandb_sweep()
+        assert result == {"values": [0.01, 0.1, 1.0]}
+
+    def test_values_distribution_sample_raises(self):
+        dc = dist_config_helper(values=(0.01, 0.1, 1.0), distribution="values")
+        with pytest.raises(NotImplementedError, match="W&B agent"):
+            dc.sample()
+
+    def test_values_distribution_in_policy_lr(self):
+        """lr and momentum accept a values distribution and serialise correctly."""
+        from conf.config import PolicyConfig
+
+        conf = PolicyConfig(
+            lr=dist_config_helper(values=(0.001, 0.01, 0.1), distribution="values"),
+            momentum=dist_config_helper(values=(0.0, 0.9), distribution="values"),
+        )
+        result = conf.to_wandb_sweep()
+        assert result["parameters"]["lr"] == {"values": [0.001, 0.01, 0.1]}
+        assert result["parameters"]["momentum"] == {"values": [0.0, 0.9]}
+
     def test_dist_config_helper_min_ge_max_guard(self):
         # When min == max the helper bumps max by 1e-10 to keep W&B happy.
         dc = dist_config_helper(min=5.0, max=5.0, distribution="uniform")
