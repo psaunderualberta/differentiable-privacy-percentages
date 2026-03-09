@@ -8,6 +8,7 @@ import tyro
 from conf.config_util import (
     DistributionConfig,
     dist_config_helper,
+    merge_wandb_sweep_union,
     to_wandb_sweep_params,
 )
 from networks.cnn.config import CNNConfig
@@ -67,9 +68,31 @@ class PolicyConfig:
         distribution="constant",
     )
     max_sigma: float = 10.0
+    # When non-empty, sweep over these schedule type names rather than fixing
+    # _type to the current schedule's class.  Set programmatically before
+    # calling to_wandb_sweep(); not exposed as a CLI flag.
+    sweep_schedule_conf_types: Annotated[tuple[str, ...], tyro.conf.Fixed] = (
+        AlternatingSigmaAndClipScheduleConfig.__name__,
+        WarmupAlternatingSigmaAndClipScheduleConfig.__name__,
+        SigmaAndClipScheduleConfig.__name__,
+    )
 
     def to_wandb_sweep(self) -> dict[str, object]:
-        return to_wandb_sweep_params(self)
+        result = to_wandb_sweep_params(self)
+        if self.sweep_schedule_conf_types:
+            # Lazy import avoids circular: singleton_conf imports config at top-level.
+            from conf.singleton_conf import _get_config_classes
+
+            config_classes = _get_config_classes()
+            instances = []
+            for name in self.sweep_schedule_conf_types:
+                if name not in config_classes:
+                    raise ValueError(
+                        f"Unknown schedule type '{name}'. Known: {sorted(config_classes)}",
+                    )
+                instances.append(config_classes[name]())
+            result["parameters"]["schedule"] = merge_wandb_sweep_union(instances)
+        return result
 
 
 # ---
@@ -102,7 +125,7 @@ class SweepConfig:
     env: EnvConfig
     policy: PolicyConfig
     method: str = "random"
-    metric_name: str = "accuracy"
+    metric_name: str = "val-accuracy"
     metric_goal: str = "maximize"
     plotting_interval: int = 1
     name: str | None = None

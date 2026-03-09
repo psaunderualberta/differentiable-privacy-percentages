@@ -96,6 +96,28 @@ def _is_union_field(cls: type, field_name: str) -> bool:
     return origin is Union or origin is UnionType
 
 
+def merge_wandb_sweep_union(instances: list) -> dict[str, object]:
+    """Build W&B sweep params for sweeping over multiple Union variants.
+
+    Merges parameters from all instances (first-seen wins on conflicts);
+    _type becomes a categorical {"values": [...]} sweep parameter.
+    """
+    merged: dict[str, object] = {}
+    type_names = [type(inst).__name__ for inst in instances]
+
+    for inst in instances:
+        if hasattr(inst, "to_wandb_sweep") and callable(inst.to_wandb_sweep):
+            inner = inst.to_wandb_sweep().get("parameters", {})
+        else:
+            inner = to_wandb_sweep_params(inst).get("parameters", {})
+        for k, v in inner.items():
+            if k not in merged:
+                merged[k] = v
+
+    merged["_type"] = {"values": type_names}
+    return {"parameters": merged}
+
+
 def to_wandb_sweep_params(obj) -> dict[str, object]:
     """Derive W&B sweep parameters from a dataclass by inspecting its fields.
 

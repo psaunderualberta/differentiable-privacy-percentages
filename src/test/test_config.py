@@ -28,6 +28,7 @@ from conf.config_util import (
     _is_fixed_field,
     _is_union_field,
     dist_config_helper,
+    merge_wandb_sweep_union,
     to_wandb_sweep_params,
 )
 from conf.singleton_conf import _get_config_classes, _reconstruct_from_dict
@@ -269,6 +270,129 @@ class TestToWandbSweepParams:
 
 
 # ---------------------------------------------------------------------------
+# merge_wandb_sweep_union
+# ---------------------------------------------------------------------------
+
+
+class TestMergeWandbSweepUnion:
+    def test_type_names_emitted_as_values(self):
+        instances = [AlternatingSigmaAndClipScheduleConfig(), SigmaAndClipScheduleConfig()]
+        result = merge_wandb_sweep_union(instances)
+        assert result["parameters"]["_type"] == {
+            "values": [
+                "AlternatingSigmaAndClipScheduleConfig",
+                "SigmaAndClipScheduleConfig",
+            ]
+        }
+
+    def test_shared_param_uses_first_seen(self):
+        # Both types have a 'noise' field; value from first instance wins.
+        first = AlternatingSigmaAndClipScheduleConfig(noise=ConstantScheduleConfig(init_value=99.0))
+        second = SigmaAndClipScheduleConfig(
+            noise=InterpolatedExponentialScheduleConfig(init_value=1.0)
+        )
+        result = merge_wandb_sweep_union([first, second])
+        noise_type = result["parameters"]["noise"]["parameters"]["_type"]
+        assert noise_type == {"value": "ConstantScheduleConfig"}
+
+    def test_unique_param_from_second_variant_included(self):
+        # AlternatingSigmaAndClipScheduleConfig has diff_clips_first; SigmaAndClip does not.
+        instances = [SigmaAndClipScheduleConfig(), AlternatingSigmaAndClipScheduleConfig()]
+        result = merge_wandb_sweep_union(instances)
+        assert "diff_clips_first" in result["parameters"]
+
+    def test_single_instance_produces_values_list(self):
+        instances = [AlternatingSigmaAndClipScheduleConfig()]
+        result = merge_wandb_sweep_union(instances)
+        assert result["parameters"]["_type"] == {
+            "values": ["AlternatingSigmaAndClipScheduleConfig"]
+        }
+
+
+# ---------------------------------------------------------------------------
+# PolicyConfig.sweep_schedule_types
+# ---------------------------------------------------------------------------
+
+
+class TestPolicyConfigSweepScheduleTypes:
+    def test_default_sweep_schedule_conf_types_is_nonempty(self):
+        conf = PolicyConfig()
+        assert len(conf.sweep_schedule_conf_types) > 0
+        assert "AlternatingSigmaAndClipScheduleConfig" in conf.sweep_schedule_conf_types
+
+    def test_sweep_schedule_conf_types_excluded_from_wandb_params(self):
+        conf = PolicyConfig(sweep_schedule_conf_types=("AlternatingSigmaAndClipScheduleConfig",))
+        result = to_wandb_sweep_params(conf)
+        assert "sweep_schedule_conf_types" not in result["parameters"]
+
+    def test_to_wandb_sweep_default_emits_values_list(self):
+        conf = PolicyConfig()
+        result = conf.to_wandb_sweep()
+        schedule_params = result["parameters"]["schedule"]["parameters"]
+        # Default has multiple types, so _type must be a "values" list.
+        assert "values" in schedule_params["_type"]
+        assert "AlternatingSigmaAndClipScheduleConfig" in schedule_params["_type"]["values"]
+
+    def test_to_wandb_sweep_overrides_type_when_set(self):
+        conf = PolicyConfig(
+            sweep_schedule_conf_types=[
+                "AlternatingSigmaAndClipScheduleConfig",
+                "SigmaAndClipScheduleConfig",
+            ]
+        )
+        result = conf.to_wandb_sweep()
+        schedule_params = result["parameters"]["schedule"]["parameters"]
+        assert schedule_params["_type"] == {
+            "values": [
+                "AlternatingSigmaAndClipScheduleConfig",
+                "SigmaAndClipScheduleConfig",
+            ]
+        }
+
+    def test_to_wandb_sweep_unknown_type_raises(self):
+        conf = PolicyConfig(sweep_schedule_conf_types=["NoSuchScheduleConfig"])
+        with pytest.raises(ValueError, match="Unknown schedule type 'NoSuchScheduleConfig'"):
+            conf.to_wandb_sweep()
+
+    def test_to_wandb_sweep_merged_params_contain_all_fields(self):
+        # diff_clips_first is only in Alternating; verify it appears when sweeping both
+        conf = PolicyConfig(
+            sweep_schedule_conf_types=[
+                "SigmaAndClipScheduleConfig",
+                "AlternatingSigmaAndClipScheduleConfig",
+            ]
+        )
+        result = conf.to_wandb_sweep()
+        schedule_params = result["parameters"]["schedule"]["parameters"]
+        assert "noise" in schedule_params
+        assert "clip" in schedule_params
+        assert "diff_clips_first" in schedule_params
+
+    def test_reconstruct_picks_correct_variant_after_sweep(self):
+        # Simulate what happens when W&B assigns _type=SigmaAndClipScheduleConfig
+        conf = PolicyConfig(
+            sweep_schedule_conf_types=[
+                "AlternatingSigmaAndClipScheduleConfig",
+                "SigmaAndClipScheduleConfig",
+            ]
+        )
+        # W&B run config as if the agent sampled SigmaAndClipScheduleConfig
+        run_conf = {
+            "schedule": {
+                "_type": "SigmaAndClipScheduleConfig",
+                "noise": {"_type": "ConstantScheduleConfig", "init_value": 2.0},
+                "clip": {"_type": "ConstantScheduleConfig", "init_value": 1.5},
+                # diff_clips_first would also be present but irrelevant
+                "diff_clips_first": False,
+            }
+        }
+        result = _reconstruct_from_dict(conf, run_conf)
+        assert isinstance(result.schedule, SigmaAndClipScheduleConfig)
+        assert isinstance(result.schedule.noise, ConstantScheduleConfig)
+        assert result.schedule.noise.init_value == pytest.approx(2.0)
+
+
+# ---------------------------------------------------------------------------
 # _get_config_classes
 # ---------------------------------------------------------------------------
 
@@ -424,13 +548,8 @@ class TestReconstructFromDict:
         original = SweepConfig(
             env=EnvConfig(eps=1.5, batch_size=128),
             policy=PolicyConfig(
-                schedule=SigmaAndClipScheduleConfig(
-                    noise=ConstantScheduleConfig(init_value=2.0),
-                    clip=InterpolatedExponentialScheduleConfig(
-                        num_keypoints=25,
-                        init_value=0.8,
-                    ),
-                ),
+                schedule=SigmaAndClipScheduleConfig(),
+                sweep_schedule_conf_types=("SigmaAndClipScheduleConfig",),
                 batch_size=4,
                 max_sigma=20.0,
             ),
@@ -450,10 +569,12 @@ class TestReconstructFromDict:
                     result[k] = _unwrap_params(v)
                 elif "value" in v:
                     result[k] = v["value"]
+                elif "values" in v:
+                    # Categorical sweep — pick the first value to simulate a run.
+                    result[k] = v["values"][0]
                 else:
                     # Distribution (min/max/distribution) — use the value stored
                     # in the original for simplicity.
-                    print(k)
                     result[k] = getattr(original, k, v.get("value", 0))
             return result
 
@@ -469,13 +590,56 @@ class TestReconstructFromDict:
         assert reconstructed.env.eps == pytest.approx(1.5)
         assert reconstructed.env.batch_size == 128
         assert isinstance(reconstructed.policy.schedule, SigmaAndClipScheduleConfig)
-        assert isinstance(reconstructed.policy.schedule.noise, ConstantScheduleConfig)
-        assert reconstructed.policy.schedule.noise.init_value == pytest.approx(2.0)
-        assert isinstance(
-            reconstructed.policy.schedule.clip,
-            InterpolatedExponentialScheduleConfig,
+        assert reconstructed.policy.max_sigma == pytest.approx(20.0)
+
+    def test_full_round_trip_via_wandb_format_diff_policy(self):
+        """Serialize a SweepConfig to a W&B-like dict, then reconstruct it to different policy
+        than given in schedule"""
+        original = SweepConfig(
+            env=EnvConfig(eps=1.5, batch_size=128),
+            policy=PolicyConfig(
+                schedule=SigmaAndClipScheduleConfig(),
+                sweep_schedule_conf_types=(AlternatingSigmaAndClipScheduleConfig.__name__,),
+                batch_size=4,
+                max_sigma=20.0,
+            ),
+            total_timesteps=300,
         )
-        assert reconstructed.policy.schedule.clip.num_keypoints == 25
+
+        # Build a W&B-like run.config from the sweep parameters.
+        def _unwrap_params(d: dict) -> dict:
+            """Recursively convert sweep spec → sampled-value dict.
+
+            {"parameters": {"x": {"value": 1}, "y": {"parameters": {...}}}}
+            → {"x": 1, "y": {...}}
+            """
+            result = {}
+            for k, v in d.get("parameters", {}).items():
+                if "parameters" in v:
+                    result[k] = _unwrap_params(v)
+                elif "value" in v:
+                    result[k] = v["value"]
+                elif "values" in v:
+                    # Categorical sweep — pick the first value to simulate a run.
+                    result[k] = v["values"][0]
+                else:
+                    # Distribution (min/max/distribution) — use the value stored
+                    # in the original for simplicity.
+                    result[k] = getattr(original, k, v.get("value", 0))
+            return result
+
+        sweep_spec = to_wandb_sweep_params(original)
+        run_conf = _unwrap_params(sweep_spec)
+
+        reconstructed = _reconstruct_from_dict(
+            SweepConfig(env=EnvConfig(), policy=PolicyConfig()),
+            run_conf,
+        )
+
+        assert reconstructed.total_timesteps == 300
+        assert reconstructed.env.eps == pytest.approx(1.5)
+        assert reconstructed.env.batch_size == 128
+        assert isinstance(reconstructed.policy.schedule, AlternatingSigmaAndClipScheduleConfig)
         assert reconstructed.policy.max_sigma == pytest.approx(20.0)
 
 
@@ -516,7 +680,7 @@ class TestSweepConfig:
         sweep = _make_sweep()
         result = sweep.to_wandb_sweep()
         assert result["method"] == "random"
-        assert result["metric"]["name"] == "accuracy"
+        assert result["metric"]["name"] == "val-accuracy"
         assert result["metric"]["goal"] == "maximize"
 
     def test_to_wandb_sweep_name_omitted_when_none(self):

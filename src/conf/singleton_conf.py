@@ -59,10 +59,13 @@ def _reconstruct_from_dict(obj, d: dict):
 
     config_classes = _get_config_classes()
     updates: dict[str, object] = {}
+    valid_fields = {f.name for f in dataclasses.fields(obj)}
 
     for key, item in d.items():
         if key == "_type":
             continue  # consumed by the parent call, not a dataclass field
+        if key not in valid_fields:
+            continue  # extra keys from other Union variants — ignore silently
 
         current = getattr(obj, key, None)
 
