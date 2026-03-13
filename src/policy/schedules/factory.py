@@ -11,6 +11,7 @@ from policy.schedules import (  # noqa: F401
     policy_and_clip,
     sigma_and_clip,
     warmup_alternating,
+    warmup_sigma_and_clip,
 )
 from policy.schedules._registry import build as schedule_factory
 

@@ -19,6 +19,7 @@ from policy.schedules.config import (
     PolicyAndClipScheduleConfig,
     SigmaAndClipScheduleConfig,
     WarmupAlternatingSigmaAndClipScheduleConfig,
+    WarmupSigmaAndClipScheduleConfig,
 )
 from policy.stateful_schedules.config import StatefulMedianGradientNoiseAndClipConfig
 
@@ -43,6 +44,10 @@ ScheduleConfig = Union[
     Annotated[
         WarmupAlternatingSigmaAndClipScheduleConfig,
         tyro.conf.subcommand("warmup-alternating"),
+    ],
+    Annotated[
+        WarmupSigmaAndClipScheduleConfig,
+        tyro.conf.subcommand("warmup-sigma-and-clip"),
     ],
 ]
 
@@ -74,6 +79,7 @@ class PolicyConfig:
     sweep_schedule_conf_types: Annotated[tuple[str, ...], tyro.conf.Fixed] = (
         AlternatingSigmaAndClipScheduleConfig.__name__,
         WarmupAlternatingSigmaAndClipScheduleConfig.__name__,
+        WarmupSigmaAndClipScheduleConfig.__name__,
         SigmaAndClipScheduleConfig.__name__,
     )
 
