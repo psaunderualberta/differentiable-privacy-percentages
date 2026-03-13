@@ -43,6 +43,7 @@ def _get_config_classes() -> dict[str, type]:
         "policy.schedules.policy_and_clip",
         "policy.schedules.dynamic_dpsgd",
         "policy.schedules.warmup_alternating",
+        "policy.schedules.warmup_sigma_and_clip",
         "policy.stateful_schedules.median_gradient",
         "networks.mlp.MLP",
         "networks.cnn.CNN",
