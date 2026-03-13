@@ -64,7 +64,7 @@ class PolicyConfig:
     batch_size: int = 1
     lr: DistributionConfig = dist_config_helper(value=1.0, distribution="constant")
     momentum: DistributionConfig = dist_config_helper(
-        values=(0.0, 0.1, 0.7),
+        values=(0.0, 0.1, 0.3),
         distribution="values",
     )
     max_sigma: float = 10.0

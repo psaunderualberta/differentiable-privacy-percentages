@@ -12,7 +12,7 @@ class ConstantSchedule(AbstractSchedule):
     placeholder: Array
     value: Array
 
-    def __init__(self, value: Array | float | int, T: int):
+    def __init__(self, value: Array | float, T: int):
         """Initialise a constant schedule with a single learnable scalar.
 
         Args:
@@ -21,7 +21,7 @@ class ConstantSchedule(AbstractSchedule):
         """
         assert jnp.asarray(value).size == 1, "'Value' must be a single number"
         self.placeholder = jnp.ones((1, T), dtype=jnp.float32).squeeze()
-        self.value = jnp.asarray(value)
+        self.value = jnp.asarray(value, dtype=jnp.float32)
 
     @classmethod
     def from_config(cls, conf: ConstantScheduleConfig, T: int) -> "ConstantSchedule":

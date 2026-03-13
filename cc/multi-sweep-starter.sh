@@ -1,5 +1,5 @@
-time for eps in 0.4 1.2 3.0; do
-    for dataset in "fashion-mnist" "mnist"; do
+time for eps in 0.4; do
+    for dataset in "mnist"; do
         time uv run sweep.py sweep.env.network:cnn \
         --wandb_conf.project="Testing Mu-gdp" --wandb-conf.entity psaunder --wandb-conf.mode online \
             --sweep.total_timesteps 2000  --sweep.policy.batch_size 12 --sweep.env.eps $eps --sweep.env.delta 1e-6  \
