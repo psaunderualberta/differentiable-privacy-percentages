@@ -10,6 +10,7 @@ Encapsulates the three-case branching logic for starting a run:
 """
 
 import os
+from typing import Any
 
 import wandb
 from conf.config import SweepConfig, WandbConfig
@@ -18,7 +19,7 @@ from conf.config import SweepConfig, WandbConfig
 def init_wandb_run(
     wandb_config: WandbConfig,
     sweep_config: SweepConfig,
-) -> wandb.sdk.wandb_run.Run:
+) -> Any:
     """Initialise and return a W&B run.
 
     Parameters

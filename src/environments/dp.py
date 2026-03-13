@@ -1,12 +1,14 @@
 """DP-SGD inner training loop and associated utilities."""
 
 from functools import partial
+from typing import cast
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
 import optax
+from jax import checkpoint as jax_checkpoint  # type: ignore[attr-defined]
 from jaxtyping import Array, PRNGKeyArray, PyTree
 
 from environments.dp_params import DP_RL_Params
@@ -122,7 +124,7 @@ def train_with_noise(
     clip_schedule = schedule.get_private_clips()
 
     # Create network
-    network = reinit_model(params.network, init_key)
+    network = reinit_model(cast(eqx.Module, params.network), init_key)
     net_params, net_static = eqx.partition(network, eqx.is_array)
     net_params = eqx.filter_jit(jax.lax.pvary)(net_params, "x")
 
@@ -132,7 +134,7 @@ def train_with_noise(
     opt_state_params = eqx.filter_jit(jax.lax.pvary)(opt_state_params, "x")
 
     @partial(
-        jax.checkpoint,
+        jax_checkpoint,
         policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable,
     )
     def scanned_training_step(
@@ -201,7 +203,7 @@ def train_with_stateful_noise(
     iters = schedule.get_iteration_array()
 
     # Create network
-    network = reinit_model(params.network, init_key)
+    network = reinit_model(cast(eqx.Module, params.network), init_key)
     net_params, net_static = eqx.partition(network, eqx.is_array)
     net_params = eqx.filter_jit(jax.lax.pvary)(net_params, "x")
 
@@ -211,7 +213,7 @@ def train_with_stateful_noise(
     opt_state_params = eqx.filter_jit(jax.lax.pvary)(opt_state_params, "x")
 
     @partial(
-        jax.checkpoint,
+        jax_checkpoint,
         policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable,
     )
     def scanned_training_step(

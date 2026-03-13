@@ -1,5 +1,6 @@
 import os
 from collections.abc import Callable
+from typing import cast
 
 import jax.random as jr
 import pandas as pd
@@ -57,7 +58,7 @@ class Baseline:
         if df is None:
             return self.df
 
-        df = df[df["step"] == df["step"].max()].copy()
+        df = cast(pd.DataFrame, df[df["step"] == df["step"].max()].copy())
         df["type"] = schedule_name
 
         self.df = pd.concat([self.df, df], axis=0).reset_index(
@@ -118,7 +119,7 @@ class Baseline:
         with_progress_bar: bool = True,
         iterations: int = -1,
     ) -> pd.DataFrame:
-        df = pd.DataFrame(columns=self.columns)
+        df = pd.DataFrame(columns=self.columns)  # type: ignore[arg-type]
 
         if iterations < 0:
             iterations = self.num_repetitions

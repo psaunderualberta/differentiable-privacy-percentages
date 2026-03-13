@@ -4,7 +4,7 @@ import equinox as eqx
 import jax.numpy as jnp
 import jax.random as jr
 import plotly.graph_objects as go
-from privacy.schedules import (
+from privacy.schedules import (  # type: ignore[import]
     LinearInterpPolicyNoiseSchedule,
 )
 

@@ -58,7 +58,7 @@ def _make_schedule() -> _SimpleSchedule:
 
 def _make_opt_state(schedule: _SimpleSchedule) -> Any:
     optimizer = optax.sgd(learning_rate=0.01)
-    return optimizer.init(schedule)
+    return optimizer.init(eqx.filter(schedule, eqx.is_array))
 
 
 # ---------------------------------------------------------------------------

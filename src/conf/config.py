@@ -1,7 +1,7 @@
 import dataclasses
 from dataclasses import dataclass
 from pprint import pprint
-from typing import Annotated, Literal, Union
+from typing import Annotated, Any, Literal, Union
 
 import tyro
 
@@ -83,7 +83,7 @@ class PolicyConfig:
         SigmaAndClipScheduleConfig.__name__,
     )
 
-    def to_wandb_sweep(self) -> dict[str, object]:
+    def to_wandb_sweep(self) -> dict[str, Any]:
         result = to_wandb_sweep_params(self)
         if self.sweep_schedule_conf_types:
             # Lazy import avoids circular: singleton_conf imports config at top-level.
@@ -122,7 +122,7 @@ class EnvConfig:
     batch_size: int = 250
     max_steps_in_episode: int = 100
 
-    def to_wandb_sweep(self) -> dict[str, object]:
+    def to_wandb_sweep(self) -> dict[str, Any]:
         return to_wandb_sweep_params(self)
 
 
@@ -155,7 +155,7 @@ class SweepConfig:
             return 1
         return self.total_timesteps // self.plotting_interval
 
-    def to_wandb_sweep(self) -> dict[str, object]:
+    def to_wandb_sweep(self) -> dict[str, Any]:
         config = {
             "method": self.method,
             "metric": {

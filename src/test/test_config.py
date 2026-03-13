@@ -356,10 +356,10 @@ class TestPolicyConfigSweepScheduleTypes:
 
     def test_to_wandb_sweep_overrides_type_when_set(self):
         conf = PolicyConfig(
-            sweep_schedule_conf_types=[
+            sweep_schedule_conf_types=(
                 "AlternatingSigmaAndClipScheduleConfig",
                 "SigmaAndClipScheduleConfig",
-            ]
+            )
         )
         result = conf.to_wandb_sweep()
         schedule_params = result["parameters"]["schedule"]["parameters"]
@@ -371,17 +371,17 @@ class TestPolicyConfigSweepScheduleTypes:
         }
 
     def test_to_wandb_sweep_unknown_type_raises(self):
-        conf = PolicyConfig(sweep_schedule_conf_types=["NoSuchScheduleConfig"])
+        conf = PolicyConfig(sweep_schedule_conf_types=("NoSuchScheduleConfig",))
         with pytest.raises(ValueError, match="Unknown schedule type 'NoSuchScheduleConfig'"):
             conf.to_wandb_sweep()
 
     def test_to_wandb_sweep_merged_params_contain_all_fields(self):
         # diff_clips_first is only in Alternating; verify it appears when sweeping both
         conf = PolicyConfig(
-            sweep_schedule_conf_types=[
+            sweep_schedule_conf_types=(
                 "SigmaAndClipScheduleConfig",
                 "AlternatingSigmaAndClipScheduleConfig",
-            ]
+            )
         )
         result = conf.to_wandb_sweep()
         schedule_params = result["parameters"]["schedule"]["parameters"]
@@ -392,10 +392,10 @@ class TestPolicyConfigSweepScheduleTypes:
     def test_reconstruct_picks_correct_variant_after_sweep(self):
         # Simulate what happens when W&B assigns _type=SigmaAndClipScheduleConfig
         conf = PolicyConfig(
-            sweep_schedule_conf_types=[
+            sweep_schedule_conf_types=(
                 "AlternatingSigmaAndClipScheduleConfig",
                 "SigmaAndClipScheduleConfig",
-            ]
+            )
         )
         # W&B run config as if the agent sampled SigmaAndClipScheduleConfig
         run_conf = {

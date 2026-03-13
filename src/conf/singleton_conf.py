@@ -2,6 +2,7 @@ import dataclasses
 from dataclasses import replace
 from functools import cache
 from pprint import pprint
+from typing import Any, cast
 
 import tyro
 
@@ -111,7 +112,7 @@ def _reconstruct_from_dict(obj, d: dict):
         else:
             updates[key] = item
 
-    return replace(obj, **updates)
+    return replace(cast(Any, obj), **updates)
 
 
 def _get_config():

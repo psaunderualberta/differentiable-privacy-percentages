@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, cast
 
 import chex
 import equinox as eqx
@@ -117,10 +117,11 @@ class MLP(eqx.Module, Network):
             for layer in block:
                 key, _key = jr.split(key)
                 if isinstance(layer, Linear):
+                    weight_shape = cast(tuple[int, ...], layer.weight.shape)
                     new_block.append(
                         Linear(
-                            din=layer.weight.shape[1],
-                            dout=layer.weight.shape[0],
+                            din=weight_shape[1],
+                            dout=weight_shape[0],
                             initialization=layer.initialization,
                             key=key,
                         ),

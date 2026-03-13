@@ -186,7 +186,7 @@ class WandbTableLogger(eqx.Module):
         if data is not None:
             cols = self.cols[table_name]
             data_ordered = [data[col] for col in cols]
-            df = pd.DataFrame(columns=cols, data=[data_ordered])
+            df = pd.DataFrame(columns=cols, data=[data_ordered])  # type: ignore[arg-type]
         else:
             df = pd.read_csv(self.files[table_name].name)
 
@@ -211,7 +211,7 @@ class WandbTableLogger(eqx.Module):
             pd_compatible_data.append([i, *[num.item() for num in line]])
 
         cols = ["run no.", *map(str, range(num_cols))]
-        df = pd.DataFrame(columns=cols, data=pd_compatible_data)
+        df = pd.DataFrame(columns=cols, data=pd_compatible_data)  # type: ignore[arg-type]
         print(df)
 
         # multi-line, but only plotting one line

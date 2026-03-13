@@ -1,5 +1,6 @@
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import tqdm
 import tyro
@@ -46,7 +47,7 @@ def main(
         ids = _most_recent_sweep_ids(num_most_recent, api)
     else:
         raise ValueError("Provide either --sweep-ids or --num-most-recent")
-    sweep_objects: dict[str, wandb.Sweep | None] = {}
+    sweep_objects: dict[str, Any] = {}
     print("The following sweeps will be submitted:")
     for sweep_id in ids:
         try:

@@ -89,7 +89,7 @@ def make_state(schedule, opt_state, key, init_key, step: int) -> dict[str, Any]:
 def save_checkpoint(
     state: dict[str, Any],
     step: int,
-    run: wandb.sdk.wandb_run.Run,
+    run: Any,
 ) -> None:
     """Save training state locally with Orbax and upload to W&B as an artifact.
 

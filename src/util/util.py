@@ -1,4 +1,5 @@
 import ast
+from typing import Any, cast
 
 import equinox as eqx
 import jax
@@ -292,7 +293,7 @@ def classification_accuracy(model: eqx.Module, x: Array, y: Array) -> Array:
     Returns:
         Scalar accuracy in [0, 100].
     """
-    pred_y = jax.vmap(model)(x).squeeze()
+    pred_y = eqx.filter_vmap(cast(Any, model))(x).squeeze()
     pred_y_int = jnp.argmax(pred_y, axis=1)
     y_int = jnp.argmax(y, axis=1)
     return jnp.mean(pred_y_int == y_int) * 100

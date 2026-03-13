@@ -1,3 +1,5 @@
+from typing import cast
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -8,23 +10,24 @@ import plotly.graph_objects as go
 
 
 def max_loss_aggregator(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, str]:
-    agg = df.groupby("step")["loss"].max().reset_index()
-    return agg["step"], agg["loss"], "Max Loss"
+    agg = cast(pd.DataFrame, df.groupby("step")["loss"].max().reset_index())
+    return cast(pd.Series, agg["step"]), cast(pd.Series, agg["loss"]), "Max Loss"
 
 
 def mean_loss_aggregator(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, str]:
-    agg = df.groupby("step")["loss"].mean().reset_index()
-    return agg["step"], agg["loss"], "Mean Loss"
+    agg = cast(pd.DataFrame, df.groupby("step")["loss"].mean().reset_index())
+    return cast(pd.Series, agg["step"]), cast(pd.Series, agg["loss"]), "Mean Loss"
 
 
 def min_loss_aggregator(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, str]:
-    agg = df.groupby("step")["loss"].min().reset_index()
-    return agg["step"], agg["loss"], "Min Loss"
+    agg = cast(pd.DataFrame, df.groupby("step")["loss"].min().reset_index())
+    return cast(pd.Series, agg["step"]), cast(pd.Series, agg["loss"]), "Min Loss"
 
 
 def std_loss_aggregator(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, str]:
-    agg = df.groupby("step")["loss"].std().reset_index()
-    return agg["step"], agg["loss"], "Std Dev of Loss"
+    std_series = cast(pd.Series, df.groupby("step")["loss"].std())
+    agg = cast(pd.DataFrame, std_series.reset_index())
+    return cast(pd.Series, agg["step"]), cast(pd.Series, agg["loss"]), "Std Dev of Loss"
 
 
 ### ----
@@ -33,23 +36,24 @@ def std_loss_aggregator(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, str]:
 
 
 def max_accuracy_aggregator(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, str]:
-    agg = df.groupby("step")["accuracy"].max().reset_index()
-    return agg["step"], agg["accuracy"], "Max Accuracy"
+    agg = cast(pd.DataFrame, df.groupby("step")["accuracy"].max().reset_index())
+    return cast(pd.Series, agg["step"]), cast(pd.Series, agg["accuracy"]), "Max Accuracy"
 
 
 def mean_accuracy_aggregator(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, str]:
-    agg = df.groupby("step")["accuracy"].mean().reset_index()
-    return agg["step"], agg["accuracy"], "Mean Accuracy"
+    agg = cast(pd.DataFrame, df.groupby("step")["accuracy"].mean().reset_index())
+    return cast(pd.Series, agg["step"]), cast(pd.Series, agg["accuracy"]), "Mean Accuracy"
 
 
 def min_accuracy_aggregator(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, str]:
-    agg = df.groupby("step")["accuracy"].min().reset_index()
-    return agg["step"], agg["accuracy"], "Min Accuracy"
+    agg = cast(pd.DataFrame, df.groupby("step")["accuracy"].min().reset_index())
+    return cast(pd.Series, agg["step"]), cast(pd.Series, agg["accuracy"]), "Min Accuracy"
 
 
 def std_accuracy_aggregator(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, str]:
-    agg = df.groupby("step")["accuracy"].std().reset_index()
-    return agg["step"], agg["accuracy"], "Std Dev of Accuracy"
+    std_series = cast(pd.Series, df.groupby("step")["accuracy"].std())
+    agg = cast(pd.DataFrame, std_series.reset_index())
+    return cast(pd.Series, agg["step"]), cast(pd.Series, agg["accuracy"]), "Std Dev of Accuracy"
 
 
 def multi_line_plotter(
