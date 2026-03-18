@@ -197,6 +197,7 @@ class GDPPrivacyParameters(eqx.Module):
         return self.mu_schedule_to_weights(C / schedule)
 
     # TODO: Move projection into the gradient computation
+    @eqx.filter_jit
     def project_weights(self, weights: Array, tol: float | Array = 1e-6) -> Array:
         """
         post-GD weights (i.e. after updating sigma, clip, policy, or any three)
@@ -215,7 +216,7 @@ class GDPPrivacyParameters(eqx.Module):
         def c_i_tildes_cond(lo_hi: tuple[Array, Array]) -> Array:
             c_i_tildes, mu = lo_hi
             f_ = c_i_tildes * (1 + 2 * mu * jnp.exp(c_i_tildes**2)) - weights
-            return jnp.all(f_ > tol)
+            return jnp.any(f_ > tol)
 
         def c_i_tildes_body(
             lo_hi: tuple[Array, Array],
