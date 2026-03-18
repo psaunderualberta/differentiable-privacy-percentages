@@ -379,6 +379,12 @@ _feasible_w_st = st.lists(
     max_size=_T_FIXED,
 )
 
+_weight_val_small_st = st.lists(
+    st.floats(min_value=-0.1, max_value=0.1, allow_nan=False, allow_infinity=False),
+    min_size=_T_FIXED,
+    max_size=_T_FIXED,
+)
+
 
 class TestProjectWeightsProperties:
     """Geometric invariants of the privacy-constrained weight projection."""
@@ -430,6 +436,33 @@ class TestProjectWeightsProperties:
         weights = jnp.array(w, dtype=jnp.float32)
         projected = _PROJ_PARAMS.project_weights(weights)
         assert float(jnp.sum(jnp.exp(projected**2))) <= float(jnp.sum(jnp.exp(weights**2))) + 1e-3
+
+    @given(w=_infeasible_w_st, perturb=_weight_val_small_st)
+    @_jax_settings
+    def test_projection_seems_closest(self, w, perturb):
+        """
+        Perturbing the projected point w' & re-projecting produces a point
+        farther from w than w'.
+        Intuitively, approximates the property that w' is the closest point to w.
+        """
+        weights = jnp.array(w, dtype=jnp.float32)
+        perturb = jnp.array(perturb, dtype=jnp.float32)
+        projected = _PROJ_PARAMS.project_weights(weights)
+        actual = float(jnp.sum(jnp.exp(projected**2)))
+        assert actual == pytest.approx(_PROJ_BOUND, rel=1e-2)
+
+        new_projected = projected + perturb
+        bound = float(jnp.sum(jnp.exp(new_projected**2)))
+
+        # re-project if perturbation no longer adheres to privacy constraints
+        if bound > _PROJ_BOUND:
+            assume(jnp.all(new_projected > 0))
+
+            new_projected = _PROJ_PARAMS.project_weights(new_projected)
+            actual = float(jnp.sum(jnp.exp(new_projected**2)))
+            assert jnp.allclose(actual, _PROJ_BOUND, atol=1e-2)
+
+        assert jnp.linalg.norm(weights - projected) <= jnp.linalg.norm(weights - new_projected)
 
 
 # ===========================================================================
