@@ -261,7 +261,7 @@ class GDPPrivacyParameters(eqx.Module):
             return (new_lo, new_hi)
 
         min_val = jnp.asarray(0.0)  # mu is constrained to be >= 0
-        max_val = jnp.asarray(5.0)
+        max_val = jnp.asarray(bound)
 
         # run bisection
         lo_hi = jlax.while_loop(cond, body, (min_val, max_val))
