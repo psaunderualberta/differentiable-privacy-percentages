@@ -1,3 +1,4 @@
+import inspect
 import os
 from collections.abc import Callable
 from typing import cast
@@ -6,9 +7,9 @@ import jax.random as jr
 import pandas as pd
 import plotly.express as px
 import tqdm
+import wandb
 from jaxtyping import Array, PRNGKeyArray
 
-import wandb
 from environments.dp import (
     DP_RL_Params,
     train_with_noise,
@@ -192,9 +193,14 @@ class Baseline:
                 best_run_accuracy = run_accuracy
                 best_params = run_params
 
+        class_params = inspect.signature(schedule_class).parameters
+        print(f"Best Parameters for {schedule_class.__name__}:")
+        for param, param_name in zip(best_params, class_params):
+            print(f"\t{param_name} = {param}")
+
         schedule = schedule_class(*best_params)
 
-        return self.generate_schedule_data(schedule, name, key, with_progress_bar=True)
+        return self.generate_schedule_data(schedule, name, key, with_progress_bar=with_progress_bar)
 
     def log_comparison(
         self,
