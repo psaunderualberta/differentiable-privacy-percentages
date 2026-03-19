@@ -39,7 +39,7 @@ class WarmupSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         """Initialise the schedule with constant warmup schedules and learnable tail schedules.
 
         During warmup, constant σ and clip schedules are used. After warmup, the tail schedules
-        take over. Projection only updates σ (like SigmaAndClipSchedule), leaving clip unchanged.
+        take over. Projection only updates clip (leaving σ unchanged), the inverse of SigmaAndClipSchedule.
 
         Args:
             noise_warmup: Constant σ schedule used during warmup.
@@ -113,60 +113,60 @@ class WarmupSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         is_warmup = self._is_warmup()
         is_last_warmup = self.step_count == self.warmup_steps - 1
 
-        private_clips = self.get_private_clips()
+        private_sigmas = self.get_private_sigmas()
         private_weights = self.privacy_params.project_weights(
-            private_clips / self.get_private_sigmas(),
+            self.get_private_clips() / private_sigmas,
         ).squeeze()
 
-        new_noises = private_clips / private_weights
+        new_clips = private_weights * private_sigmas
 
-        # Project σ schedules; clip schedules are left unchanged (SigmaAndClipSchedule behaviour).
-        proj_noise_warmup = ConstantSchedule.from_projection(
-            self.noise_warmup,
-            new_noises,
-        )
-        proj_noise_tail = self.noise_tail.__class__.from_projection(
-            self.noise_tail,
-            new_noises,
-        )
-
-        # Phase selection for warmup noise: update during warmup, freeze post-warmup.
-        final_noise_warmup = jtree.map(
-            lambda new, old: jlax.select(is_warmup, new, old),
-            proj_noise_warmup,
-            self.noise_warmup,
-        )
-
-        # Phase selection for tail noise:
-        #   warmup (not last): keep current tail unchanged
-        #   last warmup step:  initialise tail from projected constant values
-        #   post-warmup:       apply projected tail
-        final_noise_tail = jtree.map(
-            lambda proj, current: jlax.select(
-                is_warmup,
-                jlax.select(is_last_warmup, proj, current),
-                proj,
-            ),
-            proj_noise_tail,
-            self.noise_tail,
-        )
-
-        # Clip warmup: project during warmup (for consistency), freeze post-warmup.
+        # Project clip schedules; σ schedules are left unchanged (inverse of SigmaAndClipSchedule).
         proj_clip_warmup = ConstantSchedule.from_projection(
             self.clip_warmup,
-            private_clips,
+            new_clips,
         )
+        proj_clip_tail = self.clip_tail.__class__.from_projection(
+            self.clip_tail,
+            new_clips,
+        )
+
+        # Phase selection for warmup clip: update during warmup, freeze post-warmup.
         final_clip_warmup = jtree.map(
             lambda new, old: jlax.select(is_warmup, new, old),
             proj_clip_warmup,
             self.clip_warmup,
         )
 
+        # Phase selection for tail clip:
+        #   warmup (not last): keep current tail unchanged
+        #   last warmup step:  initialise tail from projected constant values
+        #   post-warmup:       apply projected tail
+        final_clip_tail = jtree.map(
+            lambda proj, current: jlax.select(
+                is_warmup,
+                jlax.select(is_last_warmup, proj, current),
+                proj,
+            ),
+            proj_clip_tail,
+            self.clip_tail,
+        )
+
+        # Sigma warmup: project during warmup (for consistency), freeze post-warmup.
+        proj_noise_warmup = ConstantSchedule.from_projection(
+            self.noise_warmup,
+            private_sigmas,
+        )
+        final_noise_warmup = jtree.map(
+            lambda new, old: jlax.select(is_warmup, new, old),
+            proj_noise_warmup,
+            self.noise_warmup,
+        )
+
         return self.__class__(
             noise_warmup=final_noise_warmup,
             clip_warmup=final_clip_warmup,
-            noise_tail=final_noise_tail,
-            clip_tail=self.clip_tail,
+            noise_tail=self.noise_tail,
+            clip_tail=final_clip_tail,
             privacy_params=self.privacy_params,
             step_count=self.step_count + 1,
             warmup_steps=self.warmup_steps,
