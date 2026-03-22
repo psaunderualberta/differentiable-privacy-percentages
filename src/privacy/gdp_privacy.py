@@ -1,4 +1,5 @@
 import equinox as eqx
+import jax
 import jax.lax as jlax
 import jax.numpy as jnp
 import jax.scipy.stats as jstats
@@ -7,6 +8,62 @@ from scipy import optimize
 
 from conf.singleton_conf import SingletonConfig
 from util.util import pytree_has_inf
+
+# ---------------------------------------------------------------------------
+# Helpers for project_sigma_and_clip — Euclidean projection onto
+#   sum_i (exp(X_i^2 / Y_i^2) - 1) <= B   (X = clips, Y = sigmas)
+# via outer bisection on the dual variable lambda and inner 2D Newton solve.
+# ---------------------------------------------------------------------------
+
+
+def _sc_residual(a, b, x, y, lam):
+    mu2 = (a / b) ** 2
+    e = jnp.exp(mu2)
+    f0 = a - x + lam * (2.0 * a / b**2) * e
+    f1 = b - y - lam * (2.0 * a**2 / b**3) * e
+    return f0, f1
+
+
+def _sc_jacobian(a, b, lam):
+    mu2 = (a / b) ** 2
+    e = jnp.exp(mu2)
+    c = lam * e
+    j00 = 1.0 + (2.0 * c / b**2) * (1.0 + 2.0 * mu2)
+    j01 = -4.0 * c * a / b**3 * (1.0 + mu2)
+    j10 = j01
+    j11 = 1.0 + 2.0 * c * a**2 / b**4 * (3.0 + 2.0 * mu2)
+    return j00, j01, j10, j11
+
+
+def _sc_newton_step(a, b, x, y, lam):
+    f0, f1 = _sc_residual(a, b, x, y, lam)
+    j00, j01, j10, j11 = _sc_jacobian(a, b, lam)
+    det = j00 * j11 - j01 * j10
+    det = jnp.where(jnp.abs(det) < 1e-30, 1e-30, det)
+    da = -(j11 * f0 - j01 * f1) / det
+    db = -(-j10 * f0 + j00 * f1) / det
+    return da, db
+
+
+def _sc_inner_solve_scalar(a, b, x, y, lam):
+    """Newton solve for a single (a, b) component. Vectorize with vmap."""
+
+    def body(_, state):
+        a, b = state
+        da, db = _sc_newton_step(a, b, x, y, lam)
+        max_step_a = jnp.where(da < 0, -0.9 * a / da, 1.0)
+        max_step_b = jnp.where(db < 0, -0.9 * b / db, 1.0)
+        alpha = jnp.minimum(1.0, jnp.minimum(max_step_a, max_step_b))
+        return (
+            jnp.maximum(a + alpha * da, 1e-12),
+            jnp.maximum(b + alpha * db, 1e-12),
+        )
+
+    return jlax.fori_loop(0, 15, body, (a, b))
+
+
+# Vectorized inner solve over all T components simultaneously.
+_sc_inner_solve_vec = jax.vmap(_sc_inner_solve_scalar, in_axes=(0, 0, 0, 0, None))
 
 
 def approx_to_gdp(eps, delta, tol=1e-12) -> float:
@@ -271,6 +328,75 @@ class GDPPrivacyParameters(eqx.Module):
         mu = safe_avg(lo_hi)
 
         return get_c_i_tildes(mu)
+
+    @eqx.filter_jit
+    def project_sigma_and_clip(
+        self,
+        sigmas: Array,
+        clips: Array,
+    ) -> tuple[Array, Array]:
+        """Project (sigmas, clips) onto the GDP privacy constraint in Euclidean space.
+
+        Finds the nearest point (in L2) satisfying
+            sum_i (exp((clip_i / sigma_i)^2) - 1) <= (mu/p)^2.
+
+        Uses outer bisection on the dual variable lambda and a per-component
+        2D Newton solve for the proximal subproblem, fully JIT-compatible.
+
+        Args:
+            sigmas: Per-step noise multipliers, shape (T,).
+            clips: Per-step clipping thresholds, shape (T,).
+
+        Returns:
+            Tuple of (projected_sigmas, projected_clips), each shape (T,).
+        """
+        # Constraint: sum_i (exp(X_i^2/Y_i^2) - 1) <= B  with X=clips, Y=sigmas
+        X, Y = clips, sigmas
+        B = (self.mu / self.p) ** 2
+
+        S = jnp.sum(jnp.exp((X / Y) ** 2) - 1.0)
+        feasible = S <= B
+
+        def _solve_for_lam(lam):
+            X_p, Y_p = _sc_inner_solve_vec(X, Y, X, Y, lam)
+            h = jnp.sum(jnp.exp((X_p / Y_p) ** 2) - 1.0) - B
+            return h, X_p, Y_p
+
+        # Find lambda_max by repeated doubling until h(lambda_max) <= 0.
+        init_h, _, _ = _solve_for_lam(jnp.asarray(1.0))
+
+        def _double_cond(state):
+            _, h = state
+            return h > 0
+
+        def _double_body(state):
+            lam_max, _ = state
+            lam_max = lam_max * 2.0
+            h, _, _ = _solve_for_lam(lam_max)
+            return (lam_max, h)
+
+        lam_max, _ = jlax.while_loop(_double_cond, _double_body, (jnp.asarray(1.0), init_h))
+
+        # Bisect over [0, lam_max] for 60 iterations (~1e-18 relative precision).
+        def bisect_body(_, state):
+            lam_lo, lam_hi = state
+            lam_mid = (lam_lo + lam_hi) / 2.0
+            h, _, _ = _solve_for_lam(lam_mid)
+            lam_lo = jnp.where(h > 0, lam_mid, lam_lo)
+            lam_hi = jnp.where(h > 0, lam_hi, lam_mid)
+            return (lam_lo, lam_hi)
+
+        lam_lo, lam_hi = jlax.fori_loop(0, 60, bisect_body, (jnp.asarray(0.0), lam_max))
+
+        lam_final = (lam_lo + lam_hi) / 2.0
+        _, X_proj, Y_proj = _solve_for_lam(lam_final)
+
+        # If already feasible, return originals unchanged.
+        X_out = jnp.where(feasible, X, X_proj)
+        Y_out = jnp.where(feasible, Y, Y_proj)
+
+        # X=clips, Y=sigmas — return (sigmas, clips)
+        return Y_out, X_out
 
 
 def get_privacy_params(dataset_length: int) -> GDPPrivacyParameters:

@@ -8,6 +8,7 @@ via their @register decorators.
 from policy.schedules import (  # noqa: F401
     alternating,
     dynamic_dpsgd,
+    parallel_sigma_and_clip,
     policy_and_clip,
     sigma_and_clip,
     warmup_alternating,

@@ -16,6 +16,7 @@ from networks.mlp.config import MLPConfig
 from policy.schedules.config import (
     AlternatingSigmaAndClipScheduleConfig,
     DynamicDPSGDScheduleConfig,
+    ParallelSigmaAndClipScheduleConfig,
     PolicyAndClipScheduleConfig,
     SigmaAndClipScheduleConfig,
     WarmupAlternatingSigmaAndClipScheduleConfig,
@@ -48,6 +49,10 @@ ScheduleConfig = Union[
     Annotated[
         WarmupSigmaAndClipScheduleConfig,
         tyro.conf.subcommand("warmup-sigma-and-clip"),
+    ],
+    Annotated[
+        ParallelSigmaAndClipScheduleConfig,
+        tyro.conf.subcommand("parallel-sigma-and-clip"),
     ],
 ]
 

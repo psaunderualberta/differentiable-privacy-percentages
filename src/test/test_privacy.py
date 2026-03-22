@@ -520,3 +520,187 @@ class TestProjectWeights:
         # tight projection must shrink weights; loose projection is identity
         assert jnp.allclose(proj_loose, weights, atol=1e-4)
         assert jnp.all(proj_tight < proj_loose)
+
+
+# ---------------------------------------------------------------------------
+# project_sigma_and_clip
+#
+# The constraint is sum_i (exp((clip_i / sigma_i)^2) - 1) <= B where
+# B = (mu/p)^2.  For EPS=1, DELTA≈0.127, P=0.1 → mu≈1.0, B≈100.
+#
+# Feasible baseline:  sigma=2.0, clip=1.0 → ratio=0.5, each term≈0.28, sum≈2.8.
+# Infeasible baseline: sigma=1.0, clip=2.0 → ratio=2.0, each term≈53.6, sum≈536.
+# ---------------------------------------------------------------------------
+
+
+def _sc_budget(params: GDPPrivacyParameters) -> float:
+    """The RHS of the sigma/clip constraint: (mu/p)^2."""
+    return float((params.mu / params.p) ** 2)
+
+
+def _sc_constraint(sigmas: jnp.ndarray, clips: jnp.ndarray) -> float:
+    """Evaluate sum_i (exp((clip_i/sigma_i)^2) - 1)."""
+    return float(jnp.sum(jnp.exp((clips / sigmas) ** 2) - 1.0))
+
+
+class TestProjectSigmaAndClip:
+    def test_output_shapes(self, params):
+        sigmas = jnp.ones(T) * 2.0
+        clips = jnp.ones(T) * 1.0
+        ps, pc = params.project_sigma_and_clip(sigmas, clips)
+        assert ps.shape == (T,)
+        assert pc.shape == (T,)
+
+    def test_feasible_input_unchanged(self, params):
+        # sum ≈ 2.8 << B ≈ 100 — already feasible.
+        sigmas = jnp.ones(T) * 2.0
+        clips = jnp.ones(T) * 1.0
+        ps, pc = params.project_sigma_and_clip(sigmas, clips)
+        assert jnp.allclose(ps, sigmas, atol=1e-4)
+        assert jnp.allclose(pc, clips, atol=1e-4)
+
+    def test_constraint_satisfied_for_infeasible_input(self, params):
+        # sum ≈ 536 >> 100 — infeasible; projected point must satisfy the constraint.
+        sigmas = jnp.ones(T) * 1.0
+        clips = jnp.ones(T) * 2.0
+        ps, pc = params.project_sigma_and_clip(sigmas, clips)
+        assert _sc_constraint(ps, pc) <= _sc_budget(params) + 1e-2
+
+    def test_constraint_tight_for_uniform_infeasible(self, params):
+        # Uniform infeasible → projection lands exactly on the boundary.
+        sigmas = jnp.ones(T) * 1.0
+        clips = jnp.ones(T) * 2.0
+        ps, pc = params.project_sigma_and_clip(sigmas, clips)
+        B = _sc_budget(params)
+        assert jnp.isclose(jnp.array(_sc_constraint(ps, pc)), jnp.array(B), rtol=1e-3)
+
+    def test_projected_values_positive(self, params):
+        sigmas = jnp.ones(T) * 0.5
+        clips = jnp.ones(T) * 2.0
+        ps, pc = params.project_sigma_and_clip(sigmas, clips)
+        assert jnp.all(ps > 0)
+        assert jnp.all(pc > 0)
+
+    def test_idempotent(self, params):
+        sigmas = jnp.ones(T) * 1.0
+        clips = jnp.ones(T) * 2.0
+        ps1, pc1 = params.project_sigma_and_clip(sigmas, clips)
+        ps2, pc2 = params.project_sigma_and_clip(ps1, pc1)
+        assert jnp.allclose(ps1, ps2, atol=1e-4)
+        assert jnp.allclose(pc1, pc2, atol=1e-4)
+
+    def test_uniform_infeasible_projects_to_uniform(self, params):
+        # Symmetry: uniform (sigma, clip) → projected sigma and clip are uniform.
+        sigmas = jnp.ones(T) * 1.0
+        clips = jnp.ones(T) * 2.0
+        ps, pc = params.project_sigma_and_clip(sigmas, clips)
+        assert jnp.allclose(ps, ps[0], atol=1e-4)
+        assert jnp.allclose(pc, pc[0], atol=1e-4)
+
+    def test_tighter_budget_reduces_ratio_more(self):
+        # Tighter budget (smaller mu) must shrink clip/sigma further.
+        p_tight = GDPPrivacyParameters(0.5, 0.0524403232877, P, T)  # mu≈0.5, B≈25
+        p_loose = GDPPrivacyParameters(3.0, 0.566737999092, P, T)  # mu≈3.0, B≈900
+        sigmas = jnp.ones(T) * 1.0
+        clips = jnp.ones(T) * 2.0
+        # p_loose is feasible (sum≈536 < B≈900) — projection is identity.
+        # p_tight is infeasible (sum≈536 >> B≈25) — must project.
+        ps_tight, pc_tight = p_tight.project_sigma_and_clip(sigmas, clips)
+        ps_loose, pc_loose = p_loose.project_sigma_and_clip(sigmas, clips)
+        ratio_tight = float(jnp.mean(pc_tight / ps_tight))
+        ratio_loose = float(jnp.mean(pc_loose / ps_loose))
+        assert ratio_tight < ratio_loose
+
+    def test_nonuniform_infeasible_satisfies_constraint(self, params):
+        # Non-uniform infeasible input also satisfies constraint after projection.
+        sigmas = jnp.linspace(0.5, 1.5, T)
+        clips = jnp.linspace(2.0, 3.0, T)
+        ps, pc = params.project_sigma_and_clip(sigmas, clips)
+        assert _sc_constraint(ps, pc) <= _sc_budget(params) + 1e-2
+
+
+# ---------------------------------------------------------------------------
+# ParallelSigmaAndClipSchedule
+# ---------------------------------------------------------------------------
+
+import importlib as _importlib  # noqa: E402
+
+_importlib.import_module("policy.schedules.parallel_sigma_and_clip")
+
+from policy.schedules.config import ParallelSigmaAndClipScheduleConfig  # noqa: E402
+from policy.schedules.parallel_sigma_and_clip import ParallelSigmaAndClipSchedule  # noqa: E402
+
+_T_PSAC = 20
+_P_PSAC = 0.1
+_EPS_PSAC = EPS
+_DELTA_PSAC = DELTA
+
+
+@pytest.fixture
+def psac_params():
+    return GDPPrivacyParameters(_EPS_PSAC, _DELTA_PSAC, _P_PSAC, _T_PSAC)
+
+
+@pytest.fixture
+def psac_schedule(psac_params):
+    conf = ParallelSigmaAndClipScheduleConfig()
+    return ParallelSigmaAndClipSchedule.from_config(conf, psac_params)
+
+
+@pytest.fixture
+def psac_infeasible_schedule(psac_params):
+    """Schedule with clip/sigma >> 1 so project() is non-trivial."""
+    from policy.base_schedules.config import InterpolatedExponentialScheduleConfig
+
+    conf = ParallelSigmaAndClipScheduleConfig(
+        noise=InterpolatedExponentialScheduleConfig(init_value=0.01),  # tiny sigma
+        clip=InterpolatedExponentialScheduleConfig(init_value=3.0),  # large clip
+    )
+    return ParallelSigmaAndClipSchedule.from_config(conf, psac_params)
+
+
+class TestParallelSigmaAndClipSchedule:
+    def test_get_private_sigmas_shape(self, psac_schedule):
+        assert psac_schedule.get_private_sigmas().shape == (_T_PSAC,)
+
+    def test_get_private_clips_shape(self, psac_schedule):
+        assert psac_schedule.get_private_clips().shape == (_T_PSAC,)
+
+    def test_get_private_weights_shape(self, psac_schedule):
+        assert psac_schedule.get_private_weights().shape == (_T_PSAC,)
+
+    def test_sigmas_positive(self, psac_schedule):
+        assert jnp.all(psac_schedule.get_private_sigmas() > 0)
+
+    def test_clips_positive(self, psac_schedule):
+        assert jnp.all(psac_schedule.get_private_clips() > 0)
+
+    def test_project_returns_same_type(self, psac_schedule):
+        projected = psac_schedule.project()
+        assert isinstance(projected, ParallelSigmaAndClipSchedule)
+
+    def test_project_satisfies_privacy_constraint(self, psac_infeasible_schedule, psac_params):
+        projected = psac_infeasible_schedule.project()
+        sigmas = projected.get_private_sigmas()
+        clips = projected.get_private_clips()
+        B = _sc_budget(psac_params)
+        assert _sc_constraint(sigmas, clips) <= B + 1e-2
+
+    def test_project_feasible_unchanged(self, psac_schedule, psac_params):
+        # Default schedule is feasible — project() must be a no-op.
+        sigmas_before = psac_schedule.get_private_sigmas()
+        clips_before = psac_schedule.get_private_clips()
+        projected = psac_schedule.project()
+        assert jnp.allclose(projected.get_private_sigmas(), sigmas_before, atol=1e-4)
+        assert jnp.allclose(projected.get_private_clips(), clips_before, atol=1e-4)
+
+    def test_project_idempotent(self, psac_infeasible_schedule):
+        once = psac_infeasible_schedule.project()
+        twice = once.project()
+        assert jnp.allclose(once.get_private_sigmas(), twice.get_private_sigmas(), atol=1e-4)
+        assert jnp.allclose(once.get_private_clips(), twice.get_private_clips(), atol=1e-4)
+
+    def test_projected_sigmas_clips_positive(self, psac_infeasible_schedule):
+        projected = psac_infeasible_schedule.project()
+        assert jnp.all(projected.get_private_sigmas() > 0)
+        assert jnp.all(projected.get_private_clips() > 0)
