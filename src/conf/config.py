@@ -20,6 +20,7 @@ from policy.schedules.config import (
     PolicyAndClipScheduleConfig,
     SigmaAndClipScheduleConfig,
     WarmupAlternatingSigmaAndClipScheduleConfig,
+    WarmupParallelSigmaAndClipScheduleConfig,
     WarmupSigmaAndClipScheduleConfig,
 )
 from policy.stateful_schedules.config import StatefulMedianGradientNoiseAndClipConfig
@@ -53,6 +54,10 @@ ScheduleConfig = Union[
     Annotated[
         ParallelSigmaAndClipScheduleConfig,
         tyro.conf.subcommand("parallel-sigma-and-clip"),
+    ],
+    Annotated[
+        WarmupParallelSigmaAndClipScheduleConfig,
+        tyro.conf.subcommand("warmup-parallel-sigma-and-clip"),
     ],
 ]
 

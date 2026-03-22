@@ -106,3 +106,19 @@ class WarmupSigmaAndClipScheduleConfig(AbstractNoiseAndClipScheduleConfig):
 
     def to_wandb_sweep(self) -> dict[str, object]:
         return to_wandb_sweep_params(self)
+
+
+@dataclass
+class WarmupParallelSigmaAndClipScheduleConfig(AbstractNoiseAndClipScheduleConfig):
+    noise_tail: BaseScheduleConfig = dataclasses.field(
+        default_factory=InterpolatedExponentialScheduleConfig,
+    )
+    clip_tail: BaseScheduleConfig = dataclasses.field(
+        default_factory=InterpolatedExponentialScheduleConfig,
+    )
+    warmup_noise_init: float = 1.0
+    warmup_clip_init: float = 1.0
+    warmup_pct: float = 0.3
+
+    def to_wandb_sweep(self) -> dict[str, object]:
+        return to_wandb_sweep_params(self)
