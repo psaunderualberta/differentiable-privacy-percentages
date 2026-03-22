@@ -1,5 +1,4 @@
 import equinox as eqx
-import jax
 import jax.lax as jlax
 import jax.numpy as jnp
 import jax.scipy.stats as jstats
@@ -45,25 +44,44 @@ def _sc_newton_step(a, b, x, y, lam):
     return da, db
 
 
-def _sc_inner_solve_scalar(a, b, x, y, lam):
-    """Newton solve for a single (a, b) component. Vectorize with vmap."""
+def _sc_inner_solve_all(as_, bs_, xs, ys, lam):
+    """Newton solve for all T components simultaneously until convergence.
 
-    def body(_, state):
-        a, b = state
-        da, db = _sc_newton_step(a, b, x, y, lam)
-        max_step_a = jnp.where(da < 0, -0.9 * a / da, 1.0)
-        max_step_b = jnp.where(db < 0, -0.9 * b / db, 1.0)
+    Runs a shared while_loop — iterates until the maximum squared residual across
+    all components falls below the tolerance, or the iteration cap is reached.
+
+    Args:
+        as_: Current clip values, shape (T,).
+        bs_: Current sigma values, shape (T,).
+        xs: Target clip values, shape (T,).
+        ys: Target sigma values, shape (T,).
+        lam: Dual variable (scalar).
+
+    Returns:
+        Tuple of projected (as_, bs_), each shape (T,).
+    """
+    _TOL_SQ = jnp.float32(1e-10)  # squared residual tolerance (~3e-6 per component)
+    _MAX_ITER = jnp.int32(500)
+
+    def cond(state):
+        as_, bs_, i = state
+        f0s, f1s = _sc_residual(as_, bs_, xs, ys, lam)
+        return (jnp.max(f0s**2 + f1s**2) > _TOL_SQ) & (i < _MAX_ITER)
+
+    def body(state):
+        as_, bs_, i = state
+        das, dbs = _sc_newton_step(as_, bs_, xs, ys, lam)
+        max_step_a = jnp.where(das < 0, -0.9 * as_ / das, 1.0)
+        max_step_b = jnp.where(dbs < 0, -0.9 * bs_ / dbs, 1.0)
         alpha = jnp.minimum(1.0, jnp.minimum(max_step_a, max_step_b))
         return (
-            jnp.maximum(a + alpha * da, 1e-12),
-            jnp.maximum(b + alpha * db, 1e-12),
+            jnp.maximum(as_ + alpha * das, jnp.float32(1e-12)),
+            jnp.maximum(bs_ + alpha * dbs, jnp.float32(1e-12)),
+            i + jnp.int32(1),
         )
 
-    return jlax.fori_loop(0, 15, body, (a, b))
-
-
-# Vectorized inner solve over all T components simultaneously.
-_sc_inner_solve_vec = jax.vmap(_sc_inner_solve_scalar, in_axes=(0, 0, 0, 0, None))
+    as_out, bs_out, _ = jlax.while_loop(cond, body, (as_, bs_, jnp.int32(0)))
+    return as_out, bs_out
 
 
 def approx_to_gdp(eps, delta, tol=1e-12) -> float:
@@ -358,7 +376,7 @@ class GDPPrivacyParameters(eqx.Module):
         feasible = S <= B
 
         def _solve_for_lam(lam):
-            X_p, Y_p = _sc_inner_solve_vec(X, Y, X, Y, lam)
+            X_p, Y_p = _sc_inner_solve_all(X, Y, X, Y, lam)
             h = jnp.sum(jnp.exp((X_p / Y_p) ** 2) - 1.0) - B
             return h, X_p, Y_p
 

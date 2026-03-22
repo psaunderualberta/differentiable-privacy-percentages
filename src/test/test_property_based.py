@@ -719,14 +719,12 @@ _SC_PARAMS = GDPPrivacyParameters(1.0, 0.126936737507, 0.1, _T_FIXED)
 # B = (mu/p)^2 ≈ 100.0
 _SC_BUDGET = float((_SC_PARAMS.mu / _SC_PARAMS.p) ** 2)
 
-# Infeasible inputs: ratio r = clip/sigma in [1.7, 2.5].
+# Infeasible inputs: uniform sigma in [0.5, 2.0], ratio clip/sigma in [1.7, 2.5].
 # Each term exp(r^2)-1 >= exp(2.89)-1 ≈ 16.8; sum >= 168 > B≈100.
-# Cap ratio at 2.5 (exp(6.25)-1 ≈ 519) to stay well within float32.
-# Restrict sigma >= 1.0: the Newton solver uses a fixed 15-step budget and
-# can under-converge for small sigma due to large exponential curvature.
+# The converged Newton solver handles any sigma in this range reliably.
 _sc_infeasible_st = st.fixed_dictionaries(
     {
-        "sigma": st.floats(min_value=1.0, max_value=2.0, allow_nan=False, allow_infinity=False),
+        "sigma": st.floats(min_value=0.5, max_value=2.0, allow_nan=False, allow_infinity=False),
         "ratio": st.floats(min_value=1.7, max_value=2.5, allow_nan=False, allow_infinity=False),
     }
 )
@@ -739,6 +737,23 @@ _sc_feasible_st = st.fixed_dictionaries(
     }
 )
 
+# Non-uniform infeasible: uniform sigma=1.0, clips in [2.0, 2.5] (ratio in [2, 2.5]).
+# Kept narrow so the Newton solver (max 500 iters) reliably converges for all components.
+# All inputs are infeasible: each term exp(r^2)-1 >= exp(4)-1 ≈ 53.6, sum >= 536 >> B=100.
+_sc_nonuniform_clips_st = st.lists(
+    st.floats(min_value=2.0, max_value=2.5, allow_nan=False, allow_infinity=False),
+    min_size=_T_FIXED,
+    max_size=_T_FIXED,
+)
+_SC_NONUNIFORM_SIGMA = 1.0
+
+# Small perturbations for the nearest-point test — perturb each (sigma, clip) pair.
+_sc_small_perturb_st = st.lists(
+    st.floats(min_value=-0.05, max_value=0.05, allow_nan=False, allow_infinity=False),
+    min_size=_T_FIXED,
+    max_size=_T_FIXED,
+)
+
 
 def _sc_eval(sigmas, clips):
     return float(jnp.sum(jnp.exp((clips / sigmas) ** 2) - 1.0))
@@ -749,20 +764,12 @@ class TestProjectSigmaAndClipProperties:
 
     @given(d=_sc_infeasible_st)
     @_jax_settings
-    def test_constraint_reduced_after_projection(self, d):
-        """Projecting an infeasible point always reduces the constraint value toward B.
-
-        Note: The algorithm uses a fixed 15-step Newton budget per component, so it
-        may not reach the boundary exactly for all inputs; it always makes progress.
-        The exact boundary case is covered by targeted unit tests.
-        """
+    def test_constraint_satisfied_after_projection(self, d):
+        """Projecting infeasible (sigma, clip) places the result on the constraint boundary."""
         sigmas = jnp.ones(_T_FIXED) * d["sigma"]
         clips = jnp.ones(_T_FIXED) * d["sigma"] * d["ratio"]
-        before = _sc_eval(sigmas, clips)
         ps, pc = _SC_PARAMS.project_sigma_and_clip(sigmas, clips)
-        after = _sc_eval(ps, pc)
-        # The projection must reduce the constraint; verify it is strictly smaller.
-        assert after < before
+        assert _sc_eval(ps, pc) == pytest.approx(_SC_BUDGET, rel=1e-2)
 
     @given(d=_sc_feasible_st)
     @_jax_settings
@@ -776,6 +783,64 @@ class TestProjectSigmaAndClipProperties:
 
     @given(d=_sc_infeasible_st)
     @_jax_settings
+    def test_idempotent(self, d):
+        """Projecting an already-projected result is a no-op."""
+        sigmas = jnp.ones(_T_FIXED) * d["sigma"]
+        clips = jnp.ones(_T_FIXED) * d["sigma"] * d["ratio"]
+        ps1, pc1 = _SC_PARAMS.project_sigma_and_clip(sigmas, clips)
+        ps2, pc2 = _SC_PARAMS.project_sigma_and_clip(ps1, pc1)
+        assert jnp.allclose(ps1, ps2, atol=1e-3)
+        assert jnp.allclose(pc1, pc2, atol=1e-3)
+
+    @given(clips=_sc_nonuniform_clips_st)
+    @_jax_settings
+    def test_ordering_preserved(self, clips):
+        """If clip[i] > clip[j] before projection (uniform sigma) then pc[i] >= pc[j] after."""
+        sigmas = jnp.ones(_T_FIXED) * _SC_NONUNIFORM_SIGMA
+        clips_arr = jnp.array(clips, dtype=jnp.float32)
+        _, pc = _SC_PARAMS.project_sigma_and_clip(sigmas, clips_arr)
+        clips_np = np.array(clips_arr)
+        pc_np = np.array(pc)
+        before = clips_np[:, None] - clips_np[None, :]
+        after = pc_np[:, None] - pc_np[None, :]
+        mask = before > 0
+        assert np.all(after[mask] >= -1e-4)
+
+    @given(d=_sc_infeasible_st)
+    @_jax_settings
+    def test_projection_does_not_increase_expenditure(self, d):
+        """Projection never increases the constraint value."""
+        sigmas = jnp.ones(_T_FIXED) * d["sigma"]
+        clips = jnp.ones(_T_FIXED) * d["sigma"] * d["ratio"]
+        ps, pc = _SC_PARAMS.project_sigma_and_clip(sigmas, clips)
+        assert _sc_eval(ps, pc) <= _sc_eval(sigmas, clips) + 1e-3
+
+    @given(d=_sc_infeasible_st, perturb=_sc_small_perturb_st)
+    @_jax_settings
+    def test_projection_seems_closest(self, d, perturb):
+        """Perturbing the projected point and re-projecting gives a point farther from the input.
+
+        Approximates the property that the projected point is the nearest feasible point.
+        """
+        sigmas = jnp.ones(_T_FIXED) * d["sigma"]
+        clips = jnp.ones(_T_FIXED) * d["sigma"] * d["ratio"]
+        ps, pc = _SC_PARAMS.project_sigma_and_clip(sigmas, clips)
+        assert _sc_eval(ps, pc) == pytest.approx(_SC_BUDGET, rel=1e-2)
+
+        perturb_arr = jnp.array(perturb, dtype=jnp.float32)
+        ps_p = jnp.maximum(ps + perturb_arr, jnp.float32(1e-6))
+        pc_p = jnp.maximum(pc + perturb_arr, jnp.float32(1e-6))
+
+        if _sc_eval(ps_p, pc_p) > _SC_BUDGET:
+            assume(jnp.all(ps_p > 0) and jnp.all(pc_p > 0))
+            ps_p, pc_p = _SC_PARAMS.project_sigma_and_clip(ps_p, pc_p)
+
+        dist_orig = float(jnp.linalg.norm(jnp.concatenate([sigmas - ps, clips - pc])))
+        dist_perturb = float(jnp.linalg.norm(jnp.concatenate([sigmas - ps_p, clips - pc_p])))
+        assert dist_orig <= dist_perturb + 1e-4
+
+    @given(d=_sc_infeasible_st)
+    @_jax_settings
     def test_projected_values_positive(self, d):
         """Projected sigmas and clips are always strictly positive."""
         sigmas = jnp.ones(_T_FIXED) * d["sigma"]
@@ -783,15 +848,6 @@ class TestProjectSigmaAndClipProperties:
         ps, pc = _SC_PARAMS.project_sigma_and_clip(sigmas, clips)
         assert jnp.all(ps > 0)
         assert jnp.all(pc > 0)
-
-    @given(d=_sc_infeasible_st)
-    @_jax_settings
-    def test_projection_does_not_increase_constraint(self, d):
-        """Projection never increases the constraint value."""
-        sigmas = jnp.ones(_T_FIXED) * d["sigma"]
-        clips = jnp.ones(_T_FIXED) * d["sigma"] * d["ratio"]
-        ps, pc = _SC_PARAMS.project_sigma_and_clip(sigmas, clips)
-        assert _sc_eval(ps, pc) <= _sc_eval(sigmas, clips) + 1e-3
 
 
 # ===========================================================================
@@ -841,19 +897,13 @@ class TestParallelSigmaAndClipScheduleProperties:
 
     @given(ratio=_psac_infeasible_ratio_st)
     @_jax_settings
-    def test_project_reduces_constraint(self, ratio):
-        """project() always reduces the constraint value for infeasible schedules.
-
-        The fixed Newton iteration budget may not reach the exact boundary for all
-        inputs; exact convergence is covered by targeted unit tests.
-        """
+    def test_project_satisfies_constraint(self, ratio):
+        """After project(), the privacy constraint is satisfied (on the boundary)."""
         schedule = _make_psac_with_ratio(ratio)
-        sigmas_before = schedule.get_private_sigmas()
-        clips_before = schedule.get_private_clips()
-        before = _sc_eval(sigmas_before, clips_before)
         projected = schedule.project()
-        after = _sc_eval(projected.get_private_sigmas(), projected.get_private_clips())
-        assert after < before
+        sigmas = projected.get_private_sigmas()
+        clips = projected.get_private_clips()
+        assert _sc_eval(sigmas, clips) == pytest.approx(_PSAC_BUDGET, rel=1e-2)
 
     @given(ratio=_psac_feasible_ratio_st)
     @_jax_settings
