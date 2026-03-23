@@ -212,7 +212,6 @@ class WandbTableLogger(eqx.Module):
 
         cols = ["run no.", *map(str, range(num_cols))]
         df = pd.DataFrame(columns=cols, data=pd_compatible_data)  # type: ignore[arg-type]
-        print(df)
 
         # multi-line, but only plotting one line
         fig = multi_line_plotter(df, table_name, color_indicator="run no.")
