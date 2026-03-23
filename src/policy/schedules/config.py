@@ -120,6 +120,7 @@ class WarmupParallelSigmaAndClipScheduleConfig(AbstractNoiseAndClipScheduleConfi
     warmup_noise_init: float = 1.0
     warmup_clip_init: float = 1.0
     warmup_pct: float = 0.3
+    use_fista: bool = False
 
     def to_wandb_sweep(self) -> dict[str, object]:
         return to_wandb_sweep_params(self)
