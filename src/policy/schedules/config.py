@@ -87,6 +87,7 @@ class ParallelSigmaAndClipScheduleConfig(AbstractNoiseAndClipScheduleConfig):
     clip: BaseScheduleConfig = dataclasses.field(
         default_factory=InterpolatedExponentialScheduleConfig,
     )
+    use_fista: bool = False
 
     def to_wandb_sweep(self) -> dict[str, object]:
         return to_wandb_sweep_params(self)

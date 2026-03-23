@@ -41,6 +41,8 @@ def main():
     schedule_conf = SingletonConfig.get_policy_config_instance().schedule
     schedule = policy_factory(schedule_conf, gdp_params)
     schedule = schedule.project()
+    if getattr(schedule, "use_fista", False):
+        schedule = schedule.fista_extrapolate()
     policy_batch_size = sweep_config.policy.batch_size
 
     # Initialize private environment
@@ -138,8 +140,13 @@ def main():
         updates, opt_state = optimizer.update(grads, opt_state, schedule)
         schedule = schedule.apply_updates(updates)
         schedule = ensure_valid_pytree(schedule, "policy in main after updates")
-        schedule = schedule.project()
-        schedule = ensure_valid_pytree(schedule, "policy in main after project")
+        x_new = schedule.project()
+        x_new = ensure_valid_pytree(x_new, "policy in main after project")
+        if getattr(schedule, "use_fista", False):
+            schedule = schedule.fista_advance(x_new)
+            schedule = schedule.fista_extrapolate()
+        else:
+            schedule = x_new
 
         iterator.set_description(f"Training Progress - Loss: {loss:.4f}")
 

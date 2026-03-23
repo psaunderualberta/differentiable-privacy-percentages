@@ -20,7 +20,7 @@ class ConstantScheduleConfig(AbstractScheduleConfig):
 
 @dataclass
 class InterpolatedExponentialScheduleConfig(AbstractScheduleConfig):
-    num_keypoints: int = 50
+    num_keypoints: int = 10
     init_value: float = 1.0
 
     def to_wandb_sweep(self):
