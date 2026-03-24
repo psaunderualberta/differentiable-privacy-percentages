@@ -28,11 +28,46 @@ def image_ds_saver(ds, x_file, y_file):
     image_key = "image" if "image" in dds.features else "img"
     images = dds[image_key]
     labels = dds["label"]
-    pd_labels = pd.Series(labels).astype(int)  # type: ignore
-    labels = jnp.asarray(pd.get_dummies(pd_labels).values).astype(jnp.float32)
+    labels = jnp.asarray(pd.get_dummies(labels).values).astype(jnp.float32)
 
     jnp.save(x_file, images)  # type: ignore
     jnp.save(y_file, labels)  # type: ignore
+
+
+def _dataloader_eyepacs(_=None, test=False) -> tuple[chex.Array, chex.Array]:
+    eyepacs_datadir = os.path.join(__DATA_DIR, "eyepacs")
+    os.makedirs(eyepacs_datadir, exist_ok=True)
+    image_train_file = os.path.join(eyepacs_datadir, "eyepacs-train.npy")
+    label_train_file = os.path.join(eyepacs_datadir, "eyepacs-labels-train.npy")
+    image_test_file = os.path.join(eyepacs_datadir, "eyepacs-test.npy")
+    label_test_file = os.path.join(eyepacs_datadir, "eyepacs-labels-test.npy")
+    if not os.path.exists(image_train_file) or not os.path.exists(label_train_file):
+        print("Downloading eyepacs dataset...")
+        ds = load_dataset("bumbledeep/eyepacs", split="train")
+        image_ds_saver(ds, image_train_file, label_train_file)
+
+    if not os.path.exists(image_test_file) or not os.path.exists(label_test_file):
+        print("Downloading eyepacs test dataset...")
+        ds = load_dataset("bumbledeep/eyepacs", split="test")
+        image_ds_saver(ds, image_test_file, label_test_file)
+    if test:
+        image_train_file = image_test_file
+        label_train_file = label_test_file
+
+    images = jnp.load(image_train_file)
+    labels = jnp.load(label_train_file)
+    # convert 'labels' to one-hot encoding
+
+    # normalize & flatten images
+    print(images.max(), images.min())
+    exit()
+    images = images / 255.0
+
+    # Add channel dimension in second position
+    # (ndatapoints, nchannels, *image_shape)
+    images = jnp.expand_dims(images, 1)
+
+    return images, labels
 
 
 def _dataloader_california(degree=1):
@@ -194,6 +229,7 @@ DATALOADERS = {
     "mnist": _dataloader_mnist,
     "cifar-10": _dataloader_cifar_10,
     "fashion-mnist": _dataloader_fashion_mnist,
+    "eyepacs": _dataloader_eyepacs,
 }
 
 
