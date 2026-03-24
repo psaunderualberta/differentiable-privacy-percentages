@@ -11,6 +11,7 @@ from conf.config_util import (
     merge_wandb_sweep_union,
     to_wandb_sweep_params,
 )
+from networks.auto.config import AutoNetworkConfig
 from networks.cnn.config import CNNConfig
 from networks.mlp.config import MLPConfig
 from policy.schedules.config import (
@@ -62,6 +63,7 @@ ScheduleConfig = Union[
 ]
 
 NetworkConfig = Union[
+    Annotated[AutoNetworkConfig, tyro.conf.subcommand("auto")],
     Annotated[MLPConfig, tyro.conf.subcommand("mlp")],
     Annotated[CNNConfig, tyro.conf.subcommand("cnn")],
 ]
@@ -120,7 +122,7 @@ class PolicyConfig:
 class EnvConfig:
     "Configuration for the Reinforcement Learning Environment"
 
-    network: NetworkConfig = dataclasses.field(default_factory=MLPConfig)
+    network: NetworkConfig = dataclasses.field(default_factory=AutoNetworkConfig)
 
     lr: DistributionConfig = dist_config_helper(value=0.1, distribution="constant")
     optimizer: Literal["sgd", "adam", "adamw"] = "sgd"

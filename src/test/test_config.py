@@ -32,6 +32,7 @@ from conf.config_util import (
     to_wandb_sweep_params,
 )
 from conf.singleton_conf import _get_config_classes, _reconstruct_from_dict
+from networks.auto.config import AutoNetworkConfig
 from networks.cnn.config import CNNConfig
 from networks.mlp.config import MLPConfig
 from policy.base_schedules.config import (
@@ -283,11 +284,11 @@ class TestToWandbSweepParams:
         assert "parameters" in result
 
     def test_network_union_field_gets_type(self):
-        conf = EnvConfig()  # default: MLPConfig
+        conf = EnvConfig()  # default: AutoNetworkConfig
         result = to_wandb_sweep_params(conf)
         network_params = result["parameters"]["network"]["parameters"]
         assert "_type" in network_params
-        assert network_params["_type"] == {"value": "MLPConfig"}
+        assert network_params["_type"] == {"value": "AutoNetworkConfig"}
 
 
 # ---------------------------------------------------------------------------
@@ -805,7 +806,7 @@ class TestConfigDefaults:
 
     def test_env_config_defaults(self):
         conf = EnvConfig()
-        assert isinstance(conf.network, MLPConfig)
+        assert isinstance(conf.network, AutoNetworkConfig)
         assert conf.optimizer == "sgd"
         assert conf.loss_type == "cce"
         assert conf.eps == pytest.approx(0.5)

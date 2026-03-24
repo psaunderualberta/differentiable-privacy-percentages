@@ -52,15 +52,18 @@ def _get_config_classes() -> dict[str, type]:
         importlib.import_module(_mod)
 
     from networks._registry import _REGISTRY as _network_reg
+    from networks.auto.config import AutoNetworkConfig
     from policy.base_schedules._registry import _REGISTRY as _base_reg
     from policy.schedules._registry import _REGISTRY as _sched_reg
     from policy.stateful_schedules._registry import _REGISTRY as _stateful_reg
 
-    return {
+    result = {
         config_cls.__name__: config_cls
         for registry in (_base_reg, _sched_reg, _stateful_reg, _network_reg)
         for config_cls in registry
     }
+    result["AutoNetworkConfig"] = AutoNetworkConfig  # sentinel, not in registry
+    return result
 
 
 def _reconstruct_from_dict(obj, d: dict):
