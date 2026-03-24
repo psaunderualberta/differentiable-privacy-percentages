@@ -29,6 +29,7 @@ for _mod in [
     "policy.base_schedules.constant",
     "policy.base_schedules.exponential",
     "policy.base_schedules.clipped",
+    "policy.base_schedules.bspline",
     "policy.schedules.alternating",
     "policy.schedules.sigma_and_clip",
     "policy.schedules.policy_and_clip",
@@ -43,8 +44,10 @@ for _mod in [
 
 from networks.mlp.config import MLPConfig  # noqa: E402
 from networks.mlp.MLP import MLP  # noqa: E402 (after registry population)
+from policy.base_schedules.bspline import BSplineSchedule  # noqa: E402
 from policy.base_schedules.clipped import InterpolatedClippedSchedule  # noqa: E402
 from policy.base_schedules.config import (  # noqa: E402
+    BSplineScheduleConfig,
     InterpolatedClippedScheduleConfig,
     InterpolatedExponentialScheduleConfig,
 )
@@ -873,11 +876,7 @@ def _make_psac_with_ratio(ratio: float) -> ParallelSigmaAndClipSchedule:
     sigmas = _PSAC_BASE.get_private_sigmas()
     clips = sigmas * ratio
     new_clip = _PSAC_BASE.clip_schedule.__class__.from_projection(_PSAC_BASE.clip_schedule, clips)
-    return ParallelSigmaAndClipSchedule(
-        noise_schedule=_PSAC_BASE.noise_schedule,
-        clip_schedule=new_clip,
-        privacy_params=_PSAC_PARAMS,
-    )
+    return eqx.tree_at(lambda s: s.clip_schedule, _PSAC_BASE, new_clip)
 
 
 # Infeasible ratio range: [1.7, 2.5] guarantees sum > 100 while keeping the
@@ -932,3 +931,155 @@ class TestParallelSigmaAndClipScheduleProperties:
         schedule = _make_psac_with_ratio(ratio)
         assert schedule.get_private_sigmas().shape == (_T_FIXED,)
         assert schedule.get_private_clips().shape == (_T_FIXED,)
+
+
+# ===========================================================================
+# BSplineSchedule — property tests
+# ===========================================================================
+
+_BSPLINE_T = 50  # fixed T for all B-spline tests
+_BSPLINE_N_CP = 8  # number of control points
+_BSPLINE_DEGREE = 3  # cubic spline
+
+# Control-point strategy: unconstrained reals (positivity transform handles them)
+_bspline_cp_st = st.lists(
+    _schedule_val_st,
+    min_size=_BSPLINE_N_CP,
+    max_size=_BSPLINE_N_CP,
+)
+
+
+def _make_bspline(positivity: str = "softplus") -> BSplineSchedule:
+    conf = BSplineScheduleConfig(
+        num_control_points=_BSPLINE_N_CP,
+        degree=_BSPLINE_DEGREE,
+        init_value=1.0,
+        positivity=positivity,
+    )
+    return BSplineSchedule.from_config(conf, T=_BSPLINE_T)
+
+
+class TestBSplineScheduleProperties:
+    """Structural and positivity invariants of BSplineSchedule."""
+
+    # --- shape ---
+
+    @given(T=st.integers(min_value=_BSPLINE_N_CP, max_value=200))
+    @_jax_settings
+    def test_output_length_matches_T(self, T):
+        """get_valid_schedule() and get_raw_schedule() both return length-T arrays."""
+        conf = BSplineScheduleConfig(num_control_points=_BSPLINE_N_CP, degree=_BSPLINE_DEGREE)
+        sched = BSplineSchedule.from_config(conf, T=T)
+        assert sched.get_valid_schedule().shape == (T,)
+        assert sched.get_raw_schedule().shape == (T,)
+
+    # --- positivity (softplus) ---
+
+    @given(cp=_bspline_cp_st)
+    @_jax_settings
+    def test_valid_schedule_positive_softplus(self, cp):
+        """softplus variant: get_valid_schedule() > 0 for any unconstrained control points."""
+        sched = _make_bspline("softplus")
+        sched = eqx.tree_at(lambda s: s.control_points, sched, jnp.array(cp, dtype=jnp.float32))
+        out = sched.get_valid_schedule()
+        assert jnp.all(out > 0), f"Non-positive values: {out[out <= 0]}"
+
+    # --- positivity (exp) ---
+
+    @given(
+        cp=st.lists(
+            st.floats(min_value=-5.0, max_value=5.0, allow_nan=False, allow_infinity=False),
+            min_size=_BSPLINE_N_CP,
+            max_size=_BSPLINE_N_CP,
+        )
+    )
+    @_jax_settings
+    def test_valid_schedule_positive_exp(self, cp):
+        """exp variant: get_valid_schedule() > 0 for any finite control points."""
+        sched = _make_bspline("exp")
+        sched = eqx.tree_at(lambda s: s.control_points, sched, jnp.array(cp, dtype=jnp.float32))
+        out = sched.get_valid_schedule()
+        assert jnp.all(out > 0), f"Non-positive values: {out[out <= 0]}"
+
+    # --- init value ---
+
+    @given(init=st.floats(min_value=0.1, max_value=5.0, allow_nan=False, allow_infinity=False))
+    @_jax_settings
+    def test_init_value_is_uniform(self, init):
+        """After from_config, get_valid_schedule() is uniformly equal to init_value."""
+        conf = BSplineScheduleConfig(
+            num_control_points=_BSPLINE_N_CP,
+            degree=_BSPLINE_DEGREE,
+            init_value=init,
+            positivity="softplus",
+        )
+        sched = BSplineSchedule.from_config(conf, T=_BSPLINE_T)
+        out = sched.get_valid_schedule()
+        assert jnp.allclose(out, init, atol=1e-4), f"Expected uniform {init}, got {out}"
+
+    @given(init=st.floats(min_value=0.1, max_value=5.0, allow_nan=False, allow_infinity=False))
+    @_jax_settings
+    def test_init_value_is_uniform_exp(self, init):
+        """Same check for the exp positivity variant."""
+        conf = BSplineScheduleConfig(
+            num_control_points=_BSPLINE_N_CP,
+            degree=_BSPLINE_DEGREE,
+            init_value=init,
+            positivity="exp",
+        )
+        sched = BSplineSchedule.from_config(conf, T=_BSPLINE_T)
+        out = sched.get_valid_schedule()
+        assert jnp.allclose(out, init, atol=1e-4), f"Expected uniform {init}, got {out}"
+
+    # --- from_projection round-trip ---
+
+    @given(target=st.floats(min_value=0.1, max_value=5.0, allow_nan=False, allow_infinity=False))
+    @_jax_settings
+    def test_from_projection_uniform_target(self, target):
+        """from_projection on a uniform target recovers a nearly-uniform schedule."""
+        sched = _make_bspline("softplus")
+        projection = jnp.ones(_BSPLINE_T) * target
+        sched2 = BSplineSchedule.from_projection(sched, projection)
+        out = sched2.get_valid_schedule()
+        assert jnp.allclose(out, target, atol=1e-3), (
+            f"Expected ~{target}, got range [{out.min():.4f}, {out.max():.4f}]"
+        )
+
+    @given(target=st.floats(min_value=0.1, max_value=5.0, allow_nan=False, allow_infinity=False))
+    @_jax_settings
+    def test_from_projection_uniform_target_exp(self, target):
+        """Same round-trip check for the exp variant."""
+        sched = _make_bspline("exp")
+        projection = jnp.ones(_BSPLINE_T) * target
+        sched2 = BSplineSchedule.from_projection(sched, projection)
+        out = sched2.get_valid_schedule()
+        assert jnp.allclose(out, target, atol=1e-3), (
+            f"Expected ~{target}, got range [{out.min():.4f}, {out.max():.4f}]"
+        )
+
+    # --- projected schedule is always positive ---
+
+    @given(target=st.floats(min_value=0.1, max_value=5.0, allow_nan=False, allow_infinity=False))
+    @_jax_settings
+    def test_from_projection_output_positive(self, target):
+        """from_projection always produces a positive schedule regardless of target."""
+        sched = _make_bspline("softplus")
+        projection = jnp.ones(_BSPLINE_T) * target
+        sched2 = BSplineSchedule.from_projection(sched, projection)
+        assert jnp.all(sched2.get_valid_schedule() > 0)
+
+    # --- degree + num_control_points combinations ---
+
+    @given(
+        n_cp=st.integers(min_value=4, max_value=15),
+        degree=st.integers(min_value=1, max_value=3),
+    )
+    @_jax_settings
+    def test_valid_schedule_positive_various_configs(self, n_cp, degree):
+        """Valid schedule is positive for any valid (num_control_points, degree) combo."""
+        assume(n_cp >= degree + 1)
+        conf = BSplineScheduleConfig(
+            num_control_points=n_cp, degree=degree, init_value=1.0, positivity="softplus"
+        )
+        sched = BSplineSchedule.from_config(conf, T=_BSPLINE_T)
+        assert jnp.all(sched.get_valid_schedule() > 0)

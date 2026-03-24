@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from conf.config_util import to_wandb_sweep_params
 from policy.base_schedules.config import (
     BaseScheduleConfig,
+    BSplineScheduleConfig,
     InterpolatedExponentialScheduleConfig,
 )
 
@@ -112,14 +113,14 @@ class WarmupSigmaAndClipScheduleConfig(AbstractNoiseAndClipScheduleConfig):
 @dataclass
 class WarmupParallelSigmaAndClipScheduleConfig(AbstractNoiseAndClipScheduleConfig):
     noise_tail: BaseScheduleConfig = dataclasses.field(
-        default_factory=InterpolatedExponentialScheduleConfig,
+        default_factory=BSplineScheduleConfig,
     )
     clip_tail: BaseScheduleConfig = dataclasses.field(
-        default_factory=InterpolatedExponentialScheduleConfig,
+        default_factory=BSplineScheduleConfig,
     )
     warmup_noise_init: float = 1.0
     warmup_clip_init: float = 1.0
-    warmup_pct: float = 0.3
+    warmup_pct: float = 0.1
     use_fista: bool = False
 
     def to_wandb_sweep(self) -> dict[str, object]:

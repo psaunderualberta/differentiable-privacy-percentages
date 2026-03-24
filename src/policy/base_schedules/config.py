@@ -36,6 +36,16 @@ class InterpolatedClippedScheduleConfig(AbstractScheduleConfig):
         return to_wandb_sweep_params(self)
 
 
+@dataclass
+class BSplineScheduleConfig(AbstractScheduleConfig):
+    num_control_points: int = 10
+    degree: int = 3
+    init_value: float = 1.0
+
+    def to_wandb_sweep(self):
+        return to_wandb_sweep_params(self)
+
+
 # Union type used by schedule configs to select a base schedule parametrisation.
 # tyro treats a Union of dataclasses as subcommands automatically; only the
 # selected variant is ever constructed.
@@ -49,4 +59,5 @@ BaseScheduleConfig = Union[
         InterpolatedClippedScheduleConfig,
         tyro.conf.subcommand("interpolated-clipped"),
     ],
+    Annotated[BSplineScheduleConfig, tyro.conf.subcommand("bspline")],
 ]
