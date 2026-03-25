@@ -33,6 +33,14 @@ DATASET_NETWORK_DEFAULTS = {
         mlp=MLPConfig(hidden_sizes=(256,)),
     ),
     "california": MLPConfig(hidden_sizes=(64, 32)),
+    "eyepacs": CNNConfig(
+        channels=(16, 32),
+        kernel_sizes=(8, 4),
+        paddings=(2, 0),
+        strides=(2, 2),
+        pool_kernel_size=2,
+        mlp=MLPConfig(hidden_sizes=(32,)),
+    ),
 }
 
 

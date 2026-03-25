@@ -48,6 +48,7 @@ dependencies = [
     "jaxlib==0.6.2",
     "jaxtyping==0.3.2",
     "joblib==1.5.1",
+    "kaggle>=2.0.0",
     "kaleido==1.0.0",
     "kiwisolver==1.4.9",
     "logistro==1.1.0",
