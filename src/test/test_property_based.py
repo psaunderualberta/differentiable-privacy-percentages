@@ -949,12 +949,12 @@ _bspline_cp_st = st.lists(
 )
 
 
-def _make_bspline(positivity: str = "softplus") -> BSplineSchedule:
+def _make_bspline(use_exp: bool = False) -> BSplineSchedule:
     conf = BSplineScheduleConfig(
         num_control_points=_BSPLINE_N_CP,
         degree=_BSPLINE_DEGREE,
         init_value=1.0,
-        positivity=positivity,
+        use_exp=use_exp,
     )
     return BSplineSchedule.from_config(conf, T=_BSPLINE_T)
 
@@ -979,7 +979,7 @@ class TestBSplineScheduleProperties:
     @_jax_settings
     def test_valid_schedule_positive_softplus(self, cp):
         """softplus variant: get_valid_schedule() > 0 for any unconstrained control points."""
-        sched = _make_bspline("softplus")
+        sched = _make_bspline(use_exp=False)
         sched = eqx.tree_at(lambda s: s.control_points, sched, jnp.array(cp, dtype=jnp.float32))
         out = sched.get_valid_schedule()
         assert jnp.all(out > 0), f"Non-positive values: {out[out <= 0]}"
@@ -996,7 +996,7 @@ class TestBSplineScheduleProperties:
     @_jax_settings
     def test_valid_schedule_positive_exp(self, cp):
         """exp variant: get_valid_schedule() > 0 for any finite control points."""
-        sched = _make_bspline("exp")
+        sched = _make_bspline(use_exp=True)
         sched = eqx.tree_at(lambda s: s.control_points, sched, jnp.array(cp, dtype=jnp.float32))
         out = sched.get_valid_schedule()
         assert jnp.all(out > 0), f"Non-positive values: {out[out <= 0]}"
@@ -1011,7 +1011,7 @@ class TestBSplineScheduleProperties:
             num_control_points=_BSPLINE_N_CP,
             degree=_BSPLINE_DEGREE,
             init_value=init,
-            positivity="softplus",
+            use_exp=False,
         )
         sched = BSplineSchedule.from_config(conf, T=_BSPLINE_T)
         out = sched.get_valid_schedule()
@@ -1025,7 +1025,7 @@ class TestBSplineScheduleProperties:
             num_control_points=_BSPLINE_N_CP,
             degree=_BSPLINE_DEGREE,
             init_value=init,
-            positivity="exp",
+            use_exp=True,
         )
         sched = BSplineSchedule.from_config(conf, T=_BSPLINE_T)
         out = sched.get_valid_schedule()
@@ -1037,7 +1037,7 @@ class TestBSplineScheduleProperties:
     @_jax_settings
     def test_from_projection_uniform_target(self, target):
         """from_projection on a uniform target recovers a nearly-uniform schedule."""
-        sched = _make_bspline("softplus")
+        sched = _make_bspline(use_exp=False)
         projection = jnp.ones(_BSPLINE_T) * target
         sched2 = BSplineSchedule.from_projection(sched, projection)
         out = sched2.get_valid_schedule()
@@ -1049,7 +1049,7 @@ class TestBSplineScheduleProperties:
     @_jax_settings
     def test_from_projection_uniform_target_exp(self, target):
         """Same round-trip check for the exp variant."""
-        sched = _make_bspline("exp")
+        sched = _make_bspline(use_exp=True)
         projection = jnp.ones(_BSPLINE_T) * target
         sched2 = BSplineSchedule.from_projection(sched, projection)
         out = sched2.get_valid_schedule()
@@ -1063,7 +1063,7 @@ class TestBSplineScheduleProperties:
     @_jax_settings
     def test_from_projection_output_positive(self, target):
         """from_projection always produces a positive schedule regardless of target."""
-        sched = _make_bspline("softplus")
+        sched = _make_bspline(use_exp=False)
         projection = jnp.ones(_BSPLINE_T) * target
         sched2 = BSplineSchedule.from_projection(sched, projection)
         assert jnp.all(sched2.get_valid_schedule() > 0)
@@ -1079,7 +1079,7 @@ class TestBSplineScheduleProperties:
         """Valid schedule is positive for any valid (num_control_points, degree) combo."""
         assume(n_cp >= degree + 1)
         conf = BSplineScheduleConfig(
-            num_control_points=n_cp, degree=degree, init_value=1.0, positivity="softplus"
+            num_control_points=n_cp, degree=degree, init_value=1.0, use_exp=False
         )
         sched = BSplineSchedule.from_config(conf, T=_BSPLINE_T)
         assert jnp.all(sched.get_valid_schedule() > 0)

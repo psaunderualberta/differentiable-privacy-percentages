@@ -1,7 +1,6 @@
+import dataclasses
 import os
 
-import chex
-import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 from datasets import load_dataset
@@ -11,6 +10,123 @@ from sklearn.preprocessing import PolynomialFeatures
 from conf.singleton_conf import SingletonConfig
 
 __DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
+
+# ---------------------------------------------------------------------------
+# Module-level memmap cache: avoids re-opening the file header on every callback
+# call.  Keyed by absolute path; values are read-only np.memmap objects.
+# ---------------------------------------------------------------------------
+_MMAP_CACHE: dict[str, np.ndarray] = {}
+
+
+def _get_mmap(path: str) -> np.ndarray:
+    if path not in _MMAP_CACHE:
+        _MMAP_CACHE[path] = np.load(path, mmap_mode="r")
+    return _MMAP_CACHE[path]
+
+
+# ---------------------------------------------------------------------------
+# Per-dataset preprocessing applied inside load callbacks
+# ---------------------------------------------------------------------------
+
+
+def _preprocess(
+    x_raw: np.ndarray,
+    y_raw: np.ndarray,
+    dataset_name: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply per-dataset preprocessing to raw (uint8) arrays loaded from .npy files.
+
+    Returns float32 arrays with channels-first image layout where applicable.
+    """
+    if dataset_name in ("mnist", "fashion-mnist"):
+        # Stored as (N, H, W) uint8 → (N, 1, H, W) float32
+        x = x_raw.astype(np.float32)[:, np.newaxis] / 255.0
+    elif dataset_name == "cifar-10":
+        # Stored as (N, H, W, C) uint8 → (N, C, H, W) float32
+        x = x_raw.astype(np.float32).transpose(0, 3, 1, 2) / 255.0
+    elif dataset_name == "eyepacs":
+        # Stored as (N, C, H, W) uint8 → (N, C, H, W) float32
+        x = x_raw.astype(np.float32) / 255.0
+    elif dataset_name == "california":
+        # Already stored as float32 with full preprocessing applied at cache time
+        x = x_raw.astype(np.float32)
+    else:
+        raise ValueError(f"Unknown dataset: {dataset_name!r}")
+    y = y_raw.astype(np.float32)
+    return x, y
+
+
+def _get_sample_shape(raw_shape: tuple[int, ...], dataset_name: str) -> tuple[int, ...]:
+    """Return the per-sample shape *after* preprocessing."""
+    if dataset_name in ("mnist", "fashion-mnist"):
+        return (1, *raw_shape)  # insert channel dim
+    if dataset_name == "cifar-10":
+        H, W, C = raw_shape
+        return (C, H, W)  # HWC → CHW
+    # eyepacs (already CHW), california (1-D features)
+    return raw_shape
+
+
+# ---------------------------------------------------------------------------
+# DatasetLoader
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class DatasetLoader:
+    """Static (non-JAX-array) container for dataset file paths and metadata.
+
+    Stored as a static field in DP_RL_Params (equinox.Module); never traced
+    by JAX.  Provides load methods used inside jax.pure_callback.
+    """
+
+    x_path: str
+    y_path: str
+    val_x_path: str
+    val_y_path: str
+    n_train: int
+    n_val: int
+    """Number of validation samples after trimming to a multiple of val_chunk_size."""
+    sample_shape: tuple[int, ...]
+    """Per-sample shape *after* preprocessing, e.g. (1, 28, 28) for MNIST."""
+    label_shape: tuple[int, ...]
+    """Per-label shape, e.g. (10,) for MNIST one-hot."""
+    dataset_name: str
+    val_chunk_size: int
+    """Must divide n_val; determines the static batch shape inside the val scan."""
+
+    def __post_init__(self) -> None:
+        assert self.n_val % self.val_chunk_size == 0, (
+            f"n_val ({self.n_val}) must be divisible by val_chunk_size "
+            f"({self.val_chunk_size}).  Adjust val_chunk_size or trim n_val "
+            f"before constructing DatasetLoader."
+        )
+
+    def load_train_batch(
+        self,
+        indices: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Fetch and preprocess a training mini-batch by integer index array.
+
+        Called from inside jax.pure_callback; must return plain numpy arrays.
+        """
+        x_mmap = _get_mmap(self.x_path)
+        y_mmap = _get_mmap(self.y_path)
+        return _preprocess(x_mmap[indices].copy(), y_mmap[indices].copy(), self.dataset_name)
+
+    def load_val_chunk(
+        self,
+        indices: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Fetch and preprocess a validation chunk by integer index array."""
+        x_mmap = _get_mmap(self.val_x_path)
+        y_mmap = _get_mmap(self.val_y_path)
+        return _preprocess(x_mmap[indices].copy(), y_mmap[indices].copy(), self.dataset_name)
+
+
+# ---------------------------------------------------------------------------
+# File-creation helpers (unchanged logic; now also used by get_dataset_loader)
+# ---------------------------------------------------------------------------
 
 
 def image_ds_saver(ds, x_file, y_file):
@@ -23,6 +139,8 @@ def image_ds_saver(ds, x_file, y_file):
         x_file: Path to save the images array.
         y_file: Path to save the one-hot labels array.
     """
+    import jax.numpy as jnp
+
     # https://huggingface.co/docs/datasets/en/use_with_jax
     dds = ds.with_format("jax")
     image_key = "image" if "image" in dds.features else "img"
@@ -130,196 +248,245 @@ def _eyepacs_download_and_cache(datadir: str) -> None:
         print(f"  Saved {split_name} split.")
 
 
-def _dataloader_eyepacs(_=None, test=False) -> tuple[chex.Array, chex.Array]:
-    """Load EyePACS retinal images, downloading and caching as .npy files if necessary.
+def _ensure_mnist_cached(datadir: str, variant: str = "mnist") -> tuple[str, str, str, str]:
+    """Ensure MNIST or Fashion-MNIST .npy files exist; return their paths."""
+    os.makedirs(datadir, exist_ok=True)
+    if variant == "mnist":
+        hf_train_name = "ylecun/mnist"
+        prefix = "mnist"
+    else:
+        hf_train_name = "zalando-datasets/fashion_mnist"
+        prefix = "fashion-mnist"
 
-    Downloads from Kaggle on first use (requires ~/.kaggle/kaggle.json and the
-    kaggle package). Images are resized to (3, 256, 256) RGB and normalised to [0, 1].
-    The Kaggle train set is split 80/20 into train and val splits.
+    x_train = os.path.join(datadir, f"{prefix}-train.npy")
+    y_train = os.path.join(datadir, f"{prefix}-labels-train.npy")
+    x_test = os.path.join(datadir, f"{prefix}-test.npy")
+    y_test = os.path.join(datadir, f"{prefix}-labels-test.npy")
 
-    Args:
-        _: Unused (polynomial degree placeholder for API consistency).
-        test: If True, return the validation split instead of the training split.
+    if not os.path.exists(x_train) or not os.path.exists(y_train):
+        print(f"Downloading {variant} dataset...")
+        ds = load_dataset(hf_train_name, split="train")
+        image_ds_saver(ds, x_train, y_train)
+    if not os.path.exists(x_test) or not os.path.exists(y_test):
+        print(f"Downloading {variant} test dataset...")
+        ds = load_dataset(hf_train_name, split="test")
+        image_ds_saver(ds, x_test, y_test)
+
+    return x_train, y_train, x_test, y_test
+
+
+def _ensure_cifar10_cached(datadir: str) -> tuple[str, str, str, str]:
+    """Ensure CIFAR-10 .npy files exist; return their paths."""
+    os.makedirs(datadir, exist_ok=True)
+    x_train = os.path.join(datadir, "cifar-10-train.npy")
+    y_train = os.path.join(datadir, "cifar-10-labels-train.npy")
+    x_test = os.path.join(datadir, "cifar-10-test.npy")
+    y_test = os.path.join(datadir, "cifar-10-labels-test.npy")
+
+    if not os.path.exists(x_train) or not os.path.exists(y_train):
+        print("Downloading CIFAR-10 dataset...")
+        ds = load_dataset("uoft-cs/cifar10", split="train")
+        image_ds_saver(ds, x_train, y_train)
+    if not os.path.exists(x_test) or not os.path.exists(y_test):
+        print("Downloading CIFAR-10 test dataset...")
+        ds = load_dataset("uoft-cs/cifar10", split="test")
+        image_ds_saver(ds, x_test, y_test)
+
+    return x_train, y_train, x_test, y_test
+
+
+def _ensure_eyepacs_cached(datadir: str) -> tuple[str, str, str, str]:
+    """Ensure EyePACS .npy files exist; return their paths."""
+    os.makedirs(datadir, exist_ok=True)
+    x_train = os.path.join(datadir, "eyepacs-train.npy")
+    y_train = os.path.join(datadir, "eyepacs-labels-train.npy")
+    x_val = os.path.join(datadir, "eyepacs-val.npy")
+    y_val = os.path.join(datadir, "eyepacs-labels-val.npy")
+
+    if not all(os.path.exists(p) for p in [x_train, y_train, x_val, y_val]):
+        _eyepacs_download_and_cache(datadir)
+
+    return x_train, y_train, x_val, y_val
+
+
+def _ensure_california_cached(datadir: str, poly_d: int | None) -> tuple[str, str, str, str]:
+    """Ensure California Housing .npy files exist with an 80/20 train/val split."""
+    os.makedirs(datadir, exist_ok=True)
+    degree = poly_d if poly_d is not None else 1
+    prefix = f"california-d{degree}"
+    x_train = os.path.join(datadir, f"{prefix}-train.npy")
+    y_train = os.path.join(datadir, f"{prefix}-labels-train.npy")
+    x_val = os.path.join(datadir, f"{prefix}-val.npy")
+    y_val = os.path.join(datadir, f"{prefix}-labels-val.npy")
+
+    if all(os.path.exists(p) for p in [x_train, y_train, x_val, y_val]):
+        return x_train, y_train, x_val, y_val
+
+    X_raw, y_raw = fetch_california_housing(return_X_y=True)
+    X = (X_raw - X_raw.mean(axis=0)) / X_raw.std(axis=0)
+    X = PolynomialFeatures(degree=degree, include_bias=False).fit_transform(X)
+    X = (X - X.mean(axis=0)) / X.std(axis=0)
+    y_classes = y_raw < np.median(y_raw)
+    y = pd.get_dummies(y_classes).values.astype(np.float32)
+    X = X.astype(np.float32)
+
+    rng = np.random.default_rng(seed=42)
+    indices = rng.permutation(len(X))
+    n_train = int(len(X) * 0.8)
+    train_idx, val_idx = indices[:n_train], indices[n_train:]
+
+    np.save(x_train, X[train_idx])
+    np.save(y_train, y[train_idx])
+    np.save(x_val, X[val_idx])
+    np.save(y_val, y[val_idx])
+
+    return x_train, y_train, x_val, y_val
+
+
+# ---------------------------------------------------------------------------
+# Primary entry point: get_dataset_loader
+# ---------------------------------------------------------------------------
+
+
+def get_dataset_loader() -> DatasetLoader:
+    """Ensure dataset files exist and return a DatasetLoader with file paths + metadata.
+
+    Does NOT load any data into memory.  The DatasetLoader's load_* methods
+    use numpy memmaps to fetch only the requested samples on demand.
+    """
+    sweep_config = SingletonConfig.get_sweep_config_instance()
+    env_config = SingletonConfig.get_environment_config_instance()
+    dataset_name = sweep_config.dataset
+    poly_d = sweep_config.dataset_poly_d
+    batch_size = env_config.batch_size
+
+    if dataset_name == "mnist":
+        datadir = os.path.join(__DATA_DIR, "mnist")
+        x_train, y_train, x_val, y_val = _ensure_mnist_cached(datadir, variant="mnist")
+    elif dataset_name == "fashion-mnist":
+        datadir = os.path.join(__DATA_DIR, "fashion-mnist")
+        x_train, y_train, x_val, y_val = _ensure_mnist_cached(datadir, variant="fashion-mnist")
+    elif dataset_name == "cifar-10":
+        datadir = os.path.join(__DATA_DIR, "cifar-10")
+        x_train, y_train, x_val, y_val = _ensure_cifar10_cached(datadir)
+    elif dataset_name == "eyepacs":
+        datadir = os.path.join(__DATA_DIR, "eyepacs")
+        x_train, y_train, x_val, y_val = _ensure_eyepacs_cached(datadir)
+    elif dataset_name == "california":
+        datadir = os.path.join(__DATA_DIR, "california")
+        x_train, y_train, x_val, y_val = _ensure_california_cached(datadir, poly_d)
+    else:
+        raise ValueError(f"Unknown dataset: {dataset_name!r}")
+
+    # Read shapes from file headers only (no data loaded into RAM)
+    x_mmap = np.load(x_train, mmap_mode="r")
+    y_mmap = np.load(y_train, mmap_mode="r")
+    xv_mmap = np.load(x_val, mmap_mode="r")
+
+    n_train = x_mmap.shape[0]
+    n_val_raw = xv_mmap.shape[0]
+    raw_sample_shape = x_mmap.shape[1:]
+    label_shape = y_mmap.shape[1:]
+
+    sample_shape = _get_sample_shape(raw_sample_shape, dataset_name)
+
+    # Trim val set to a multiple of batch_size so val_chunk_size divides n_val exactly
+    val_chunk_size = batch_size
+    n_val = (n_val_raw // val_chunk_size) * val_chunk_size
+
+    return DatasetLoader(
+        x_path=x_train,
+        y_path=y_train,
+        val_x_path=x_val,
+        val_y_path=y_val,
+        n_train=n_train,
+        n_val=n_val,
+        sample_shape=sample_shape,
+        label_shape=label_shape,
+        dataset_name=dataset_name,
+        val_chunk_size=val_chunk_size,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible helpers
+# ---------------------------------------------------------------------------
+
+
+def get_dataset_shapes() -> tuple[
+    tuple[int, ...],
+    tuple[int, ...],
+    tuple[int, ...],
+    tuple[int, ...],
+]:
+    """Return the shapes of the train and validation splits from the configured dataset.
 
     Returns:
-        Tuple of (images, labels) with shapes (N, 3, 256, 256) and (N, 5).
+        Tuple of (X_shape, y_shape, valX_shape, valy_shape).
     """
+    loader = get_dataset_loader()
+    X_shape = (loader.n_train, *loader.sample_shape)
+    y_shape = (loader.n_train, *loader.label_shape)
+    valX_shape = (loader.n_val, *loader.sample_shape)
+    valy_shape = (loader.n_val, *loader.label_shape)
+    return X_shape, y_shape, valX_shape, valy_shape
+
+
+# ---------------------------------------------------------------------------
+# Legacy full-load helpers (kept for external / one-off use; not used in the
+# main training pipeline after the DatasetLoader refactor)
+# ---------------------------------------------------------------------------
+
+
+def _dataloader_eyepacs(_=None, test=False) -> tuple[np.ndarray, np.ndarray]:
+    """Load EyePACS retinal images as float32 arrays (legacy full-load helper)."""
     eyepacs_datadir = os.path.join(__DATA_DIR, "eyepacs")
-    os.makedirs(eyepacs_datadir, exist_ok=True)
-    image_train_file = os.path.join(eyepacs_datadir, "eyepacs-train.npy")
-    label_train_file = os.path.join(eyepacs_datadir, "eyepacs-labels-train.npy")
-    image_val_file = os.path.join(eyepacs_datadir, "eyepacs-val.npy")
-    label_val_file = os.path.join(eyepacs_datadir, "eyepacs-labels-val.npy")
-
-    cached = all(
-        os.path.exists(p)
-        for p in [image_train_file, label_train_file, image_val_file, label_val_file]
-    )
-    if not cached:
-        _eyepacs_download_and_cache(eyepacs_datadir)
-
-    img_file = image_val_file if test else image_train_file
-    lbl_file = label_val_file if test else label_train_file
-
-    images = jnp.asarray(np.load(img_file)) / 255.0  # (N, 3, 256, 256) float
-    labels = jnp.asarray(np.load(lbl_file))  # (N, 5)
+    x_train, y_train, x_val, y_val = _ensure_eyepacs_cached(eyepacs_datadir)
+    img_file = x_val if test else x_train
+    lbl_file = y_val if test else y_train
+    images = np.load(img_file).astype(np.float32) / 255.0
+    labels = np.load(lbl_file).astype(np.float32)
     return images, labels
 
 
 def _dataloader_california(degree=1):
-    """Load the California Housing dataset as a binary classification problem.
-
-    Applies polynomial feature expansion and z-score normalization.
-    The regression target is binarised by comparing each value to the median.
-
-    Args:
-        degree: Polynomial degree for feature expansion (default 1 = no expansion).
-
-    Returns:
-        Tuple of (X, y) JAX arrays with shapes (N, features) and (N, 2).
-    """
-    X, y = fetch_california_housing(return_X_y=True)
-    X = (X - X.mean(axis=0)) / X.std(axis=0)
-    X = PolynomialFeatures(degree=degree, include_bias=False).fit_transform(X)
-
-    X = (X - X.mean(axis=0)) / X.std(axis=0)
-    y_classes = y < np.median(y)
-    y = pd.get_dummies(y_classes).values.astype(np.int32)
-    return jnp.asarray(X), jnp.asarray(y)
+    """Load the California Housing dataset as a binary classification problem (legacy)."""
+    california_datadir = os.path.join(__DATA_DIR, "california")
+    poly_d = degree if degree != 1 else None
+    x_train, y_train, _, _ = _ensure_california_cached(california_datadir, poly_d)
+    return np.load(x_train).astype(np.float32), np.load(y_train).astype(np.float32)
 
 
-def _dataloader_mnist(_=None, test=False) -> tuple[chex.Array, chex.Array]:
-    """Load MNIST, downloading and caching as .npy files if necessary.
-
-    Args:
-        _: Unused (polynomial degree placeholder for API consistency).
-        test: If True, return the test split instead of the training split.
-
-    Returns:
-        Tuple of (images, labels) with shapes (N, 1, 28, 28) and (N, 10).
-    """
+def _dataloader_mnist(_=None, test=False) -> tuple[np.ndarray, np.ndarray]:
+    """Load MNIST as float32 arrays (legacy full-load helper)."""
     mnist_datadir = os.path.join(__DATA_DIR, "mnist")
-    os.makedirs(mnist_datadir, exist_ok=True)
-    image_train_file = os.path.join(mnist_datadir, "mnist-train.npy")
-    label_train_file = os.path.join(mnist_datadir, "mnist-labels-train.npy")
-    image_test_file = os.path.join(mnist_datadir, "mnist-test.npy")
-    label_test_file = os.path.join(mnist_datadir, "mnist-labels-test.npy")
-    if not os.path.exists(image_train_file) or not os.path.exists(label_train_file):
-        print("Downloading MNIST dataset...")
-        ds = load_dataset("ylecun/mnist", split="train")
-        image_ds_saver(ds, image_train_file, label_train_file)
-
-    if not os.path.exists(image_test_file) or not os.path.exists(label_test_file):
-        print("Downloading MNIST test dataset...")
-        ds = load_dataset("ylecun/mnist", split="test")
-        image_ds_saver(ds, image_test_file, label_test_file)
-    if test:
-        images = image_test_file
-        labels = label_test_file
-    else:
-        images = image_train_file
-        labels = label_train_file
-
-    images = jnp.load(images)
-    labels = jnp.load(labels)
-    # convert 'labels' to one-hot encoding
-
-    # normalize & flatten images
-    images = images / 255.0
-
-    # Add channel dimension in second position
-    # (ndatapoints, nchannels, *image_shape)
-    images = jnp.expand_dims(images, 1)
-
+    x_train, y_train, x_test, y_test = _ensure_mnist_cached(mnist_datadir, variant="mnist")
+    x_file = x_test if test else x_train
+    y_file = y_test if test else y_train
+    images = np.load(x_file).astype(np.float32)[:, np.newaxis] / 255.0
+    labels = np.load(y_file).astype(np.float32)
     return images, labels
 
 
-def _dataloader_cifar_10(_=None, test=False) -> tuple[chex.Array, chex.Array]:
-    """Load CIFAR-10, downloading and caching as .npy files if necessary.
-
-    Images are converted from (N, H, W, C) to (N, C, H, W) channel-first format
-    and normalised to [0, 1].
-
-    Args:
-        _: Unused (polynomial degree placeholder for API consistency).
-        test: If True, return the test split instead of the training split.
-
-    Returns:
-        Tuple of (images, labels) with shapes (N, 3, 32, 32) and (N, 10).
-    """
-    ds = load_dataset("uoft-cs/cifar10", split="train")
-    # https://huggingface.co/docs/datasets/en/use_with_jax
+def _dataloader_cifar_10(_=None, test=False) -> tuple[np.ndarray, np.ndarray]:
+    """Load CIFAR-10 as float32 arrays (legacy full-load helper)."""
     cifar_datadir = os.path.join(__DATA_DIR, "cifar-10")
-    os.makedirs(cifar_datadir, exist_ok=True)
-    image_train_file = os.path.join(cifar_datadir, "cifar-10-train.npy")
-    label_train_file = os.path.join(cifar_datadir, "cifar-10-labels-train.npy")
-    image_test_file = os.path.join(cifar_datadir, "cifar-10-test.npy")
-    label_test_file = os.path.join(cifar_datadir, "cifar-10-labels-test.npy")
-    if not os.path.exists(image_train_file) or not os.path.exists(label_train_file):
-        print("Downloading CIFAR-10 dataset...")
-        ds = load_dataset("uoft-cs/cifar10", split="train")
-        image_ds_saver(ds, image_train_file, label_train_file)
-
-    if not os.path.exists(image_test_file) or not os.path.exists(label_test_file):
-        print("Downloading CIFAR-10 test dataset...")
-        ds = load_dataset("uoft-cs/cifar10", split="test")
-        image_ds_saver(ds, image_test_file, label_test_file)
-    if test:
-        image_train_file = image_test_file
-        label_train_file = label_test_file
-
-    images = jnp.load(image_train_file)
-    labels = jnp.load(label_train_file)
-
-    # normalize & flatten images
-    images = images / 255.0
-
-    # images are n x n x c, should be c x n x n
-    images = images.transpose((0, 3, 1, 2))
-
+    x_train, y_train, x_test, y_test = _ensure_cifar10_cached(cifar_datadir)
+    x_file = x_test if test else x_train
+    y_file = y_test if test else y_train
+    images = np.load(x_file).astype(np.float32).transpose(0, 3, 1, 2) / 255.0
+    labels = np.load(y_file).astype(np.float32)
     return images, labels
 
 
-def _dataloader_fashion_mnist(_=None, test=False) -> tuple[chex.Array, chex.Array]:
-    """Load Fashion-MNIST, downloading and caching as .npy files if necessary.
-
-    Args:
-        _: Unused (polynomial degree placeholder for API consistency).
-        test: If True, return the test split instead of the training split.
-
-    Returns:
-        Tuple of (images, labels) with shapes (N, 1, 28, 28) and (N, 10).
-    """
-    mnist_datadir = os.path.join(__DATA_DIR, "fashion-mnist")
-    os.makedirs(mnist_datadir, exist_ok=True)
-    image_train_file = os.path.join(mnist_datadir, "fashion-mnist-train.npy")
-    label_train_file = os.path.join(mnist_datadir, "fashion-mnist-labels-train.npy")
-    image_test_file = os.path.join(mnist_datadir, "fashion-mnist-test.npy")
-    label_test_file = os.path.join(mnist_datadir, "fashion-mnist-labels-test.npy")
-    if not os.path.exists(image_train_file) or not os.path.exists(label_train_file):
-        print("Downloading fashion MNIST dataset...")
-        ds = load_dataset("zalando-datasets/fashion_mnist", split="train")
-        image_ds_saver(ds, image_train_file, label_train_file)
-
-    if not os.path.exists(image_test_file) or not os.path.exists(label_test_file):
-        print("Downloading fashion MNIST test dataset...")
-        ds = load_dataset("zalando-datasets/fashion_mnist", split="test")
-        image_ds_saver(ds, image_test_file, label_test_file)
-    if test:
-        image_train_file = image_test_file
-        label_train_file = label_test_file
-
-    images = jnp.load(image_train_file)
-    labels = jnp.load(label_train_file)
-    # convert 'labels' to one-hot encoding
-
-    # normalize & flatten images
-    images = images / 255.0
-
-    # Add channel dimension in second position
-    # (ndatapoints, nchannels, *image_shape)
-    images = jnp.expand_dims(images, 1)
-
+def _dataloader_fashion_mnist(_=None, test=False) -> tuple[np.ndarray, np.ndarray]:
+    """Load Fashion-MNIST as float32 arrays (legacy full-load helper)."""
+    fmnist_datadir = os.path.join(__DATA_DIR, "fashion-mnist")
+    x_train, y_train, x_test, y_test = _ensure_mnist_cached(fmnist_datadir, variant="fashion-mnist")
+    x_file = x_test if test else x_train
+    y_file = y_test if test else y_train
+    images = np.load(x_file).astype(np.float32)[:, np.newaxis] / 255.0
+    labels = np.load(y_file).astype(np.float32)
     return images, labels
 
 
@@ -330,31 +497,6 @@ DATALOADERS = {
     "fashion-mnist": _dataloader_fashion_mnist,
     "eyepacs": _dataloader_eyepacs,
 }
-
-
-def get_datasets():
-    """Load train and test splits for the dataset specified in the singleton config.
-
-    Returns:
-        Tuple of (X_train, y_train, X_test, y_test) JAX arrays.
-    """
-    sweep_config = SingletonConfig.get_sweep_config_instance()
-    X, y = DATALOADERS[sweep_config.dataset](sweep_config.dataset_poly_d)
-    X_test, y_test = DATALOADERS[sweep_config.dataset](
-        sweep_config.dataset_poly_d,
-        test=True,
-    )
-    return X, y, X_test, y_test
-
-
-def get_dataset_shapes():
-    """Return the shapes of the train and validation splits from the configured dataset.
-
-    Returns:
-        Tuple of (X_shape, y_shape, valX_shape, valy_shape).
-    """
-    X, y, valX, valy = get_datasets()
-    return X.shape, y.shape, valX.shape, valy.shape
 
 
 if __name__ == "__main__":

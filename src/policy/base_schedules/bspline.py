@@ -36,14 +36,13 @@ class BSplineSchedule(AbstractSchedule):
     """B-spline base schedule with positivity-constrained control points.
 
     Learnable parameters are ``control_points`` (in unconstrained space).
-    ``get_valid_schedule()`` applies softplus or exp to the control points
-    then multiplies by the precomputed basis matrix.
+    ``get_valid_schedule()`` applies softplus to the control points then
+    multiplies by the precomputed basis matrix.
 
     Attributes:
         control_points: Unconstrained learnable array of shape (num_control_points,).
         basis: Fixed B-spline basis matrix of shape (T, num_control_points).
         basis_pinv: Fixed pseudo-inverse of basis, shape (num_control_points, T).
-        positivity: Either ``'softplus'`` or ``'exp'``.
     """
 
     control_points: Array
@@ -66,7 +65,7 @@ class BSplineSchedule(AbstractSchedule):
         basis = jnp.array(basis_np)
         basis_pinv = jnp.array(np.linalg.pinv(basis_np))
 
-        # Initialise control points so that f(cp) = init_value uniformly.
+        # Initialise control points so that softplus(cp) = init_value uniformly.
         v = conf.init_value
         raw_init = float(np.log(np.expm1(v) + 1e-8))
 
@@ -77,8 +76,7 @@ class BSplineSchedule(AbstractSchedule):
         return jax.nn.softplus(x)
 
     def _invert_positivity(self, y: Array) -> Array:
-        """Invert the positivity transform (operates on positive values)."""
-        # softplus^{-1}(y) = log(exp(y) - 1)
+        """Invert softplus: softplus^{-1}(y) = log(exp(y) - 1)."""
         return jnp.log(jnp.expm1(jnp.clip(y, 1e-6)) + 1e-8)
 
     def get_valid_schedule(self) -> Array:

@@ -9,10 +9,6 @@ used in the outer training loop:
   - jax.vmap                  — batched evaluation over control-point arrays
   - jax.lax.scan              — using the schedule inside a scan loop (inner loop)
   - from_projection under JIT — called by project(), which is @eqx.filter_jit
-
-The static positivity string ('softplus' / 'exp') lives in the pytree structure
-rather than the leaves, so equinox treats it as a compile-time constant —
-these tests confirm that assumption holds under all transformations.
 """
 
 import equinox as eqx
@@ -53,12 +49,11 @@ _cp_st = st.lists(
 # ---------------------------------------------------------------------------
 
 
-def _make_sched(positivity: str = "softplus", init: float = 1.0) -> BSplineSchedule:
+def _make_sched(init: float = 1.0) -> BSplineSchedule:
     conf = BSplineScheduleConfig(
         num_control_points=N_CP,
         degree=DEGREE,
         init_value=init,
-        positivity=positivity,
     )
     return BSplineSchedule.from_config(conf, T=T)
 
@@ -82,13 +77,6 @@ class TestBSplineJITCompatibility:
         """JIT-compiled get_raw_schedule returns correct shape and finite values."""
         sched = _make_sched()
         out = eqx.filter_jit(lambda s: s.get_raw_schedule())(sched)
-        assert out.shape == (T,)
-        assert jnp.all(jnp.isfinite(out))
-
-    def test_filter_jit_exp_variant(self):
-        """exp positivity variant is JIT-compatible."""
-        sched = _make_sched("exp")
-        out = eqx.filter_jit(lambda s: s.get_valid_schedule())(sched)
         assert out.shape == (T,)
         assert jnp.all(jnp.isfinite(out))
 
@@ -120,20 +108,6 @@ class TestBSplineJITCompatibility:
         assert jnp.all(jnp.isfinite(out))
         assert jnp.allclose(out, 2.0, atol=1e-3)
 
-    def test_filter_jit_from_projection_exp_variant(self):
-        """from_projection with exp variant compiles under JIT."""
-        sched = _make_sched("exp")
-        projection = jnp.ones(T) * 1.5
-
-        @eqx.filter_jit
-        def project_and_eval(s, p):
-            s2 = BSplineSchedule.from_projection(s, p)
-            return s2.get_valid_schedule()
-
-        out = project_and_eval(sched, projection)
-        assert jnp.all(jnp.isfinite(out))
-        assert jnp.allclose(out, 1.5, atol=1e-3)
-
 
 # ===========================================================================
 # Gradient compatibility
@@ -143,22 +117,9 @@ class TestBSplineJITCompatibility:
 class TestBSplineGradientCompatibility:
     """Gradients flow through control_points; basis/basis_pinv are stop_gradient-ed."""
 
-    def test_filter_grad_control_points_nonzero_softplus(self):
-        """filter_grad gives non-zero finite gradients w.r.t. control_points (softplus)."""
-        sched = _make_sched("softplus")
-
-        @eqx.filter_jit
-        @eqx.filter_grad
-        def loss_fn(s):
-            return jnp.sum(s.get_valid_schedule())
-
-        grads = loss_fn(sched)
-        assert jnp.all(jnp.isfinite(grads.control_points))
-        assert jnp.any(grads.control_points != 0)
-
-    def test_filter_grad_control_points_nonzero_exp(self):
-        """filter_grad gives non-zero finite gradients w.r.t. control_points (exp)."""
-        sched = _make_sched("exp")
+    def test_filter_grad_control_points_nonzero(self):
+        """filter_grad gives non-zero finite gradients w.r.t. control_points."""
+        sched = _make_sched()
 
         @eqx.filter_jit
         @eqx.filter_grad
@@ -349,25 +310,6 @@ class TestBSplineScanCompatibility:
 
             def step(carry, sigma_t):
                 return carry + sigma_t, None
-
-            total, _ = jlax.scan(step, jnp.float32(0.0), schedule)
-            return total
-
-        grads = loss_fn(sched)
-        assert jnp.all(jnp.isfinite(grads.control_points))
-        assert jnp.any(grads.control_points != 0)
-
-    def test_scan_with_exp_positivity(self):
-        """scan + grad works for the exp positivity variant."""
-        sched = _make_sched("exp")
-
-        @eqx.filter_jit
-        @eqx.filter_grad
-        def loss_fn(s):
-            schedule = s.get_valid_schedule()
-
-            def step(carry, sigma_t):
-                return carry + sigma_t**2, None
 
             total, _ = jlax.scan(step, jnp.float32(0.0), schedule)
             return total

@@ -7,10 +7,12 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
+import numpy as np
 import optax
 from jax import checkpoint as jax_checkpoint  # type: ignore[attr-defined]
 from jaxtyping import Array, PRNGKeyArray, PyTree
 
+from conf.singleton_conf import SingletonConfig
 from environments.dp_params import DP_RL_Params
 from environments.losses import loss, vmapped_loss
 from policy.schedules.abstract import AbstractNoiseAndClipSchedule
@@ -24,8 +26,6 @@ from util.util import (
     clip_grads_abadi,
     get_spherical_noise,
     reinit_model,
-    sample_batch_uniform,
-    subset_classification_accuracy,
 )
 
 
@@ -47,8 +47,9 @@ def training_step(
     model: PyTree,
     optimizer: optax.GradientTransformation,
     opt_state: PyTree,
-    mb_key: PRNGKeyArray,
     noise_key: PRNGKeyArray,
+    batch_x: Array,
+    batch_y: Array,
     noise: Array,
     clip: Array,
     params: DP_RL_Params,
@@ -56,38 +57,30 @@ def training_step(
 ) -> tuple[
     PyTree,
     optax.OptState,
-    PRNGKeyArray,
     PRNGKeyArray,  # Carry values
     Array,
     Array,  # Scan outputs
 ]:
     """Perform a single DP-SGD (or non-private) training step.
 
-    Samples a Poisson minibatch, computes per-sample gradients, optionally clips
-    and noises them, then applies an optax update.
+    Receives a pre-fetched mini-batch (batch_x, batch_y) rather than sampling
+    from the dataset internally.  Accuracy is computed on the current batch.
 
     Args:
         model: Current model parameters as an equinox pytree.
         optimizer: Optax gradient transformation.
         opt_state: Current optimizer state.
-        mb_key: PRNG key for minibatch sampling.
         noise_key: PRNG key for spherical Gaussian noise.
+        batch_x: Pre-fetched batch features of shape (B, *sample_shape).
+        batch_y: Pre-fetched batch labels of shape (B, *label_shape).
         noise: Per-step σ value for the Gaussian mechanism.
         clip: Per-step gradient clipping threshold.
-        params: DP environment parameters (dataset, batch size, etc.).
+        params: DP environment parameters (optimizer config etc.).
         private: If False, skip clipping and noise (non-private SGD).
 
     Returns:
-        Tuple of (new_model, new_opt_state, mb_key, noise_key, loss, accuracy).
+        Tuple of (new_model, new_opt_state, noise_key, loss, accuracy).
     """
-    mb_key, _key = jr.split(mb_key)
-    batch_x, batch_y = sample_batch_uniform(
-        params.X,
-        params.y,
-        params.dummy_batch,
-        _key,
-    )
-
     if private:
         new_loss, grads = vmapped_loss(model, batch_x, batch_y)
         clipped_grads = clip_grads_abadi(grads, clip)
@@ -100,15 +93,14 @@ def training_step(
         new_loss, grads = loss(model, batch_x, batch_y)
         noised_grads = grads
 
-    # Add noisy gradients, update model and optimizer
+    # Apply noisy gradients, update model and optimizer
     updates, new_opt_state = optimizer.update(noised_grads, opt_state, model)
     new_model = eqx.apply_updates(model, updates)
 
-    # Subsample each with probability p
-    mb_key, _key = jr.split(mb_key)
-    accuracy = subset_classification_accuracy(new_model, params.X, params.y, 0.01, _key)
+    # Accuracy on the current training batch (avoids extra dataset access per step)
+    accuracy = classification_accuracy(new_model, batch_x, batch_y)
 
-    return new_model, new_opt_state, mb_key, noise_key, new_loss, accuracy
+    return new_model, new_opt_state, noise_key, new_loss, accuracy
 
 
 @eqx.filter_jit
@@ -123,7 +115,34 @@ def train_with_noise(
     noise_schedule = schedule.get_private_sigmas()
     clip_schedule = schedule.get_private_clips()
 
-    # Create network
+    T = params.max_steps_in_episode
+    K = params.scan_segments
+    loader = params.loader
+    N = loader.n_train
+    batch_size = SingletonConfig.get_environment_config_instance().batch_size
+
+    # --- Pre-compute all batch indices before the scan ---
+    # Generate T+1 sets: T for scan steps, 1 for the post-scan final-loss batch.
+    # Using approx_max_k on a uniform vector matches the existing Poisson sampling
+    # semantics; vmap over T+1 keys avoids a (T, N) intermediate array.
+    step_keys = jr.split(mb_key, T + 1)
+
+    def _gen_indices(key: PRNGKeyArray) -> Array:
+        probs = jr.uniform(key, (N,))
+        _, idxs = jax.lax.approx_max_k(probs, batch_size)
+        return idxs  # (batch_size,) int
+
+    all_indices = jax.vmap(_gen_indices)(step_keys[:T])  # (T, batch_size)
+    final_indices = _gen_indices(step_keys[T])  # (batch_size,)
+
+    # --- Callback specs for pure_callback batch fetching ---
+    x_spec = jax.ShapeDtypeStruct((batch_size, *loader.sample_shape), jnp.float32)
+    y_spec = jax.ShapeDtypeStruct((batch_size, *loader.label_shape), jnp.float32)
+
+    def _fetch_batch(indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        return loader.load_train_batch(np.asarray(indices))
+
+    # --- Create network ---
     network = reinit_model(cast(eqx.Module, params.network), init_key)
     net_params, net_static = eqx.partition(network, eqx.is_array)
     net_params = eqx.filter_jit(jax.lax.pvary)(net_params, "x")
@@ -133,59 +152,95 @@ def train_with_noise(
     opt_state_params, opt_state_static = eqx.partition(opt_state, eqx.is_array)
     opt_state_params = eqx.filter_jit(jax.lax.pvary)(opt_state_params, "x")
 
+    # --- Segmented scan-of-scans ---
+    # Reshape (T, ...) → (K, T//K, ...) for the outer scan over K segments.
+    # With K=1 this is equivalent to the original single scan.
+    noise_segs = noise_schedule.reshape(K, T // K)
+    clip_segs = clip_schedule.reshape(K, T // K)
+    idx_segs = all_indices.reshape(K, T // K, batch_size)
+
     @partial(
         jax_checkpoint,
         policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable,
     )
-    def scanned_training_step(
-        carry: tuple[PyTree, PyTree, PRNGKeyArray, PRNGKeyArray],
-        noise_and_clip: tuple[Array, Array],
-    ) -> tuple[
-        tuple[PyTree, optax.OptState, PRNGKeyArray, PRNGKeyArray],  # Carry values
-        tuple[Array, Array],  # Scan outputs
-    ]:
-        """Single scan body: run one DP-SGD step and return updated carry and per-step outputs."""
-        net_params, opt_state_params, mb_key, noise_key = carry
+    def inner_step(
+        carry: tuple[PyTree, PyTree, PRNGKeyArray],
+        xs: tuple[Array, Array, Array],
+    ) -> tuple[tuple[PyTree, PyTree, PRNGKeyArray], tuple[Array, Array]]:
+        """Single checkpointed DP-SGD step: fetch batch via callback, run update."""
+        net_params, opt_state_params, noise_key = carry
+        noise_t, clip_t, indices_t = xs
+
+        # Stream batch from disk/memmap via pure_callback (no dataset in VRAM)
+        batch_x, batch_y = jax.pure_callback(_fetch_batch, (x_spec, y_spec), indices_t)
+
         model = eqx.combine(net_params, net_static)
         opt_state = eqx.combine(opt_state_params, opt_state_static)
-
-        new_model, new_opt_state, mb_key, noise_key, new_loss, accuracy = training_step(
+        new_model, new_opt_state, noise_key, new_loss, accuracy = training_step(
             model,
             optimizer,
             opt_state,
-            mb_key,
             noise_key,
-            *noise_and_clip,
+            batch_x,
+            batch_y,
+            noise_t,
+            clip_t,
             params,
         )
-
         new_net_params, _ = eqx.partition(new_model, eqx.is_array)
         new_opt_state_params, _ = eqx.partition(new_opt_state, eqx.is_array)
-        return (new_net_params, new_opt_state_params, mb_key, noise_key), (
-            new_loss,
-            accuracy,
-        )
+        return (new_net_params, new_opt_state_params, noise_key), (new_loss, accuracy)
 
-    initial_carry = (net_params, opt_state_params, mb_key, noise_key)
-    (net_params, _, mb_key, noise_key), (losses, accuracies) = jax.lax.scan(
-        scanned_training_step,
+    def outer_step(
+        carry: tuple[PyTree, PyTree, PRNGKeyArray],
+        seg_xs: tuple[Array, Array, Array],
+    ) -> tuple[tuple[PyTree, PyTree, PRNGKeyArray], tuple[Array, Array]]:
+        """One outer scan step: run an inner scan over T//K checkpointed steps."""
+        return jax.lax.scan(inner_step, carry, seg_xs)
+
+    initial_carry = (net_params, opt_state_params, noise_key)
+    (net_params, _, noise_key), (losses_seg, accs_seg) = jax.lax.scan(
+        outer_step,
         initial_carry,
-        xs=(noise_schedule, clip_schedule),
+        (noise_segs, clip_segs, idx_segs),
     )
+    # Flatten (K, T//K) → (T,)
+    losses = losses_seg.reshape(T)
+    accuracies = accs_seg.reshape(T)
 
-    mb_key, batch_key = jr.split(mb_key)
+    # --- Post-scan final training loss on a fresh batch ---
     network_final = eqx.combine(net_params, net_static)
-    batch_x, batch_y = sample_batch_uniform(
-        params.X,
-        params.y,
-        params.dummy_batch,
-        batch_key,
-    )
-    final_loss, _ = loss(network_final, batch_x, batch_y)
+    final_batch_x, final_batch_y = jax.pure_callback(_fetch_batch, (x_spec, y_spec), final_indices)
+    final_loss, _ = loss(network_final, final_batch_x, final_batch_y)
     losses = jnp.concat([losses, jnp.asarray([final_loss])])
 
-    val_loss, _ = loss(network_final, params.valX, params.valy)
-    val_accuracy = classification_accuracy(network_final, params.valX, params.valy)
+    # --- Chunked validation evaluation via pure_callback ---
+    n_val_chunks = loader.n_val // loader.val_chunk_size
+    val_chunk_idx = jnp.arange(loader.n_val, dtype=jnp.int32).reshape(
+        n_val_chunks, loader.val_chunk_size
+    )
+
+    xv_spec = jax.ShapeDtypeStruct((loader.val_chunk_size, *loader.sample_shape), jnp.float32)
+    yv_spec = jax.ShapeDtypeStruct((loader.val_chunk_size, *loader.label_shape), jnp.float32)
+
+    def _fetch_val_chunk(indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        return loader.load_val_chunk(np.asarray(indices))
+
+    def val_body(
+        carry: tuple[Array, Array],
+        chunk_indices: Array,
+    ) -> tuple[tuple[Array, Array], None]:
+        batch_x, batch_y = jax.pure_callback(_fetch_val_chunk, (xv_spec, yv_spec), chunk_indices)
+        batch_loss, _ = loss(network_final, batch_x, batch_y)
+        batch_acc = classification_accuracy(network_final, batch_x, batch_y)
+        n = jnp.array(loader.val_chunk_size, jnp.float32)
+        total_loss, total_acc = carry
+        return (total_loss + batch_loss * n, total_acc + batch_acc * n), None
+
+    (total_loss, total_acc), _ = jax.lax.scan(val_body, (0.0, 0.0), val_chunk_idx)
+    n_val = jnp.array(loader.n_val, jnp.float32)
+    val_loss = total_loss / n_val
+    val_accuracy = total_acc / n_val
 
     return network_final, val_loss, losses, accuracies, val_accuracy
 
@@ -198,11 +253,34 @@ def train_with_stateful_noise(
     init_key: PRNGKeyArray,
     noise_key: PRNGKeyArray,
 ) -> tuple[eqx.Module, Array, Array, Array, Array]:
-    # Get noise and clip schedules
     initial_schedule_state = schedule.get_initial_state()
     iters = schedule.get_iteration_array()
 
-    # Create network
+    T = params.max_steps_in_episode
+    K = params.scan_segments
+    loader = params.loader
+    N = loader.n_train
+    batch_size = SingletonConfig.get_environment_config_instance().batch_size
+
+    # --- Pre-compute all batch indices before the scan ---
+    step_keys = jr.split(mb_key, T + 1)
+
+    def _gen_indices(key: PRNGKeyArray) -> Array:
+        probs = jr.uniform(key, (N,))
+        _, idxs = jax.lax.approx_max_k(probs, batch_size)
+        return idxs
+
+    all_indices = jax.vmap(_gen_indices)(step_keys[:T])  # (T, batch_size)
+    final_indices = _gen_indices(step_keys[T])  # (batch_size,)
+
+    # --- Callback specs ---
+    x_spec = jax.ShapeDtypeStruct((batch_size, *loader.sample_shape), jnp.float32)
+    y_spec = jax.ShapeDtypeStruct((batch_size, *loader.label_shape), jnp.float32)
+
+    def _fetch_batch(indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        return loader.load_train_batch(np.asarray(indices))
+
+    # --- Create network ---
     network = reinit_model(cast(eqx.Module, params.network), init_key)
     net_params, net_static = eqx.partition(network, eqx.is_array)
     net_params = eqx.filter_jit(jax.lax.pvary)(net_params, "x")
@@ -212,42 +290,39 @@ def train_with_stateful_noise(
     opt_state_params, opt_state_static = eqx.partition(opt_state, eqx.is_array)
     opt_state_params = eqx.filter_jit(jax.lax.pvary)(opt_state_params, "x")
 
+    # --- Segmented scan-of-scans ---
+    # iters is a 1-D array of length T; zip with idx_segs for the inner scan.
+    iters_segs = iters.reshape(K, T // K)
+    idx_segs = all_indices.reshape(K, T // K, batch_size)
+
     @partial(
         jax_checkpoint,
         policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable,
     )
-    def scanned_training_step(
+    def inner_step(
         carry: tuple[PyTree, PyTree, AbstractScheduleState, PRNGKeyArray, PRNGKeyArray],
-        iter: Array,
+        xs: tuple[Array, Array],
     ) -> tuple[
-        tuple[
-            PyTree,
-            optax.OptState,
-            AbstractScheduleState,
-            PRNGKeyArray,
-            PRNGKeyArray,
-        ],  # Carry values
-        tuple[Array, Array],  # Scan outputs
+        tuple[PyTree, PyTree, AbstractScheduleState, PRNGKeyArray, PRNGKeyArray],
+        tuple[Array, Array],
     ]:
-        """Single scan body: update the stateful schedule then run one DP-SGD step."""
+        """Single scan body: fetch batch, update stateful schedule, run DP-SGD step."""
         net_params, opt_state_params, schedule_state, mb_key, noise_key = carry
+        iter_t, indices_t = xs
+
+        # Stream batch via callback
+        batch_x, batch_y = jax.pure_callback(_fetch_batch, (x_spec, y_spec), indices_t)
+
         model = eqx.combine(net_params, net_static)
         opt_state = eqx.combine(opt_state_params, opt_state_static)
 
-        mb_key, _key = jr.split(mb_key)
-        batch_x, batch_y = sample_batch_uniform(
-            params.X,
-            params.y,
-            params.dummy_batch,
-            _key,
-        )
         new_loss, grads = vmapped_loss(model, batch_x, batch_y)
 
-        # update state
+        # Update stateful schedule
         new_schedule_state = schedule.update_state(
             schedule_state,
             grads,
-            iter,
+            iter_t,
             batch_x,
             batch_y,
         )
@@ -262,19 +337,12 @@ def train_with_stateful_noise(
         noises = get_spherical_noise(clipped_grads, noise, clip, _key)
         noised_grads = eqx.apply_updates(clipped_grads, noises)
 
-        # Add noisy gradients, update model and optimizer
+        # Update model
         updates, new_opt_state = optimizer.update(noised_grads, opt_state, model)
         new_model = eqx.apply_updates(model, updates)
 
-        # Subsample each with probability p
-        mb_key, _key = jr.split(mb_key)
-        accuracy = subset_classification_accuracy(
-            new_model,
-            params.X,
-            params.y,
-            0.01,
-            _key,
-        )
+        # Batch accuracy
+        accuracy = classification_accuracy(new_model, batch_x, batch_y)
 
         new_net_params, _ = eqx.partition(new_model, eqx.is_array)
         new_opt_state_params, _ = eqx.partition(new_opt_state, eqx.is_array)
@@ -284,10 +352,16 @@ def train_with_stateful_noise(
             new_schedule_state,
             mb_key,
             noise_key,
-        ), (
-            new_loss,
-            accuracy,
-        )
+        ), (new_loss, accuracy)
+
+    def outer_step(
+        carry: tuple[PyTree, PyTree, AbstractScheduleState, PRNGKeyArray, PRNGKeyArray],
+        seg_xs: tuple[Array, Array],
+    ) -> tuple[
+        tuple[PyTree, PyTree, AbstractScheduleState, PRNGKeyArray, PRNGKeyArray],
+        tuple[Array, Array],
+    ]:
+        return jax.lax.scan(inner_step, carry, seg_xs)
 
     initial_carry = (
         net_params,
@@ -296,24 +370,46 @@ def train_with_stateful_noise(
         mb_key,
         noise_key,
     )
-    (net_params, _, _, mb_key, noise_key), (losses, accuracies) = jax.lax.scan(
-        scanned_training_step,
+    (net_params, _, _, mb_key, noise_key), (losses_seg, accs_seg) = jax.lax.scan(
+        outer_step,
         initial_carry,
-        xs=iters,
+        (iters_segs, idx_segs),
     )
+    losses = losses_seg.reshape(T)
+    accuracies = accs_seg.reshape(T)
 
-    mb_key, batch_key = jr.split(mb_key)
+    # --- Post-scan final training loss ---
     network_final = eqx.combine(net_params, net_static)
-    batch_x, batch_y = sample_batch_uniform(
-        params.X,
-        params.y,
-        params.dummy_batch,
-        batch_key,
-    )
-    final_loss, _ = loss(network_final, batch_x, batch_y)
+    final_batch_x, final_batch_y = jax.pure_callback(_fetch_batch, (x_spec, y_spec), final_indices)
+    final_loss, _ = loss(network_final, final_batch_x, final_batch_y)
     losses = jnp.concat([losses, jnp.asarray([final_loss])])
 
-    val_loss, _ = loss(network_final, params.valX, params.valy)
-    val_accuracy = classification_accuracy(network_final, params.valX, params.valy)
+    # --- Chunked validation evaluation ---
+    n_val_chunks = loader.n_val // loader.val_chunk_size
+    val_chunk_idx = jnp.arange(loader.n_val, dtype=jnp.int32).reshape(
+        n_val_chunks, loader.val_chunk_size
+    )
+
+    xv_spec = jax.ShapeDtypeStruct((loader.val_chunk_size, *loader.sample_shape), jnp.float32)
+    yv_spec = jax.ShapeDtypeStruct((loader.val_chunk_size, *loader.label_shape), jnp.float32)
+
+    def _fetch_val_chunk(indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        return loader.load_val_chunk(np.asarray(indices))
+
+    def val_body(
+        carry: tuple[Array, Array],
+        chunk_indices: Array,
+    ) -> tuple[tuple[Array, Array], None]:
+        batch_x, batch_y = jax.pure_callback(_fetch_val_chunk, (xv_spec, yv_spec), chunk_indices)
+        batch_loss, _ = loss(network_final, batch_x, batch_y)
+        batch_acc = classification_accuracy(network_final, batch_x, batch_y)
+        n = jnp.array(loader.val_chunk_size, jnp.float32)
+        total_loss, total_acc = carry
+        return (total_loss + batch_loss * n, total_acc + batch_acc * n), None
+
+    (total_loss, total_acc), _ = jax.lax.scan(val_body, (0.0, 0.0), val_chunk_idx)
+    n_val = jnp.array(loader.n_val, jnp.float32)
+    val_loss = total_loss / n_val
+    val_accuracy = total_acc / n_val
 
     return network_final, val_loss, losses, accuracies, val_accuracy

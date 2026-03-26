@@ -133,6 +133,10 @@ class EnvConfig:
     delta: float = 1e-7
     batch_size: int = 250
     max_steps_in_episode: int = 100
+    scan_segments: int = 1
+    """Number of segments for the scan-of-scans. Must divide max_steps_in_episode.
+    K=1 (default) is equivalent to the current single scan with no behaviour change.
+    K>1 reduces peak gradient tape memory by a factor of K at negligible runtime cost."""
 
     def to_wandb_sweep(self) -> dict[str, Any]:
         return to_wandb_sweep_params(self)

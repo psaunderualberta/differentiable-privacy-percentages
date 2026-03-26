@@ -5,7 +5,7 @@ from networks.cnn.CNN import CNN  # noqa: F401 — triggers @register(CNNConfig)
 from networks.cnn.config import CNNConfig
 from networks.mlp.config import MLPConfig
 from networks.mlp.MLP import MLP  # noqa: F401 — triggers @register(MLPConfig)
-from util.dataloaders import get_datasets
+from util.dataloaders import get_dataset_shapes
 
 DATASET_NETWORK_DEFAULTS = {
     "mnist": CNNConfig(
@@ -67,8 +67,8 @@ def net_factory(conf, input_shape: tuple[int, ...], output_shape: tuple[int, ...
 
 def net_factory_from_config():
     """Build a network from the global singleton config and the configured dataset shapes."""
-    X, y, _, _ = get_datasets()
+    X_shape, y_shape, _, _ = get_dataset_shapes()
     dataset = SingletonConfig.get_sweep_config_instance().dataset
     network_conf = SingletonConfig.get_environment_config_instance().network
     network_conf = resolve_network_config(network_conf, dataset)
-    return net_factory(network_conf, input_shape=X.shape, output_shape=y.shape)
+    return net_factory(network_conf, input_shape=X_shape, output_shape=y_shape)
