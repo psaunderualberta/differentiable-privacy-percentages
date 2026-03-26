@@ -51,7 +51,7 @@ class SlurmConfig:
     cpus_per_task: int = 2
     gpus: int = 3
     mem_per_gpu: str = "6G"
-    account: str = "aip-nidhih"
+    account: str = "aip-lelis"
 
     @property
     def main_args(self) -> str:
