@@ -19,6 +19,53 @@ The outer loop treats the schedule as a policy and differentiates through the en
 
 ---
 
+## Call Graph
+
+Standard execution flow through `main.py`:
+
+```
+main()
+├── SingletonConfig.get_*_config_instance()        config singleton (tyro CLI)
+├── get_dataset_shapes()                            load/cache dataset from HuggingFace
+├── get_privacy_params(N)                           approx_to_gdp(ε,δ) → GDPPrivacyParameters
+├── policy_factory(schedule_conf, gdp_params)       build schedule (eqx.Module)
+│   ├── schedule_factory(conf, privacy_params)      non-stateful schedule variants
+│   └── stateful_schedule_factory(conf, ...)        stateful schedule variants
+├── DP_RL_Params.create_direct_from_config()        frozen DP-SGD env params
+├── WandbTableLogger()                              accumulates per-step W&B tables
+├── get_optimal_mesh(devices, batch_size)           JAX device mesh over GPUs
+├── make_policy_loss_fn(mesh, env_params)           JIT+shard_map compiled loss fn
+│   └── [returns get_policy_loss — called each step]
+│       ├── [shard_map: parallel across GPU devices]
+│       └── vmapped_train_with_noise(...)           vmap over noise_keys
+│           └── train_with_noise(schedule, env_params, mb_key, init_key, noise_key)
+│               ├── reinit_model(network, key)      fresh random network weights
+│               └── jax.lax.scan(scanned_training_step, T steps)
+│                   └── training_step(model, opt_state, batch, σ, clip)
+│                       ├── vmapped_loss(model, batch_x, batch_y)   per-sample grads
+│                       ├── clip_grads_abadi(grads, clip)           Abadi norm clip
+│                       ├── get_spherical_noise(clipped, σ, clip)   Gaussian noise
+│                       └── optimizer.update(noised_grads, ...)     inner model step
+├── optax.sgd(lr, momentum) + optimizer.init(schedule)
+├── [load_checkpoint() — if checkpoint_run_id set]
+├── init_wandb_run(wandb_config, sweep_config)
+│
+└── for t in range(total_timesteps):               outer RL loop
+    ├── schedule.get_loggables()                   log σ/clip/weights to W&B table
+    ├── get_policy_loss(schedule, mb_key, init_key, noise_keys)
+    │   [eqx.filter_value_and_grad — returns loss and ∂loss/∂schedule]
+    │   └── → (loss, (train_losses, train_accs, val_accs)), grads
+    ├── wandb.log(val_loss, val_accuracy, ...)
+    ├── ensure_valid_pytree(loss, grads)            NaN/Inf guard (outside JIT)
+    ├── optimizer.update(grads, opt_state)          outer SGD step on schedule
+    ├── schedule.apply_updates(updates)             apply outer gradients
+    ├── schedule.project()                          enforce GDP privacy constraint
+    ├── [save_checkpoint() — every checkpoint_every steps]
+    └── [baseline.log_comparison() — if with_baselines]
+```
+
+---
+
 ## Repository Structure
 
 ```
@@ -81,7 +128,7 @@ Common arguments:
 |---|---|---|
 | `--sweep.env.eps` | — | Privacy budget ε |
 | `--sweep.env.delta` | — | Privacy budget δ |
-| `--sweep.dataset` | `mnist` | Dataset (`mnist`, `fashion-mnist`, `cifar-10`, `california`) |
+| `--sweep.dataset` | `mnist` | Dataset (`mnist`, `fashion-mnist`, `cifar-10`, `california`, `eyepacs`) |
 | `--sweep.total_timesteps` | — | Outer-loop iterations |
 | `--sweep.policy.schedule_type` | `alternating_schedule` | Schedule variant |
 | `--wandb_conf.mode` | `online` | W&B mode (`online`, `offline`, `disabled`) |
@@ -134,15 +181,19 @@ cat cc/sweeps/<sweep_id>.txt | parallel -q uv run cc/slurm/run-starter.py --run_
 
 ## Schedule Types
 
-Select with `--sweep.policy.schedule_type`:
+Select with `--sweep.policy.schedule`:
 
-| Type | Description |
+| Config class | Description |
 |---|---|
-| `alternating_schedule` | Alternately optimises σ and clip; recommended default |
-| `sigma_and_clip_schedule` | Jointly optimises σ and clip |
-| `policy_and_clip_schedule` | A small policy network generates the σ weights |
-| `dynamic_dpsgd_schedule` | Dynamic DP-SGD baseline |
-| `stateful_median_schedule` | Updates schedule based on per-step gradient medians |
+| `AlternatingSigmaAndClipScheduleConfig` | Alternately optimises σ and clip; recommended default |
+| `WarmupAlternatingSigmaAndClipScheduleConfig` | Same, with a fixed-noise warmup phase |
+| `SigmaAndClipScheduleConfig` | Jointly optimises σ and clip |
+| `WarmupSigmaAndClipScheduleConfig` | Same, with a fixed-noise warmup phase |
+| `ParallelSigmaAndClipScheduleConfig` | Parallel optimisation of σ and clip |
+| `WarmupParallelSigmaAndClipScheduleConfig` | Same, with a fixed-noise warmup phase |
+| `PolicyAndClipScheduleConfig` | A small policy network generates the σ weights |
+| `DynamicDPSGDScheduleConfig` | Dynamic DP-SGD baseline |
+| `MedianGradientStatefulScheduleConfig` | Stateful schedule updated from per-step gradient medians |
 
 ---
 
