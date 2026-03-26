@@ -136,8 +136,23 @@ def train_with_noise(
     final_indices = _gen_indices(step_keys[T])  # (batch_size,)
 
     # --- Callback specs for pure_callback batch fetching ---
+    seg_len = T // K
+    # Per-segment specs: load an entire segment's batches in one host call.
+    # This reduces host-device sync points from T → K and lets XLA fuse the
+    # inner scan without interruption.  Memory cost is (seg_len, B, *shape).
+    seg_x_spec = jax.ShapeDtypeStruct((seg_len, batch_size, *loader.sample_shape), jnp.float32)
+    seg_y_spec = jax.ShapeDtypeStruct((seg_len, batch_size, *loader.label_shape), jnp.float32)
+    # Single-batch spec used only for the post-scan final-loss batch.
     x_spec = jax.ShapeDtypeStruct((batch_size, *loader.sample_shape), jnp.float32)
     y_spec = jax.ShapeDtypeStruct((batch_size, *loader.label_shape), jnp.float32)
+
+    def _fetch_segment(seg_indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Load seg_len batches from disk in one shot; seg_indices shape: (seg_len, B)."""
+        flat = seg_indices.reshape(-1)
+        bx, by = loader.load_train_batch(np.asarray(flat))
+        return bx.reshape(seg_len, batch_size, *loader.sample_shape), by.reshape(
+            seg_len, batch_size, *loader.label_shape
+        )
 
     def _fetch_batch(indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         return loader.load_train_batch(np.asarray(indices))
@@ -155,9 +170,9 @@ def train_with_noise(
     # --- Segmented scan-of-scans ---
     # Reshape (T, ...) → (K, T//K, ...) for the outer scan over K segments.
     # With K=1 this is equivalent to the original single scan.
-    noise_segs = noise_schedule.reshape(K, T // K)
-    clip_segs = clip_schedule.reshape(K, T // K)
-    idx_segs = all_indices.reshape(K, T // K, batch_size)
+    noise_segs = noise_schedule.reshape(K, seg_len)
+    clip_segs = clip_schedule.reshape(K, seg_len)
+    idx_segs = all_indices.reshape(K, seg_len, batch_size)
 
     @partial(
         jax_checkpoint,
@@ -165,14 +180,11 @@ def train_with_noise(
     )
     def inner_step(
         carry: tuple[PyTree, PyTree, PRNGKeyArray],
-        xs: tuple[Array, Array, Array],
+        xs: tuple[Array, Array, Array, Array],
     ) -> tuple[tuple[PyTree, PyTree, PRNGKeyArray], tuple[Array, Array]]:
-        """Single checkpointed DP-SGD step: fetch batch via callback, run update."""
+        """Single checkpointed DP-SGD step; batch data arrives as scan input."""
         net_params, opt_state_params, noise_key = carry
-        noise_t, clip_t, indices_t = xs
-
-        # Stream batch from disk/memmap via pure_callback (no dataset in VRAM)
-        batch_x, batch_y = jax.pure_callback(_fetch_batch, (x_spec, y_spec), indices_t)
+        noise_t, clip_t, batch_x, batch_y = xs
 
         model = eqx.combine(net_params, net_static)
         opt_state = eqx.combine(opt_state_params, opt_state_static)
@@ -195,8 +207,11 @@ def train_with_noise(
         carry: tuple[PyTree, PyTree, PRNGKeyArray],
         seg_xs: tuple[Array, Array, Array],
     ) -> tuple[tuple[PyTree, PyTree, PRNGKeyArray], tuple[Array, Array]]:
-        """One outer scan step: run an inner scan over T//K checkpointed steps."""
-        return jax.lax.scan(inner_step, carry, seg_xs)
+        """One outer scan step: load segment batches once, then run inner scan."""
+        noise_seg, clip_seg, idx_seg = seg_xs
+        # One host-device sync per segment instead of one per step.
+        seg_bx, seg_by = jax.pure_callback(_fetch_segment, (seg_x_spec, seg_y_spec), idx_seg)
+        return jax.lax.scan(inner_step, carry, (noise_seg, clip_seg, seg_bx, seg_by))
 
     initial_carry = (net_params, opt_state_params, noise_key)
     (net_params, _, noise_key), (losses_seg, accs_seg) = jax.lax.scan(
@@ -274,8 +289,18 @@ def train_with_stateful_noise(
     final_indices = _gen_indices(step_keys[T])  # (batch_size,)
 
     # --- Callback specs ---
+    seg_len = T // K
+    seg_x_spec = jax.ShapeDtypeStruct((seg_len, batch_size, *loader.sample_shape), jnp.float32)
+    seg_y_spec = jax.ShapeDtypeStruct((seg_len, batch_size, *loader.label_shape), jnp.float32)
     x_spec = jax.ShapeDtypeStruct((batch_size, *loader.sample_shape), jnp.float32)
     y_spec = jax.ShapeDtypeStruct((batch_size, *loader.label_shape), jnp.float32)
+
+    def _fetch_segment(seg_indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        flat = seg_indices.reshape(-1)
+        bx, by = loader.load_train_batch(np.asarray(flat))
+        return bx.reshape(seg_len, batch_size, *loader.sample_shape), by.reshape(
+            seg_len, batch_size, *loader.label_shape
+        )
 
     def _fetch_batch(indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         return loader.load_train_batch(np.asarray(indices))
@@ -292,8 +317,8 @@ def train_with_stateful_noise(
 
     # --- Segmented scan-of-scans ---
     # iters is a 1-D array of length T; zip with idx_segs for the inner scan.
-    iters_segs = iters.reshape(K, T // K)
-    idx_segs = all_indices.reshape(K, T // K, batch_size)
+    iters_segs = iters.reshape(K, seg_len)
+    idx_segs = all_indices.reshape(K, seg_len, batch_size)
 
     @partial(
         jax_checkpoint,
@@ -301,17 +326,14 @@ def train_with_stateful_noise(
     )
     def inner_step(
         carry: tuple[PyTree, PyTree, AbstractScheduleState, PRNGKeyArray, PRNGKeyArray],
-        xs: tuple[Array, Array],
+        xs: tuple[Array, Array, Array, Array],
     ) -> tuple[
         tuple[PyTree, PyTree, AbstractScheduleState, PRNGKeyArray, PRNGKeyArray],
         tuple[Array, Array],
     ]:
-        """Single scan body: fetch batch, update stateful schedule, run DP-SGD step."""
+        """Single scan body: update stateful schedule, run DP-SGD step."""
         net_params, opt_state_params, schedule_state, mb_key, noise_key = carry
-        iter_t, indices_t = xs
-
-        # Stream batch via callback
-        batch_x, batch_y = jax.pure_callback(_fetch_batch, (x_spec, y_spec), indices_t)
+        iter_t, batch_x, batch_y = xs
 
         model = eqx.combine(net_params, net_static)
         opt_state = eqx.combine(opt_state_params, opt_state_static)
@@ -361,7 +383,9 @@ def train_with_stateful_noise(
         tuple[PyTree, PyTree, AbstractScheduleState, PRNGKeyArray, PRNGKeyArray],
         tuple[Array, Array],
     ]:
-        return jax.lax.scan(inner_step, carry, seg_xs)
+        iters_seg, idx_seg = seg_xs
+        seg_bx, seg_by = jax.pure_callback(_fetch_segment, (seg_x_spec, seg_y_spec), idx_seg)
+        return jax.lax.scan(inner_step, carry, (iters_seg, seg_bx, seg_by))
 
     initial_carry = (
         net_params,
