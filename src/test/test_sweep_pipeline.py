@@ -21,7 +21,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from conf.config import EnvConfig, PolicyConfig, SweepConfig, WandbConfig
+from conf.config import EnvConfig, ScheduleOptimizerConfig, SweepConfig, WandbConfig
 from conf.singleton_conf import _reconstruct_from_dict, get_wandb_run_conf
 from policy.schedules.config import (
     AlternatingSigmaAndClipScheduleConfig,
@@ -65,7 +65,7 @@ def _sample_from_sweep_spec(sweep_spec: dict, type_overrides: dict | None = None
     Args:
         sweep_spec:    The dict returned by ``SweepConfig.to_wandb_sweep()``.
         type_overrides: Dot-path → chosen value for ``"values"`` distributions,
-            e.g. ``{"policy.schedule._type": "SigmaAndClipScheduleConfig"}``.
+            e.g. ``{"schedule_optimizer.schedule._type": "SigmaAndClipScheduleConfig"}``.
     """
     type_overrides = type_overrides or {}
 
@@ -154,9 +154,11 @@ class TestSweepPipeline:
 
     # --- Round-trip: sweep spec → sampled run config → reconstruction ---
 
-    def test_default_policy_round_trip(self, tmp_path):
-        """Default PolicyConfig (3 schedule types) reconstructs to first type."""
-        sweep = SweepConfig(env=EnvConfig(), policy=PolicyConfig(), total_timesteps=10)
+    def test_default_schedule_optimizer_round_trip(self, tmp_path):
+        """Default ScheduleOptimizerConfig (3 schedule types) reconstructs to first type."""
+        sweep = SweepConfig(
+            env=EnvConfig(), schedule_optimizer=ScheduleOptimizerConfig(), num_outer_steps=10
+        )
         sweep_spec = sweep.to_wandb_sweep()
         run_conf = _sample_from_sweep_spec(sweep_spec)
 
@@ -172,7 +174,9 @@ class TestSweepPipeline:
 
         reconstructed = _reconstruct_from_dict(sweep, fetched)
         # First type in default sweep_schedule_conf_types is AlternatingSigmaAndClip.
-        assert isinstance(reconstructed.policy.schedule, AlternatingSigmaAndClipScheduleConfig)
+        assert isinstance(
+            reconstructed.schedule_optimizer.schedule, AlternatingSigmaAndClipScheduleConfig
+        )
 
     @pytest.mark.parametrize(
         "chosen_type, expected_cls",
@@ -190,11 +194,13 @@ class TestSweepPipeline:
     )
     def test_each_schedule_type_reconstructs_correctly(self, tmp_path, chosen_type, expected_cls):
         """Each schedule type sampled by W&B reconstructs to the right class."""
-        sweep = SweepConfig(env=EnvConfig(), policy=PolicyConfig(), total_timesteps=10)
+        sweep = SweepConfig(
+            env=EnvConfig(), schedule_optimizer=ScheduleOptimizerConfig(), num_outer_steps=10
+        )
         sweep_spec = sweep.to_wandb_sweep()
         run_conf = _sample_from_sweep_spec(
             sweep_spec,
-            type_overrides={"policy.schedule._type": chosen_type},
+            type_overrides={"schedule_optimizer.schedule._type": chosen_type},
         )
 
         sweep_id = f"sweep-{chosen_type[:8].lower()}"
@@ -208,13 +214,15 @@ class TestSweepPipeline:
             fetched = get_wandb_run_conf(_mock_wandb_conf(run_id))
 
         reconstructed = _reconstruct_from_dict(sweep, fetched)
-        assert isinstance(reconstructed.policy.schedule, expected_cls), (
-            f"Expected {expected_cls.__name__}, got {type(reconstructed.policy.schedule).__name__}"
+        assert isinstance(reconstructed.schedule_optimizer.schedule, expected_cls), (
+            f"Expected {expected_cls.__name__}, got {type(reconstructed.schedule_optimizer.schedule).__name__}"
         )
 
     def test_multiple_runs_in_one_sweep(self, tmp_path):
         """A sweep with multiple agent runs writes distinct IDs and each reconstructs."""
-        sweep = SweepConfig(env=EnvConfig(), policy=PolicyConfig(), total_timesteps=10)
+        sweep = SweepConfig(
+            env=EnvConfig(), schedule_optimizer=ScheduleOptimizerConfig(), num_outer_steps=10
+        )
         sweep_spec = sweep.to_wandb_sweep()
 
         type_sequence = [
@@ -228,7 +236,9 @@ class TestSweepPipeline:
             WarmupAlternatingSigmaAndClipScheduleConfig,
         ]
         run_confs = [
-            _sample_from_sweep_spec(sweep_spec, type_overrides={"policy.schedule._type": t})
+            _sample_from_sweep_spec(
+                sweep_spec, type_overrides={"schedule_optimizer.schedule._type": t}
+            )
             for t in type_sequence
         ]
 
@@ -247,14 +257,16 @@ class TestSweepPipeline:
                 mock_wandb.Api.return_value.run.return_value = mock_api_run
                 fetched = get_wandb_run_conf(_mock_wandb_conf(run_id))
             reconstructed = _reconstruct_from_dict(sweep, fetched)
-            assert isinstance(reconstructed.policy.schedule, expected_cls), (
+            assert isinstance(reconstructed.schedule_optimizer.schedule, expected_cls), (
                 f"Run {run_id}: expected {expected_cls.__name__}, "
-                f"got {type(reconstructed.policy.schedule).__name__}"
+                f"got {type(reconstructed.schedule_optimizer.schedule).__name__}"
             )
 
     def test_api_called_with_correct_run_path(self, tmp_path):
         """get_wandb_run_conf calls wandb.Api().run() with entity/project/run_id."""
-        sweep = SweepConfig(env=EnvConfig(), policy=PolicyConfig(), total_timesteps=10)
+        sweep = SweepConfig(
+            env=EnvConfig(), schedule_optimizer=ScheduleOptimizerConfig(), num_outer_steps=10
+        )
         sweep_spec = sweep.to_wandb_sweep()
         run_conf = _sample_from_sweep_spec(sweep_spec)
 
@@ -276,8 +288,8 @@ class TestSweepPipeline:
         """Non-schedule parameters (eps, batch_size, dataset) reconstruct correctly."""
         sweep = SweepConfig(
             env=EnvConfig(eps=2.0, batch_size=512),
-            policy=PolicyConfig(),
-            total_timesteps=50,
+            schedule_optimizer=ScheduleOptimizerConfig(),
+            num_outer_steps=50,
             dataset="fashion-mnist",
         )
         sweep_spec = sweep.to_wandb_sweep()
@@ -292,5 +304,5 @@ class TestSweepPipeline:
         reconstructed = _reconstruct_from_dict(sweep, fetched)
         assert reconstructed.env.eps == pytest.approx(2.0)
         assert reconstructed.env.batch_size == 512
-        assert reconstructed.total_timesteps == 50
+        assert reconstructed.num_outer_steps == 50
         assert reconstructed.dataset == "fashion-mnist"

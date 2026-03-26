@@ -76,7 +76,7 @@ def _get_sample_shape(raw_shape: tuple[int, ...], dataset_name: str) -> tuple[in
 class DatasetLoader:
     """Static (non-JAX-array) container for dataset file paths and metadata.
 
-    Stored as a static field in DP_RL_Params (equinox.Module); never traced
+    Stored as a static field in DPTrainingParams (equinox.Module); never traced
     by JAX.  Provides load methods used inside jax.pure_callback.
     """
 

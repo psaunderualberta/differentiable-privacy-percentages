@@ -30,7 +30,7 @@ def build(conf, T: int):
 
     Args:
         conf: A concrete ``AbstractScheduleConfig`` instance.
-        T:    Number of DP-SGD training steps (``max_steps_in_episode``).
+        T:    Number of DP-SGD training steps (``num_training_steps``).
     """
     cls = _REGISTRY.get(type(conf))
     if cls is None:

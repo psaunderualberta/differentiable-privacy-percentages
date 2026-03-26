@@ -7,12 +7,12 @@ from networks.util import Network
 from util.dataloaders import DatasetLoader, get_dataset_loader
 
 
-class DP_RL_Params(eqx.Module):
+class DPTrainingParams(eqx.Module):
     loader: DatasetLoader  # static non-JAX-array field; equinox treats as aux structure
     optimizer: str = "sgd"
     lr: float = 0.01
     network: Network = Network()
-    max_steps_in_episode: int = 500
+    num_training_steps: int = 500
     scan_segments: int = 1
 
     @classmethod
@@ -21,18 +21,18 @@ class DP_RL_Params(eqx.Module):
         conf: EnvConfig,
         network_arch: Network,
         loader: DatasetLoader,
-    ) -> "DP_RL_Params":
-        return DP_RL_Params(
+    ) -> "DPTrainingParams":
+        return DPTrainingParams(
             loader=loader,
             lr=conf.lr.sample(),
             optimizer=conf.optimizer,
             network=network_arch,
-            max_steps_in_episode=conf.max_steps_in_episode,
+            num_training_steps=conf.num_training_steps,
             scan_segments=conf.scan_segments,
         )
 
     @classmethod
-    def create_direct_from_config(cls) -> "DP_RL_Params":
+    def create_direct_from_config(cls) -> "DPTrainingParams":
         env_conf = SingletonConfig.get_environment_config_instance()
         private_network_arch = net_factory_from_config()
         loader = get_dataset_loader()

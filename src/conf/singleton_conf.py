@@ -10,7 +10,7 @@ import wandb
 from conf.config import (
     Config,
     EnvConfig,
-    PolicyConfig,
+    ScheduleOptimizerConfig,
     SweepConfig,
     WandbConfig,
 )
@@ -152,8 +152,8 @@ class SingletonConfig:
         return cls.get_sweep_config_instance().env
 
     @classmethod
-    def get_policy_config_instance(cls) -> PolicyConfig:
-        return cls.get_sweep_config_instance().policy
+    def get_schedule_optimizer_config(cls) -> ScheduleOptimizerConfig:
+        return cls.get_sweep_config_instance().schedule_optimizer
 
     @classmethod
     def get_wandb_config_instance(cls) -> WandbConfig:

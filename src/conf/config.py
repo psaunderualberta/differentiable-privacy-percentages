@@ -69,12 +69,12 @@ NetworkConfig = Union[
 ]
 
 # ---
-# Config for the policy
+# Config for the schedule optimizer
 # ---
 
 
 @dataclass
-class PolicyConfig:
+class ScheduleOptimizerConfig:
     schedule: ScheduleConfig = dataclasses.field(
         default_factory=AlternatingSigmaAndClipScheduleConfig,
     )
@@ -120,7 +120,7 @@ class PolicyConfig:
 
 @dataclass
 class EnvConfig:
-    "Configuration for the Reinforcement Learning Environment"
+    "Configuration for the private training environment"
 
     network: NetworkConfig = dataclasses.field(default_factory=AutoNetworkConfig)
 
@@ -132,9 +132,9 @@ class EnvConfig:
     eps: float = 0.5
     delta: float = 1e-7
     batch_size: int = 250
-    max_steps_in_episode: int = 100
+    num_training_steps: int = 100
     scan_segments: int = 1
-    """Number of segments for the scan-of-scans. Must divide max_steps_in_episode.
+    """Number of segments for the scan-of-scans. Must divide num_training_steps.
     K=1 (default) is equivalent to the current single scan with no behaviour change.
     K>1 reduces peak gradient tape memory by a factor of K at negligible runtime cost."""
 
@@ -145,7 +145,7 @@ class EnvConfig:
 @dataclass
 class SweepConfig:
     env: EnvConfig
-    policy: PolicyConfig
+    schedule_optimizer: ScheduleOptimizerConfig
     method: str = "grid"
     metric_name: str = "val-accuracy"
     metric_goal: str = "maximize"
@@ -158,7 +158,7 @@ class SweepConfig:
     baseline_log_interval: int = 0
     dataset: Literal["mnist", "cifar-10", "fashion-mnist", "eyepacs"] = "mnist"
     dataset_poly_d: int | None = None
-    total_timesteps: int = 100
+    num_outer_steps: int = 100
     prng_seed: DistributionConfig = dist_config_helper(
         values=(447831761, 159020393, 435372193),
         distribution="values",
@@ -167,9 +167,9 @@ class SweepConfig:
 
     @property
     def plotting_steps(self) -> int:
-        if self.plotting_interval >= self.total_timesteps:
+        if self.plotting_interval >= self.num_outer_steps:
             return 1
-        return self.total_timesteps // self.plotting_interval
+        return self.num_outer_steps // self.plotting_interval
 
     def to_wandb_sweep(self) -> dict[str, Any]:
         config = {

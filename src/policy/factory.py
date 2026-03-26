@@ -5,7 +5,7 @@ from policy.stateful_schedules.factory import stateful_schedule_factory
 from privacy.gdp_privacy import GDPPrivacyParameters
 
 
-def policy_factory(conf, privacy_params: GDPPrivacyParameters):
+def make_schedule(conf, privacy_params: GDPPrivacyParameters):
     """Instantiate the correct schedule (stateful or non-stateful) from a config.
 
     Args:

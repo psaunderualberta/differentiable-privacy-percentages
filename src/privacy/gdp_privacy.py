@@ -175,7 +175,7 @@ class GDPPrivacyParameters(eqx.Module):
             The ratio (exp(1/max_sigma²) - 1) / (exp(μ₀²) - 1).
         """
         if max_sigma is None:
-            max_sigma = SingletonConfig.get_policy_config_instance().max_sigma
+            max_sigma = SingletonConfig.get_schedule_optimizer_config().max_sigma
 
         return (jnp.exp(1 / max_sigma**2) - 1) / (jnp.exp(self.mu_0**2) - 1)
 
@@ -261,7 +261,7 @@ class GDPPrivacyParameters(eqx.Module):
         Returns:
             The Gaussian noise scale sigma.
         """
-        max_sigma = SingletonConfig.get_policy_config_instance().max_sigma
+        max_sigma = SingletonConfig.get_schedule_optimizer_config().max_sigma
         schedule = jnp.where(schedule > max_sigma, max_sigma, schedule)
         schedule = eqx.error_if(schedule, (schedule == 0).any(), "schedule has 0!")
         schedule = eqx.error_if(
@@ -430,6 +430,6 @@ def get_privacy_params(dataset_length: int) -> GDPPrivacyParameters:
     epsilon = sweep_config.env.eps
     delta = sweep_config.env.delta
     p = sweep_config.env.batch_size / dataset_length
-    T = SingletonConfig.get_environment_config_instance().max_steps_in_episode
+    T = SingletonConfig.get_environment_config_instance().num_training_steps
 
     return GDPPrivacyParameters(epsilon, delta, p, T)

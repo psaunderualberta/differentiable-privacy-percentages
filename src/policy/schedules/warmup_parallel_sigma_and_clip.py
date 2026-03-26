@@ -97,8 +97,8 @@ class WarmupParallelSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         privacy_params: GDPPrivacyParameters,
     ) -> "WarmupParallelSigmaAndClipSchedule":
         T = privacy_params.T
-        total_timesteps = SingletonConfig.get_sweep_config_instance().total_timesteps
-        warmup_steps = max(1, int(conf.warmup_pct * total_timesteps))
+        num_outer_steps = SingletonConfig.get_sweep_config_instance().num_outer_steps
+        warmup_steps = max(1, int(conf.warmup_pct * num_outer_steps))
         noise_warmup = ConstantSchedule(conf.warmup_noise_init, T)
         clip_warmup = ConstantSchedule(conf.warmup_clip_init, T)
         noise_tail = base_schedule_factory(conf.noise_tail, T)

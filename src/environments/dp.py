@@ -13,7 +13,7 @@ from jax import checkpoint as jax_checkpoint  # type: ignore[attr-defined]
 from jaxtyping import Array, PRNGKeyArray, PyTree
 
 from conf.singleton_conf import SingletonConfig
-from environments.dp_params import DP_RL_Params
+from environments.dp_params import DPTrainingParams
 from environments.losses import loss, vmapped_loss
 from policy.schedules.abstract import AbstractNoiseAndClipSchedule
 from policy.stateful_schedules.abstract import (
@@ -52,7 +52,7 @@ def training_step(
     batch_y: Array,
     noise: Array,
     clip: Array,
-    params: DP_RL_Params,
+    params: DPTrainingParams,
     private: bool = True,
 ) -> tuple[
     PyTree,
@@ -106,7 +106,7 @@ def training_step(
 @eqx.filter_jit
 def train_with_noise(
     schedule: AbstractNoiseAndClipSchedule,
-    params: DP_RL_Params,
+    params: DPTrainingParams,
     mb_key: PRNGKeyArray,
     init_key: PRNGKeyArray,
     noise_key: PRNGKeyArray,
@@ -115,7 +115,7 @@ def train_with_noise(
     noise_schedule = schedule.get_private_sigmas()
     clip_schedule = schedule.get_private_clips()
 
-    T = params.max_steps_in_episode
+    T = params.num_training_steps
     K = params.scan_segments
     loader = params.loader
     N = loader.n_train
@@ -263,7 +263,7 @@ def train_with_noise(
 @eqx.filter_jit
 def train_with_stateful_noise(
     schedule: AbstractStatefulNoiseAndClipSchedule,
-    params: DP_RL_Params,
+    params: DPTrainingParams,
     mb_key: PRNGKeyArray,
     init_key: PRNGKeyArray,
     noise_key: PRNGKeyArray,
@@ -271,7 +271,7 @@ def train_with_stateful_noise(
     initial_schedule_state = schedule.get_initial_state()
     iters = schedule.get_iteration_array()
 
-    T = params.max_steps_in_episode
+    T = params.num_training_steps
     K = params.scan_segments
     loader = params.loader
     N = loader.n_train

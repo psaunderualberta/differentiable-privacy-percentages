@@ -1,7 +1,7 @@
-"""Factory for the outer-loop policy-loss function.
+"""Factory for the outer-loop training-loss function.
 
 The returned callable is JIT-compiled and shard-mapped over the available
-GPU mesh so that ``policy_batch_size`` networks are trained in parallel.
+GPU mesh so that ``schedule_batch_size`` networks are trained in parallel.
 Wrapping construction in a factory keeps ``main.py`` free of the decorator
 stack and JAX sharding details.
 """
@@ -16,16 +16,16 @@ from jax.sharding import Mesh
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, PRNGKeyArray
 
-from environments.dp import DP_RL_Params, train_with_noise
+from environments.dp import DPTrainingParams, train_with_noise
 from policy.schedules.abstract import AbstractNoiseAndClipSchedule
 
 
-def make_policy_loss_fn(mesh: Mesh, env_params: DP_RL_Params):
-    """Return the JIT-compiled, shard-mapped policy loss function.
+def make_training_loss_fn(mesh: Mesh, env_params: DPTrainingParams):
+    """Return the JIT-compiled, shard-mapped training loss function.
 
     The returned function has signature::
 
-        get_policy_loss(schedule, mb_key, init_key, noise_keys)
+        get_training_loss(schedule, mb_key, init_key, noise_keys)
             -> ((loss, (losses, accuracies, val_accs)), grads)
 
     It is decorated with ``eqx.filter_jit`` and ``eqx.filter_value_and_grad``
@@ -36,7 +36,7 @@ def make_policy_loss_fn(mesh: Mesh, env_params: DP_RL_Params):
     mesh:
         JAX device mesh produced by ``get_optimal_mesh``.
     env_params:
-        Frozen DP-SGD environment parameters (dataset, optimizer, privacy).
+        Frozen DP-SGD training parameters (dataset, optimizer, privacy).
     """
     vmapped_train_with_noise = eqx.filter_vmap(
         train_with_noise,
@@ -52,13 +52,13 @@ def make_policy_loss_fn(mesh: Mesh, env_params: DP_RL_Params):
         out_specs=(P(), (P("x"), P("x"), P("x"))),
         check_rep=False,
     )
-    def get_policy_loss(
+    def get_training_loss(
         schedule: AbstractNoiseAndClipSchedule,
         mb_key: PRNGKeyArray,
         init_key: PRNGKeyArray,
         noise_keys: PRNGKeyArray,
     ) -> tuple[Array, tuple[Array, Array, Array]]:
-        """Calculate the policy loss averaged over all shard-mapped networks."""
+        """Calculate the training loss averaged over all shard-mapped networks."""
         _, to_diff, losses, accuracies, val_acc = vmapped_train_with_noise(
             schedule,
             env_params,
@@ -70,4 +70,4 @@ def make_policy_loss_fn(mesh: Mesh, env_params: DP_RL_Params):
         to_diff = jlax.pmean(to_diff, "x").squeeze()
         return to_diff, (losses, accuracies, val_acc)
 
-    return get_policy_loss
+    return get_training_loss

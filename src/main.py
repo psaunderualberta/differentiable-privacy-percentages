@@ -6,9 +6,9 @@ from jax import random as jr
 import wandb
 from conf.singleton_conf import SingletonConfig
 from environments.dp import get_private_model_training_schemas
-from environments.dp_params import DP_RL_Params
-from environments.outer_loop import make_policy_loss_fn
-from policy.factory import policy_factory
+from environments.dp_params import DPTrainingParams
+from environments.outer_loop import make_training_loss_fn
+from policy.factory import make_schedule
 from privacy.gdp_privacy import get_privacy_params
 from util.baselines import Baseline
 from util.checkpointing import load_checkpoint, make_state, save_checkpoint
@@ -19,11 +19,11 @@ from util.wandb_init import init_wandb_run
 
 
 def main():
-    """Run the outer gradient-based RL loop that learns the DP-SGD noise/clip schedule."""
+    """Run the outer gradient-based loop that learns the DP-SGD noise/clip schedule."""
     sweep_config = SingletonConfig.get_sweep_config_instance()
     wandb_config = SingletonConfig.get_wandb_config_instance()
 
-    total_timesteps = sweep_config.total_timesteps
+    num_outer_steps = sweep_config.num_outer_steps
     env_prng_seed = sweep_config.prng_seed.sample()
 
     # Initialize dataset
@@ -37,30 +37,30 @@ def main():
     print(f"\t(epsilon, delta)-DP: ({gdp_params.eps}, {gdp_params.delta})")
     print(f"\tmu-GDP: {gdp_params.mu}")
 
-    # Initialize schedule (policy)
-    schedule_conf = SingletonConfig.get_policy_config_instance().schedule
-    schedule = policy_factory(schedule_conf, gdp_params)
+    # Initialize schedule
+    schedule_conf = SingletonConfig.get_schedule_optimizer_config().schedule
+    schedule = make_schedule(schedule_conf, gdp_params)
     schedule = schedule.project()
     if getattr(schedule, "use_fista", False):
         schedule = schedule.fista_extrapolate()
-    policy_batch_size = sweep_config.policy.batch_size
+    schedule_batch_size = sweep_config.schedule_optimizer.batch_size
 
     # Initialize private environment
-    env_params = DP_RL_Params.create_direct_from_config()
+    env_params = DPTrainingParams.create_direct_from_config()
 
     # Initialize logger
     logger = WandbTableLogger()
     for schema in schedule.get_logging_schemas() + get_private_model_training_schemas():
         logger.add_schema(schema)
 
-    # Build the JIT-compiled, shard-mapped policy loss function
-    mesh = get_optimal_mesh(devices("gpu"), policy_batch_size)
-    get_policy_loss = make_policy_loss_fn(mesh, env_params)
+    # Build the JIT-compiled, shard-mapped training loss function
+    mesh = get_optimal_mesh(devices("gpu"), schedule_batch_size)
+    get_training_loss = make_training_loss_fn(mesh, env_params)
 
     # Initialise optimizer and PRNG keys (may be overwritten by checkpoint restore)
     optimizer = optax.sgd(
-        learning_rate=sweep_config.policy.lr.sample(),
-        momentum=sweep_config.policy.momentum.sample(),
+        learning_rate=sweep_config.schedule_optimizer.lr.sample(),
+        momentum=sweep_config.schedule_optimizer.momentum.sample(),
     )
     opt_state = optimizer.init(schedule)  # type: ignore
 
@@ -99,9 +99,9 @@ def main():
         baseline.generate_baseline_data(eval_key)
 
     iterator = tqdm.tqdm(
-        range(start_step, total_timesteps),
+        range(start_step, num_outer_steps),
         desc="Training Progress",
-        total=total_timesteps - start_step,
+        total=num_outer_steps - start_step,
     )
 
     for t in iterator:
@@ -111,15 +111,15 @@ def main():
         for loggable_item in schedule.get_loggables():
             logger.log(loggable_item)
 
-        # Compute policy loss and gradients
+        # Compute training loss and gradients
         key, mb_key, noise_key = jr.split(key, 3)
         if not sweep_config.train_on_single_network:
             key, init_key = jr.split(key)
-        (loss, (losses, accuracies, val_accs)), grads = get_policy_loss(
+        (loss, (losses, accuracies, val_accs)), grads = get_training_loss(
             schedule,
             mb_key,
             init_key,
-            jr.split(noise_key, policy_batch_size),
+            jr.split(noise_key, schedule_batch_size),
         )
 
         logger.log(Loggable(table_name="train_losses", data={"losses": losses}))
@@ -139,9 +139,9 @@ def main():
         grads = ensure_valid_pytree(grads, "grads in main")
         updates, opt_state = optimizer.update(grads, opt_state, schedule)
         schedule = schedule.apply_updates(updates)
-        schedule = ensure_valid_pytree(schedule, "policy in main after updates")
+        schedule = ensure_valid_pytree(schedule, "schedule in main after updates")
         x_new = schedule.project()
-        x_new = ensure_valid_pytree(x_new, "policy in main after project")
+        x_new = ensure_valid_pytree(x_new, "schedule in main after project")
         if getattr(schedule, "use_fista", False):
             schedule = schedule.fista_advance(x_new)
             schedule = schedule.fista_extrapolate()

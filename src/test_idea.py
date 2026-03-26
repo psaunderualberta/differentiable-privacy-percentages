@@ -10,7 +10,7 @@ from privacy.schedules import (  # type: ignore[import]
 
 from conf.singleton_conf import SingletonConfig
 from environments.dp import train_with_noise
-from environments.dp_params import DP_RL_Params
+from environments.dp_params import DPTrainingParams
 from networks.net_factory import net_factory
 from privacy.gdp_privacy import (
     approx_to_gdp,
@@ -34,7 +34,7 @@ def main():
         output_shape=y.shape,
         conf=sweep_config.env.network,
     )
-    env_params = DP_RL_Params.create(
+    env_params = DPTrainingParams.create(
         environment_config,
         network_arch=private_network_arch,
         X=X,
@@ -47,7 +47,7 @@ def main():
     delta = sweep_config.env.delta
     mu_tot = approx_to_gdp(epsilon, delta)
     p = sweep_config.env.batch_size / X.shape[0]  # Assuming MNIST dataset size
-    T = environment_config.max_steps_in_episode
+    T = environment_config.num_training_steps
     print("Privacy parameters:")
     print(f"\t(epsilon, delta)-DP: ({epsilon}, {delta})")
     print(f"\tmu-GDP: {mu_tot}")

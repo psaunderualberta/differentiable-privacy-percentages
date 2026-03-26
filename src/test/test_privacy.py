@@ -36,14 +36,16 @@ def params() -> GDPPrivacyParameters:
 @pytest.fixture
 def singleton_with_max_sigma():
     """Set SingletonConfig to a default Config so methods that call it work."""
-    from conf.config import Config, EnvConfig, PolicyConfig, SweepConfig, WandbConfig
+    from conf.config import Config, EnvConfig, ScheduleOptimizerConfig, SweepConfig, WandbConfig
     from conf.singleton_conf import SingletonConfig
 
     SingletonConfig.config = Config(
         wandb_conf=WandbConfig(),
-        sweep=SweepConfig(env=EnvConfig(), policy=PolicyConfig(max_sigma=10.0)),
+        sweep=SweepConfig(
+            env=EnvConfig(), schedule_optimizer=ScheduleOptimizerConfig(max_sigma=10.0)
+        ),
     )
-    yield SingletonConfig.config.sweep.policy.max_sigma
+    yield SingletonConfig.config.sweep.schedule_optimizer.max_sigma
     SingletonConfig.config = None
 
 

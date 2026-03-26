@@ -11,7 +11,7 @@ from jaxtyping import Array, PRNGKeyArray
 
 import wandb
 from environments.dp import (
-    DP_RL_Params,
+    DPTrainingParams,
     train_with_noise,
     train_with_stateful_noise,
 )
@@ -31,7 +31,7 @@ file_location = os.path.abspath(os.path.dirname(__file__))
 class Baseline:
     def __init__(
         self,
-        env_params: DP_RL_Params,
+        env_params: DPTrainingParams,
         privacy_params: GDPPrivacyParameters,
         num_reps: int = 8,
     ):
@@ -54,7 +54,7 @@ class Baseline:
     def combine_dataset(
         self,
         df: pd.DataFrame | None,
-        schedule_name: str = "Learned Policy",
+        schedule_name: str = "Learned Schedule",
     ) -> pd.DataFrame:
         if df is None:
             return self.df
@@ -207,12 +207,12 @@ class Baseline:
         self,
         schedule: "AbstractNoiseAndClipSchedule | AbstractStatefulNoiseAndClipSchedule",
         eval_key: PRNGKeyArray,
-        label: str = "Learned Policy",
+        label: str = "Learned Schedule",
     ) -> None:
         """Log the final baseline comparison, generating baseline data if needed.
 
         If ``generate_baseline_data`` was already called during training,
-        discards any mid-training learned-policy rows before re-evaluating.
+        discards any mid-training learned-schedule rows before re-evaluating.
         Otherwise generates fresh baseline data first.
         """
         if not hasattr(self, "original_df"):

@@ -20,7 +20,7 @@ import pytest
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
-from conf.config import EnvConfig, PolicyConfig, SweepConfig
+from conf.config import EnvConfig, ScheduleOptimizerConfig, SweepConfig
 from conf.config_util import dist_config_helper
 from privacy.gdp_privacy import GDPPrivacyParameters, approx_to_gdp
 
@@ -103,12 +103,14 @@ _P = 0.1
 @pytest.fixture()
 def _singleton_max_sigma():
     """Configure SingletonConfig so methods that read max_sigma work."""
-    from conf.config import Config, EnvConfig, PolicyConfig, SweepConfig, WandbConfig
+    from conf.config import Config, EnvConfig, ScheduleOptimizerConfig, SweepConfig, WandbConfig
     from conf.singleton_conf import SingletonConfig
 
     SingletonConfig.config = Config(
         wandb_conf=WandbConfig(),
-        sweep=SweepConfig(env=EnvConfig(), policy=PolicyConfig(max_sigma=10.0)),
+        sweep=SweepConfig(
+            env=EnvConfig(), schedule_optimizer=ScheduleOptimizerConfig(max_sigma=10.0)
+        ),
     )
     yield 10.0
     SingletonConfig.config = None
@@ -631,34 +633,34 @@ class TestPlottingStepsProperties:
     """plotting_steps is always a valid, bounded integer regardless of inputs."""
 
     @given(
-        total_timesteps=st.integers(min_value=1, max_value=10_000),
+        num_outer_steps=st.integers(min_value=1, max_value=10_000),
         plotting_interval=st.integers(min_value=1, max_value=10_000),
     )
     @settings(max_examples=100)
-    def test_plotting_steps_at_least_one(self, total_timesteps, plotting_interval):
+    def test_plotting_steps_at_least_one(self, num_outer_steps, plotting_interval):
         """plotting_steps ≥ 1: even if interval > total, we get at least one plot."""
         sweep = SweepConfig(
             env=EnvConfig(),
-            policy=PolicyConfig(),
-            total_timesteps=total_timesteps,
+            schedule_optimizer=ScheduleOptimizerConfig(),
+            num_outer_steps=num_outer_steps,
             plotting_interval=plotting_interval,
         )
         assert sweep.plotting_steps >= 1
 
     @given(
-        total_timesteps=st.integers(min_value=1, max_value=10_000),
+        num_outer_steps=st.integers(min_value=1, max_value=10_000),
         plotting_interval=st.integers(min_value=1, max_value=10_000),
     )
     @settings(max_examples=100)
-    def test_plotting_steps_at_most_total_timesteps(self, total_timesteps, plotting_interval):
-        """plotting_steps ≤ total_timesteps: can't plot more times than we train."""
+    def test_plotting_steps_at_most_num_outer_steps(self, num_outer_steps, plotting_interval):
+        """plotting_steps ≤ num_outer_steps: can't plot more times than we train."""
         sweep = SweepConfig(
             env=EnvConfig(),
-            policy=PolicyConfig(),
-            total_timesteps=total_timesteps,
+            schedule_optimizer=ScheduleOptimizerConfig(),
+            num_outer_steps=num_outer_steps,
             plotting_interval=plotting_interval,
         )
-        assert sweep.plotting_steps <= total_timesteps
+        assert sweep.plotting_steps <= num_outer_steps
 
 
 # ===========================================================================

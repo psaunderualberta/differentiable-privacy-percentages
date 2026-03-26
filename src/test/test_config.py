@@ -20,7 +20,7 @@ import tyro
 
 from conf.config import (
     EnvConfig,
-    PolicyConfig,
+    ScheduleOptimizerConfig,
     SweepConfig,
 )
 from conf.config_util import (
@@ -73,7 +73,7 @@ for _mod in [
 
 def _make_sweep() -> SweepConfig:
     """Minimal SweepConfig with required fields filled in."""
-    return SweepConfig(env=EnvConfig(), policy=PolicyConfig())
+    return SweepConfig(env=EnvConfig(), schedule_optimizer=ScheduleOptimizerConfig())
 
 
 # ---------------------------------------------------------------------------
@@ -106,9 +106,9 @@ class TestDistributionConfig:
 
     def test_values_distribution_in_policy_lr(self):
         """lr and momentum accept a values distribution and serialise correctly."""
-        from conf.config import PolicyConfig
+        from conf.config import ScheduleOptimizerConfig
 
-        conf = PolicyConfig(
+        conf = ScheduleOptimizerConfig(
             lr=dist_config_helper(values=(0.001, 0.01, 0.1), distribution="values"),
             momentum=dist_config_helper(values=(0.0, 0.9), distribution="values"),
         )
@@ -172,8 +172,8 @@ class TestIsFixedField:
 
 class TestIsUnionField:
     def test_schedule_field_is_union(self):
-        # PolicyConfig.schedule: ScheduleConfig = Union[...]
-        assert _is_union_field(PolicyConfig, "schedule") is True
+        # ScheduleOptimizerConfig.schedule: ScheduleConfig = Union[...]
+        assert _is_union_field(ScheduleOptimizerConfig, "schedule") is True
 
     def test_network_field_is_union(self):
         # EnvConfig.network: NetworkConfig = Union[...]
@@ -185,15 +185,15 @@ class TestIsUnionField:
         assert _is_union_field(AlternatingSigmaAndClipScheduleConfig, "clip") is True
 
     def test_primitive_field_not_union(self):
-        assert _is_union_field(PolicyConfig, "batch_size") is False
-        assert _is_union_field(PolicyConfig, "max_sigma") is False
+        assert _is_union_field(ScheduleOptimizerConfig, "batch_size") is False
+        assert _is_union_field(ScheduleOptimizerConfig, "max_sigma") is False
 
     def test_distribution_config_field_not_union(self):
-        assert _is_union_field(PolicyConfig, "lr") is False
+        assert _is_union_field(ScheduleOptimizerConfig, "lr") is False
         assert _is_union_field(EnvConfig, "lr") is False
 
     def test_non_existent_field_returns_false(self):
-        assert _is_union_field(PolicyConfig, "no_such_field") is False
+        assert _is_union_field(ScheduleOptimizerConfig, "no_such_field") is False
 
     def test_plain_union_annotation(self):
         @dataclass
@@ -233,7 +233,7 @@ class TestToWandbSweepParams:
         assert result["parameters"]["init_value"] == {"value": 2.5}
 
     def test_distribution_config_delegates_to_wandb_sweep(self):
-        conf = PolicyConfig()
+        conf = ScheduleOptimizerConfig()
         result = to_wandb_sweep_params(conf)
         # lr is a DistributionConfig with its own to_wandb_sweep; result should
         # come from DistributionConfig.to_wandb_sweep, not {"value": <obj>}.
@@ -242,7 +242,7 @@ class TestToWandbSweepParams:
 
     def test_union_field_gets_type_discriminator(self):
         # schedule is a Union-typed field; _type must be injected.
-        conf = PolicyConfig()  # default: AlternatingSigmaAndClipScheduleConfig
+        conf = ScheduleOptimizerConfig()  # default: AlternatingSigmaAndClipScheduleConfig
         result = to_wandb_sweep_params(conf)
         schedule_params = result["parameters"]["schedule"]["parameters"]
         assert "_type" in schedule_params
@@ -258,7 +258,7 @@ class TestToWandbSweepParams:
         assert "_type" not in lr_params
 
     def test_nested_union_field_type_matches_actual_variant(self):
-        conf = PolicyConfig(schedule=SigmaAndClipScheduleConfig())
+        conf = ScheduleOptimizerConfig(schedule=SigmaAndClipScheduleConfig())
         result = to_wandb_sweep_params(conf)
         type_val = result["parameters"]["schedule"]["parameters"]["_type"]
         assert type_val == {"value": "SigmaAndClipScheduleConfig"}
@@ -332,23 +332,25 @@ class TestMergeWandbSweepUnion:
 
 
 # ---------------------------------------------------------------------------
-# PolicyConfig.sweep_schedule_types
+# ScheduleOptimizerConfig.sweep_schedule_types
 # ---------------------------------------------------------------------------
 
 
-class TestPolicyConfigSweepScheduleTypes:
+class TestScheduleOptimizerConfigSweepScheduleTypes:
     def test_default_sweep_schedule_conf_types_is_nonempty(self):
-        conf = PolicyConfig()
+        conf = ScheduleOptimizerConfig()
         assert len(conf.sweep_schedule_conf_types) > 0
         assert "AlternatingSigmaAndClipScheduleConfig" in conf.sweep_schedule_conf_types
 
     def test_sweep_schedule_conf_types_excluded_from_wandb_params(self):
-        conf = PolicyConfig(sweep_schedule_conf_types=("AlternatingSigmaAndClipScheduleConfig",))
+        conf = ScheduleOptimizerConfig(
+            sweep_schedule_conf_types=("AlternatingSigmaAndClipScheduleConfig",)
+        )
         result = to_wandb_sweep_params(conf)
         assert "sweep_schedule_conf_types" not in result["parameters"]
 
     def test_to_wandb_sweep_default_emits_values_list(self):
-        conf = PolicyConfig()
+        conf = ScheduleOptimizerConfig()
         result = conf.to_wandb_sweep()
         schedule_params = result["parameters"]["schedule"]["parameters"]
         # Default has multiple types, so _type must be a "values" list.
@@ -356,7 +358,7 @@ class TestPolicyConfigSweepScheduleTypes:
         assert "AlternatingSigmaAndClipScheduleConfig" in schedule_params["_type"]["values"]
 
     def test_to_wandb_sweep_overrides_type_when_set(self):
-        conf = PolicyConfig(
+        conf = ScheduleOptimizerConfig(
             sweep_schedule_conf_types=(
                 "AlternatingSigmaAndClipScheduleConfig",
                 "SigmaAndClipScheduleConfig",
@@ -372,13 +374,13 @@ class TestPolicyConfigSweepScheduleTypes:
         }
 
     def test_to_wandb_sweep_unknown_type_raises(self):
-        conf = PolicyConfig(sweep_schedule_conf_types=("NoSuchScheduleConfig",))
+        conf = ScheduleOptimizerConfig(sweep_schedule_conf_types=("NoSuchScheduleConfig",))
         with pytest.raises(ValueError, match="Unknown schedule type 'NoSuchScheduleConfig'"):
             conf.to_wandb_sweep()
 
     def test_to_wandb_sweep_merged_params_contain_all_fields(self):
         # diff_clips_first is only in Alternating; verify it appears when sweeping both
-        conf = PolicyConfig(
+        conf = ScheduleOptimizerConfig(
             sweep_schedule_conf_types=(
                 "SigmaAndClipScheduleConfig",
                 "AlternatingSigmaAndClipScheduleConfig",
@@ -392,7 +394,7 @@ class TestPolicyConfigSweepScheduleTypes:
 
     def test_reconstruct_picks_correct_variant_after_sweep(self):
         # Simulate what happens when W&B assigns _type=SigmaAndClipScheduleConfig
-        conf = PolicyConfig(
+        conf = ScheduleOptimizerConfig(
             sweep_schedule_conf_types=(
                 "AlternatingSigmaAndClipScheduleConfig",
                 "SigmaAndClipScheduleConfig",
@@ -479,7 +481,7 @@ class TestReconstructFromDict:
         assert result.init_value == pytest.approx(2.0)
 
     def test_distribution_config_wrapped_from_scalar(self):
-        conf = PolicyConfig()
+        conf = ScheduleOptimizerConfig()
         result = _reconstruct_from_dict(conf, {"lr": 0.42})
         assert isinstance(result.lr, DistributionConfig)
         assert result.lr.distribution == "constant"
@@ -490,7 +492,7 @@ class TestReconstructFromDict:
         assert _reconstruct_from_dict("hello", {}) == "hello"
 
     def test_union_field_same_variant_reconstructed(self):
-        conf = PolicyConfig()
+        conf = ScheduleOptimizerConfig()
         run_conf = {
             "schedule": {
                 "_type": "AlternatingSigmaAndClipScheduleConfig",
@@ -504,7 +506,7 @@ class TestReconstructFromDict:
     def test_union_field_different_variant_reconstructed(self):
         # Default schedule is AlternatingSigmaAndClipScheduleConfig; run_conf
         # specifies SigmaAndClipScheduleConfig — must switch variant.
-        conf = PolicyConfig()
+        conf = ScheduleOptimizerConfig()
         run_conf = {
             "schedule": {
                 "_type": "SigmaAndClipScheduleConfig",
@@ -527,7 +529,7 @@ class TestReconstructFromDict:
         assert result.schedule.clip.num_keypoints == 20
 
     def test_union_field_unknown_type_raises(self):
-        conf = PolicyConfig()
+        conf = ScheduleOptimizerConfig()
         run_conf = {"schedule": {"_type": "NoSuchConfig"}}
         with pytest.raises(ValueError, match="unknown config class 'NoSuchConfig'"):
             _reconstruct_from_dict(conf, run_conf)
@@ -555,12 +557,12 @@ class TestReconstructFromDict:
     def test_sweep_level_reconstruction(self):
         sweep = _make_sweep()
         run_conf = {
-            "total_timesteps": 500,
+            "num_outer_steps": 500,
             "dataset": "fashion-mnist",
             "prng_seed": 123456,
         }
         result = _reconstruct_from_dict(sweep, run_conf)
-        assert result.total_timesteps == 500
+        assert result.num_outer_steps == 500
         assert result.dataset == "fashion-mnist"
         assert isinstance(result.prng_seed, DistributionConfig)
         assert result.prng_seed.value == pytest.approx(123456)
@@ -569,13 +571,13 @@ class TestReconstructFromDict:
         """Serialize a SweepConfig to a W&B-like dict, then reconstruct it."""
         original = SweepConfig(
             env=EnvConfig(eps=1.5, batch_size=128),
-            policy=PolicyConfig(
+            schedule_optimizer=ScheduleOptimizerConfig(
                 schedule=SigmaAndClipScheduleConfig(),
                 sweep_schedule_conf_types=("SigmaAndClipScheduleConfig",),
                 batch_size=4,
                 max_sigma=20.0,
             ),
-            total_timesteps=300,
+            num_outer_steps=300,
         )
 
         # Build a W&B-like run.config from the sweep parameters.
@@ -604,28 +606,28 @@ class TestReconstructFromDict:
         run_conf = _unwrap_params(sweep_spec)
 
         reconstructed = _reconstruct_from_dict(
-            SweepConfig(env=EnvConfig(), policy=PolicyConfig()),
+            SweepConfig(env=EnvConfig(), schedule_optimizer=ScheduleOptimizerConfig()),
             run_conf,
         )
 
-        assert reconstructed.total_timesteps == 300
+        assert reconstructed.num_outer_steps == 300
         assert reconstructed.env.eps == pytest.approx(1.5)
         assert reconstructed.env.batch_size == 128
-        assert isinstance(reconstructed.policy.schedule, SigmaAndClipScheduleConfig)
-        assert reconstructed.policy.max_sigma == pytest.approx(20.0)
+        assert isinstance(reconstructed.schedule_optimizer.schedule, SigmaAndClipScheduleConfig)
+        assert reconstructed.schedule_optimizer.max_sigma == pytest.approx(20.0)
 
-    def test_full_round_trip_via_wandb_format_diff_policy(self):
-        """Serialize a SweepConfig to a W&B-like dict, then reconstruct it to different policy
-        than given in schedule"""
+    def test_full_round_trip_via_wandb_format_diff_schedule(self):
+        """Serialize a SweepConfig to a W&B-like dict, then reconstruct it to a different
+        schedule type than given in the optimizer config."""
         original = SweepConfig(
             env=EnvConfig(eps=1.5, batch_size=128),
-            policy=PolicyConfig(
+            schedule_optimizer=ScheduleOptimizerConfig(
                 schedule=SigmaAndClipScheduleConfig(),
                 sweep_schedule_conf_types=(AlternatingSigmaAndClipScheduleConfig.__name__,),
                 batch_size=4,
                 max_sigma=20.0,
             ),
-            total_timesteps=300,
+            num_outer_steps=300,
         )
 
         # Build a W&B-like run.config from the sweep parameters.
@@ -654,15 +656,17 @@ class TestReconstructFromDict:
         run_conf = _unwrap_params(sweep_spec)
 
         reconstructed = _reconstruct_from_dict(
-            SweepConfig(env=EnvConfig(), policy=PolicyConfig()),
+            SweepConfig(env=EnvConfig(), schedule_optimizer=ScheduleOptimizerConfig()),
             run_conf,
         )
 
-        assert reconstructed.total_timesteps == 300
+        assert reconstructed.num_outer_steps == 300
         assert reconstructed.env.eps == pytest.approx(1.5)
         assert reconstructed.env.batch_size == 128
-        assert isinstance(reconstructed.policy.schedule, AlternatingSigmaAndClipScheduleConfig)
-        assert reconstructed.policy.max_sigma == pytest.approx(20.0)
+        assert isinstance(
+            reconstructed.schedule_optimizer.schedule, AlternatingSigmaAndClipScheduleConfig
+        )
+        assert reconstructed.schedule_optimizer.max_sigma == pytest.approx(20.0)
 
 
 # ---------------------------------------------------------------------------
@@ -674,8 +678,8 @@ class TestSweepConfig:
     def test_plotting_steps_normal(self):
         sweep = SweepConfig(
             env=EnvConfig(),
-            policy=PolicyConfig(),
-            total_timesteps=100,
+            schedule_optimizer=ScheduleOptimizerConfig(),
+            num_outer_steps=100,
             plotting_interval=10,
         )
         assert sweep.plotting_steps == 10
@@ -683,8 +687,8 @@ class TestSweepConfig:
     def test_plotting_steps_interval_ge_total(self):
         sweep = SweepConfig(
             env=EnvConfig(),
-            policy=PolicyConfig(),
-            total_timesteps=100,
+            schedule_optimizer=ScheduleOptimizerConfig(),
+            num_outer_steps=100,
             plotting_interval=200,
         )
         assert sweep.plotting_steps == 1
@@ -692,8 +696,8 @@ class TestSweepConfig:
     def test_plotting_steps_interval_equals_total(self):
         sweep = SweepConfig(
             env=EnvConfig(),
-            policy=PolicyConfig(),
-            total_timesteps=50,
+            schedule_optimizer=ScheduleOptimizerConfig(),
+            num_outer_steps=50,
             plotting_interval=50,
         )
         assert sweep.plotting_steps == 1
@@ -712,7 +716,9 @@ class TestSweepConfig:
         assert "name" not in result
 
     def test_to_wandb_sweep_name_included_when_set(self):
-        sweep = SweepConfig(env=EnvConfig(), policy=PolicyConfig(), name="my_sweep")
+        sweep = SweepConfig(
+            env=EnvConfig(), schedule_optimizer=ScheduleOptimizerConfig(), name="my_sweep"
+        )
         result = sweep.to_wandb_sweep()
         assert result["name"] == "my_sweep"
 
@@ -724,7 +730,7 @@ class TestSweepConfig:
     def test_to_wandb_sweep_description_included_when_set(self):
         sweep = SweepConfig(
             env=EnvConfig(),
-            policy=PolicyConfig(),
+            schedule_optimizer=ScheduleOptimizerConfig(),
             description="A test sweep",
         )
         result = sweep.to_wandb_sweep()
@@ -812,10 +818,10 @@ class TestConfigDefaults:
         assert conf.eps == pytest.approx(0.5)
         assert conf.delta == pytest.approx(1e-7)
         assert conf.batch_size == 250
-        assert conf.max_steps_in_episode == 100
+        assert conf.num_training_steps == 100
 
     def test_policy_config_defaults(self):
-        conf = PolicyConfig()
+        conf = ScheduleOptimizerConfig()
         assert isinstance(conf.schedule, AlternatingSigmaAndClipScheduleConfig)
         assert conf.batch_size == 1
         assert conf.max_sigma == pytest.approx(10.0)
