@@ -133,10 +133,16 @@ class EnvConfig:
     delta: float = 1e-7
     batch_size: int = 250
     num_training_steps: int = 100
-    scan_segments: int = 1
+    scan_segments: int = -1
     """Number of segments for the scan-of-scans. Must divide num_training_steps.
-    K=1 (default) is equivalent to the current single scan with no behaviour change.
+    K=1 is equivalent to the current single scan with no behaviour change.
     K>1 reduces peak gradient tape memory by a factor of K at negligible runtime cost."""
+
+    @property
+    def scan_segments_derived(self) -> int:
+        if self.scan_segments < 0:
+            return self.num_training_steps
+        return self.scan_segments
 
     def to_wandb_sweep(self) -> dict[str, Any]:
         return to_wandb_sweep_params(self)
@@ -206,7 +212,7 @@ class WandbConfig:
     # in ``{project}-branched`` with a note referencing the original run.
     checkpoint_step: int | None = None
     # Save a checkpoint (locally + W&B artifact) every this many outer steps.
-    checkpoint_every: int = 10
+    checkpoint_every: int = 25
 
 
 @dataclass

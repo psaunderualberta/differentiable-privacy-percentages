@@ -28,7 +28,7 @@ class DPTrainingParams(eqx.Module):
             optimizer=conf.optimizer,
             network=network_arch,
             num_training_steps=conf.num_training_steps,
-            scan_segments=conf.scan_segments,
+            scan_segments=conf.scan_segments_derived,
         )
 
     @classmethod
