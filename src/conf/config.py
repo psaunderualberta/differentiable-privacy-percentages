@@ -76,7 +76,7 @@ NetworkConfig = Union[
 @dataclass
 class ScheduleOptimizerConfig:
     schedule: ScheduleConfig = dataclasses.field(
-        default_factory=AlternatingSigmaAndClipScheduleConfig,
+        default_factory=WarmupParallelSigmaAndClipScheduleConfig,
     )
     batch_size: int = 1
     lr: DistributionConfig = dist_config_helper(value=1.0, distribution="constant")
