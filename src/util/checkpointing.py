@@ -33,6 +33,7 @@ in ``{project}-branched`` with the original run id and step recorded in the
 run notes.
 """
 
+import os
 import pathlib
 from typing import Any
 
@@ -47,6 +48,9 @@ _PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 
 
 def _ckpt_dir(run_id: str) -> pathlib.Path:
+    slurm_tmpdir = os.environ.get("SLURM_TMPDIR", "")
+    if os.environ.get("SLURM_TMPDIR", ""):
+        return pathlib.Path(slurm_tmpdir) / "checkpoints" / run_id
     return _PROJECT_ROOT / "checkpoints" / run_id
 
 
