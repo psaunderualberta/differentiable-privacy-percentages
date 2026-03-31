@@ -51,11 +51,12 @@ class SlurmConfig:
     cpus_per_task: int = 2
     gpus: int = 3
     mem_per_gpu: str = "6G"
-    account: str = "aip-lelis"
+    account: str = "aip-nidhih"
+    wandb_proj: str = "Testing Mu-gdp"
 
     @property
     def main_args(self) -> str:
-        return f'--wandb_conf.project="Testing Mu-gdp" --wandb-conf.entity "psaunder" --wandb-conf.project="Testing Mu-gdp" --wandb-conf.mode "online" --wandb-conf.restart_run_id="{self.run_id}"'
+        return f'--wandb_conf.project="{self.wandb_proj}" --wandb-conf.entity "psaunder" --wandb-conf.mode "online" --wandb-conf.restart_run_id="{self.run_id}"'
 
     @property
     def sbatch_file(self) -> str:
@@ -75,10 +76,11 @@ echo "Current working directory: `pwd`"
 echo "Starting run at: `date`"
 echo
 
-echo "$CUDA_VISIBLE_DEVICES"
+echo "CUDA devices: $CUDA_VISIBLE_DEVICES"
 
 echo "starting training..."
-echo $SLURM_TMPDIR
+echo tmpdir: $SLURM_TMPDIR
+echo main_args: {self.main_args}
 time uv run main.py {self.main_args}
 
 # End printing
