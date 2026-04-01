@@ -18,7 +18,7 @@ class PySRConfig:
     wandb_proj: str
     wandb_entity: str
     omit_features: tuple[str, ...] = ()
-    keep_features: tuple[str, ...] = ("env_eps", "env_delta", "env_max_steps_in_episode")
+    keep_features: tuple[str, ...] = ()
 
 
 def compile_features(run_config: Any) -> dict[str, float | int] | float | int:
@@ -91,11 +91,11 @@ def run2dataset(conf: PySRConfig, api: wandb.Api, run_id: str) -> tuple[pd.DataF
         for key in copy.deepcopy(list(flat_features.keys())):
             if type(flat_features[key]) not in [float, int] or key not in conf.keep_features:
                 del flat_features[key]
-
-    # Trim non-int and non-float values and omit user-specified features
-    for key in copy.deepcopy(list(flat_features.keys())):
-        if type(flat_features[key]) not in [float, int] or key in conf.omit_features:
-            del flat_features[key]
+    else:
+        # Trim non-int and non-float values and omit user-specified features
+        for key in copy.deepcopy(list(flat_features.keys())):
+            if type(flat_features[key]) not in [float, int] or key in conf.omit_features:
+                del flat_features[key]
 
     result: dict[str, pd.DataFrame] = {}
     for table_name, value_col in (("sigmas", "sigma"), ("clips", "clip")):
@@ -131,15 +131,17 @@ def run_regression(df: pd.DataFrame, target_col: str) -> PySRRegressor:
 
     model = PySRRegressor(
         maxsize=30,
-        niterations=1000,
+        niterations=2000,
         binary_operators=["+", "-", "*", "/"],
         unary_operators=[
+            "sqrt",
             "exp",
             "log",
-            "sqrt",
             "inv(x) = 1/x",
         ],
-        extra_sympy_mappings={"inv": lambda x: 1 / x},
+        extra_sympy_mappings={
+            "inv": lambda x: 1 / x,
+        },
         elementwise_loss="loss(prediction, target) = (prediction - target)^2",
     )
     model.fit(X, y, variable_names=list(X.columns))
