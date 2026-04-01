@@ -214,5 +214,8 @@ logging/
 wandb/
 *.html
 *.pdf
+outputs/
 
 checkpoints/
+artifacts/
+cache/
