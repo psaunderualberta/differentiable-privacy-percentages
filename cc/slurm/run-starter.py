@@ -12,6 +12,8 @@ os.environ["PROJECT_SOURCE_ROOT"] = os.path.abspath(
     os.path.join(os.environ["PROJECT_ROOT"], "src"),
 )
 
+_THIS_SCRIPT = os.path.abspath(__file__)
+
 
 @dataclass
 class Runtime:
@@ -19,12 +21,15 @@ class Runtime:
     hours: int = 0
     minutes: int = 0
     seconds: int = 0
+    short: bool = False  # sub-3hr job-chaining preset (2h50m + 5m pad = 2h55m)
 
     @property
     def slurm_timestamp(self):
         """
         Convert a timeframe to a format acceptable by slurm. i.e. dd-hh:mm:ss
         """
+        if self.short:
+            return "00-02:55:00"
         minutes = self.minutes + 5  # Add 5 minutes to account for setup and teardown
         minutes += self.seconds // 60
         seconds = self.seconds % 60
@@ -56,7 +61,13 @@ class SlurmConfig:
 
     @property
     def main_args(self) -> str:
-        return f'--wandb_conf.project="{self.wandb_proj}" --wandb-conf.entity "psaunder" --wandb-conf.mode "online" --wandb-conf.restart_run_id="{self.run_id}"'
+        return (
+            f'--wandb_conf.project="{self.wandb_proj}"'
+            f' --wandb-conf.entity "psaunder"'
+            f' --wandb-conf.mode "online"'
+            f' --wandb-conf.restart_run_id="{self.run_id}"'
+            f' --wandb-conf.checkpoint_run_id="{self.run_id}"'
+        )
 
     @property
     def sbatch_file(self) -> str:
@@ -65,11 +76,18 @@ class SlurmConfig:
 #SBATCH --gpus={self.gpus} # Remove this line to run using CPU only
 #SBATCH --gpus-per-node={self.gpus}
 #SBATCH --mem-per-gpu={self.mem_per_gpu}
-#SBATCH --time={self.runtime.days}-{self.runtime.hours}:{self.runtime.minutes}:{self.runtime.seconds}
+#SBATCH --time={self.runtime.slurm_timestamp}
 #SBATCH --output={self.logfile}
 #SBATCH --job-name={self.jobname}
 #SBATCH --chdir={self.project_dir}
 #SBATCH --account={self.account}
+{"#SBATCH --signal=USR1@900" if self.runtime.short else ""}
+
+# Job-chaining context (read by main.py's SIGUSR1 handler to resubmit)
+export CHAIN_RESUBMIT_SCRIPT="{_THIS_SCRIPT}"
+export CHAIN_WANDB_PROJ="{self.wandb_proj}"
+export CHAIN_JOBNAME="{self.jobname}"
+export CHAIN_ACCOUNT="{self.account}"
 
 # Startup printing
 echo "Current working directory: `pwd`"

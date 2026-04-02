@@ -1,6 +1,5 @@
 import subprocess
 from pathlib import Path
-from typing import Any
 
 import tqdm
 import tyro
@@ -88,7 +87,15 @@ def main(
         iterator.set_description(f"{sweep_id}")
         sweep = sweep_objects.get(sweep_id)
 
-        cmd = f"cat cc/sweeps/{sweep_id}.txt | parallel -q uv run cc/slurm/run-starter.py --run_id={{}} --wandb-proj {project} --jobname='\"{sweep}\"'"
+        cmd = " ".join(
+            [
+                "cat",
+                f"cc/sweeps/{sweep_id}.txt",
+                "|",
+                "parallel -q uv run cc/slurm/run-starter.py --runtime.short"
+                f"--run_id={{}} --wandb-proj {project} --jobname='\"{sweep}\"'",
+            ]
+        )
         process_out = subprocess.run(
             cmd,
             shell=True,
