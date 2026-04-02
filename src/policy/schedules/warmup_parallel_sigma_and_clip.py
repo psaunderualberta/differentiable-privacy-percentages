@@ -305,6 +305,70 @@ class WarmupParallelSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
             _fista_t=fista_t_new,
         )
 
+    def fista_restart(self) -> Self:
+        """Reset FISTA momentum: set t=1 and x_prev <- x_curr."""
+        return self.__class__(
+            noise_warmup=self.noise_warmup,
+            clip_warmup=self.clip_warmup,
+            noise_tail=self.noise_tail,
+            clip_tail=self.clip_tail,
+            privacy_params=self.privacy_params,
+            step_count=self.step_count,
+            warmup_steps=self.warmup_steps,
+            use_fista=self.use_fista,
+            _x_curr_sigmas=self._x_curr_sigmas,
+            _x_curr_clips=self._x_curr_clips,
+            _x_prev_sigmas=self._x_curr_sigmas,
+            _x_prev_clips=self._x_curr_clips,
+            _fista_t=jnp.ones(()),
+        )
+
+    def fista_advance_with_restart(self, x_new: Self, grads: Self) -> Self:
+        """Advance FISTA state, restarting if the gradient opposes the momentum direction.
+
+        Implements the gradient restart condition of O'Donoghue & Candès (2015) - https://arxiv.org/abs/1204.3982:
+        restart when <∇f(y_k), y_k - x_k> > 0.
+
+        Includes all four sub-schedules in the dot product. Whichever branch
+        is inactive contributes ~zero gradient, so it does not affect the result.
+
+        Must be called on the pre-advance schedule (self = y_k).
+
+        Args:
+            x_new: The projected schedule z_{k+1}.
+            grads: Gradient pytree ∇f(y_k), same structure as self.
+
+        Returns:
+            Advanced (and possibly restarted) schedule.
+        """
+        # Reconstruct x_k in parameter space for all sub-schedules.
+        x_k_noise_warmup = ConstantSchedule.from_projection(self.noise_warmup, self._x_curr_sigmas)
+        x_k_clip_warmup = ConstantSchedule.from_projection(self.clip_warmup, self._x_curr_clips)
+        x_k_noise_tail = self.noise_tail.__class__.from_projection(
+            self.noise_tail, self._x_curr_sigmas
+        )
+        x_k_clip_tail = self.clip_tail.__class__.from_projection(self.clip_tail, self._x_curr_clips)
+        g = jtree.leaves(
+            eqx.filter(
+                (grads.noise_warmup, grads.clip_warmup, grads.noise_tail, grads.clip_tail),
+                eqx.is_array,
+            )
+        )
+        d = jtree.leaves(
+            eqx.filter(
+                (
+                    jtree.map(lambda a, b: a - b, self.noise_warmup, x_k_noise_warmup),
+                    jtree.map(lambda a, b: a - b, self.clip_warmup, x_k_clip_warmup),
+                    jtree.map(lambda a, b: a - b, self.noise_tail, x_k_noise_tail),
+                    jtree.map(lambda a, b: a - b, self.clip_tail, x_k_clip_tail),
+                ),
+                eqx.is_array,
+            )
+        )
+        dot = sum(jnp.sum(gi * di) for gi, di in zip(g, d))
+        advanced = self.fista_advance(x_new)
+        return advanced.fista_restart() if dot > 0 else advanced
+
     def _get_log_arrays(self) -> dict[str, Array]:
         return {
             "sigmas": self.get_private_sigmas(),

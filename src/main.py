@@ -143,10 +143,11 @@ def main():
         x_new = schedule.project()
         x_new = ensure_valid_pytree(x_new, "schedule in main after project")
         if getattr(schedule, "use_fista", False):
-            schedule = schedule.fista_advance(x_new)
+            schedule = schedule.fista_advance_with_restart(x_new, grads)
             schedule = schedule.fista_extrapolate()
         else:
             schedule = x_new
+        schedule = ensure_valid_pytree(schedule, "schedule in main after fista")
 
         iterator.set_description(f"Training Progress - Loss: {loss:.4f}")
 

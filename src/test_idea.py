@@ -1,130 +1,39 @@
-import os
+from policy.base_schedules.constant import ConstantSchedule
+from privacy.gdp_privacy import GDPPrivacyParameters
 
-import equinox as eqx
-import jax.numpy as jnp
-import jax.random as jr
-import plotly.graph_objects as go
-from privacy.schedules import (  # type: ignore[import]
-    LinearInterpPolicyNoiseSchedule,
-)
+# Hard-coded settings
+EPS = 3.0
+DELTA = 0.000001
+P = 0.00416666666667
+T = 750
 
-from conf.singleton_conf import SingletonConfig
-from environments.dp import train_with_noise
-from environments.dp_params import DPTrainingParams
-from networks.net_factory import net_factory
-from privacy.gdp_privacy import (
-    approx_to_gdp,
-)
-from util.dataloaders import DATALOADERS
+SIGMA_INIT = 2.12873
+CLIP_INIT = 3.9843063
 
 
 def main():
-    sweep_config = SingletonConfig.get_sweep_config_instance()
-    environment_config = SingletonConfig.get_environment_config_instance()
+    privacy_params = GDPPrivacyParameters(eps=EPS, delta=DELTA, p=P, T=T)
 
-    X, y = DATALOADERS[sweep_config.dataset](sweep_config.dataset_poly_d)
-    X_test, y_test = DATALOADERS[sweep_config.dataset](
-        sweep_config.dataset_poly_d,
-        test=True,
-    )
-    print(f"Dataset shape: {X.shape}, {y.shape}")
+    noise_schedule = ConstantSchedule(value=SIGMA_INIT, T=T)
+    clip_schedule = ConstantSchedule(value=CLIP_INIT, T=T)
 
-    private_network_arch = net_factory(
-        input_shape=X.shape,
-        output_shape=y.shape,
-        conf=sweep_config.env.network,
-    )
-    env_params = DPTrainingParams.create(
-        environment_config,
-        network_arch=private_network_arch,
-        X=X,
-        y=y,
-        valX=X_test,
-        valy=y_test,
-    )
+    sigmas = noise_schedule.get_valid_schedule()
+    clips = clip_schedule.get_valid_schedule()
 
-    epsilon = sweep_config.env.eps
-    delta = sweep_config.env.delta
-    mu_tot = approx_to_gdp(epsilon, delta)
-    p = sweep_config.env.batch_size / X.shape[0]  # Assuming MNIST dataset size
-    T = environment_config.num_training_steps
-    print("Privacy parameters:")
-    print(f"\t(epsilon, delta)-DP: ({epsilon}, {delta})")
-    print(f"\tmu-GDP: {mu_tot}")
+    print("Before projection:")
+    print(f"  sigmas: {noise_schedule.value}")
+    print(f"  clips:  {clip_schedule.value}")
+    print(f"  expenditure: {privacy_params.compute_expenditure(sigmas, clips):.4f}")
+    print(f"  budget (mu/p)^2: {(privacy_params.mu / privacy_params.p) ** 2:.4f}")
 
-    num_grid_points_per_dim = 7
-    grid_points = jnp.linspace(0, 3, num_grid_points_per_dim, dtype=jnp.float32)
-    keypoints = jnp.linspace(0, T, num_grid_points_per_dim + 2, dtype=jnp.int32)
-    base_sigma = 1 / T
+    proj_sigmas, proj_clips = privacy_params.project_sigma_and_clip(sigmas, clips)
+    noise_schedule = ConstantSchedule.from_projection(noise_schedule, proj_sigmas)
+    clip_schedule = ConstantSchedule.from_projection(clip_schedule, proj_clips)
 
-    mb_key, init_key, noise_key = jr.split(
-        jr.PRNGKey(sweep_config.prng_seed.sample()),
-        3,
-    )
-    mb_keys = jr.split(mb_key, sweep_config.policy.batch_size)
-    init_keys = jr.split(init_key, sweep_config.policy.batch_size)
-    noise_keys = jr.split(noise_key, sweep_config.policy.batch_size)
-    vmapped_train_with_noise = eqx.filter_vmap(
-        train_with_noise,
-        in_axes=(None, None, 0, 0, 0),
-    )
-
-    losses = []
-    x_axis = []
-    y_axis = []
-    for keypoint in keypoints:
-        for end_i in range(num_grid_points_per_dim):
-            values = jnp.full(keypoints.shape, base_sigma)
-            values = values.at[keypoints == keypoint].set(grid_points[end_i])
-            sigmas = LinearInterpPolicyNoiseSchedule(
-                keypoints,
-                values,
-                T,
-            ).get_private_sigmas(mu_tot, p, T)
-
-            print(
-                f"Training with Sigma Schedule Keypoint {keypoint}, New Sigma {grid_points[end_i]}",
-            )
-            _, loss, _, _, _ = vmapped_train_with_noise(
-                sigmas,
-                env_params,
-                mb_keys,
-                init_keys,
-                noise_keys,
-            )
-
-            losses.append(loss.mean())
-            x_axis.append(keypoint)
-            y_axis.append(grid_points[end_i])
-
-    fig = go.Figure(
-        data=go.Surface(
-            z=jnp.asarray(losses).reshape(num_grid_points_per_dim, -1),
-            x=jnp.asarray(x_axis).reshape(num_grid_points_per_dim, -1),
-            y=jnp.asarray(y_axis).reshape(num_grid_points_per_dim, -1),
-        ),
-    )
-
-    fig.update_traces(
-        contours_z={
-            "show": True,
-            "usecolormap": True,
-            "highlightcolor": "limegreen",
-            "project_z": True,
-        },
-    )
-    fig.update_layout(
-        title="Loss Landscape over Start and End Sigmas",
-        scene={
-            "xaxis_title": "Keypoint",
-            "yaxis_title": "New Sigma Value",
-            "zaxis_title": "Loss",
-        },
-    )
-
-    current_dir = os.getcwd()
-    filepath = os.path.join(current_dir, "plots", "linear-interp-policy-private.html")
-    fig.write_html(filepath)
+    print("\nAfter projection:")
+    print(f"  sigmas: {noise_schedule.value}")
+    print(f"  clips:  {clip_schedule.value}")
+    print(f"  expenditure: {privacy_params.compute_expenditure(proj_sigmas, proj_clips):.4f}")
 
 
 if __name__ == "__main__":

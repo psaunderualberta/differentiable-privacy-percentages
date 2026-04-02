@@ -2,6 +2,7 @@ from typing import Self
 
 import equinox as eqx
 import jax.numpy as jnp
+import jax.tree as jtree
 from jaxtyping import Array
 
 from policy.base_schedules.abstract import AbstractSchedule
@@ -199,6 +200,60 @@ class ParallelSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
             _x_prev_clips=self._x_curr_clips,
             _fista_t=t_next,
         )
+
+    def fista_restart(self) -> Self:
+        """Reset FISTA momentum: set t=1 and x_prev <- x_curr."""
+        return self.__class__(
+            noise_schedule=self.noise_schedule,
+            clip_schedule=self.clip_schedule,
+            privacy_params=self.privacy_params,
+            use_fista=self.use_fista,
+            _x_curr_sigmas=self._x_curr_sigmas,
+            _x_curr_clips=self._x_curr_clips,
+            _x_prev_sigmas=self._x_curr_sigmas,
+            _x_prev_clips=self._x_curr_clips,
+            _fista_t=jnp.ones(()),
+        )
+
+    def fista_advance_with_restart(self, x_new: Self, grads: Self) -> Self:
+        """Advance FISTA state, restarting if the gradient opposes the momentum direction.
+
+        Implements the gradient restart condition of O'Donoghue & Candès (2015):
+        restart when <∇f(y_k), y_k - x_k> > 0, i.e. the gradient at the
+        extrapolated point y_k points away from the last projected iterate x_k,
+        indicating overshoot.
+
+        Must be called on the pre-advance schedule (self = y_k) so that
+        self._x_curr_* still holds x_k before fista_advance overwrites it.
+
+        Args:
+            x_new: The projected schedule z_{k+1} = project(y_k - α∇f(y_k)).
+            grads: Gradient pytree ∇f(y_k), same structure as self.
+
+        Returns:
+            Advanced (and possibly restarted) schedule.
+        """
+        # Reconstruct x_k in parameter space from the stored sigma/clip outputs.
+        x_k_noise = self.noise_schedule.__class__.from_projection(
+            self.noise_schedule, self._x_curr_sigmas
+        )
+        x_k_clip = self.clip_schedule.__class__.from_projection(
+            self.clip_schedule, self._x_curr_clips
+        )
+        # ∇f(y_k) leaves and momentum direction (y_k - x_k) leaves.
+        g = jtree.leaves(eqx.filter((grads.noise_schedule, grads.clip_schedule), eqx.is_array))
+        d = jtree.leaves(
+            eqx.filter(
+                (
+                    jtree.map(lambda a, b: a - b, self.noise_schedule, x_k_noise),
+                    jtree.map(lambda a, b: a - b, self.clip_schedule, x_k_clip),
+                ),
+                eqx.is_array,
+            )
+        )
+        dot = sum(jnp.sum(gi * di) for gi, di in zip(g, d))
+        advanced = self.fista_advance(x_new)
+        return advanced.fista_restart() if dot > 0 else advanced
 
     def _get_log_arrays(self) -> dict[str, Array]:
         return {

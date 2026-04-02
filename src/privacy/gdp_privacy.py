@@ -370,14 +370,14 @@ class GDPPrivacyParameters(eqx.Module):
         """
         # Constraint: sum_i (exp(X_i^2/Y_i^2) - 1) <= B  with X=clips, Y=sigmas
         X, Y = clips, sigmas
-        B = (self.mu / self.p) ** 2
+        B = (self.mu / self.p) ** 2 + self.T
 
-        S = jnp.sum(jnp.exp((X / Y) ** 2) - 1.0)
+        S = jnp.sum(jnp.exp((X / Y) ** 2))
         feasible = S <= B
 
         def _solve_for_lam(lam):
             X_p, Y_p = _sc_inner_solve_all(X, Y, X, Y, lam)
-            h = jnp.sum(jnp.exp((X_p / Y_p) ** 2) - 1.0) - B
+            h = jnp.sum(jnp.exp((X_p / Y_p) ** 2)) - B
             return h, X_p, Y_p
 
         # Find lambda_max by repeated doubling until h(lambda_max) <= 0.
