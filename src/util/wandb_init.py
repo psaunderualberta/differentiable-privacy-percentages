@@ -33,9 +33,7 @@ def init_wandb_run(
     # per-job temp directory so the shared filesystem doesn't fill up.
     wandb_dir = os.environ.get("SLURM_TMPDIR", None)
 
-    is_branching = (
-        wandb_config.checkpoint_run_id is not None and wandb_config.checkpoint_step is not None
-    )
+    is_branching = wandb_config.checkpoint_run_id is not None
 
     if is_branching:
         branch_project = (wandb_config.project or "runs") + "-branched"

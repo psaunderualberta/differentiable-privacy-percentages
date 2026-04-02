@@ -17,10 +17,10 @@ from conf.config import (
 from conf.config_util import DistributionConfig, dist_config_helper
 
 
-def get_wandb_run_conf(wandb_conf: WandbConfig) -> dict:
+def get_wandb_run_conf(wandb_conf: WandbConfig, run_id: str) -> dict:
     """Fetch the saved config dict for a prior W&B run."""
     run = wandb.Api().run(
-        f"{wandb_conf.entity}/{wandb_conf.project}/{wandb_conf.restart_run_id}",
+        f"{wandb_conf.entity}/{wandb_conf.project}/{run_id}",
     )
     return run.config
 
@@ -125,8 +125,10 @@ def _get_config():
         config=(tyro.conf.SuppressFixed, tyro.conf.CascadeSubcommandArgs),
     )
     wandb_conf = SingletonConfig.get_wandb_config_instance()
-    if wandb_conf.restart_run_id is not None:
-        run_conf = get_wandb_run_conf(wandb_conf)
+    if wandb_conf.restart_run_id is not None or wandb_conf.checkpoint_run_id is not None:
+        run_id = wandb_conf.restart_run_id or wandb_conf.checkpoint_run_id
+        assert run_id is not None  # For type checker, ensured via 'if' statement
+        run_conf = get_wandb_run_conf(wandb_conf, run_id)
         SingletonConfig.config = replace(
             SingletonConfig.config,
             sweep=_reconstruct_from_dict(SingletonConfig.config.sweep, run_conf),
