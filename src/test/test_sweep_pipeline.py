@@ -170,7 +170,7 @@ class TestSweepPipeline:
         mock_api_run.config = run_conf
         with patch("conf.singleton_conf.wandb") as mock_wandb:
             mock_wandb.Api.return_value.run.return_value = mock_api_run
-            fetched = get_wandb_run_conf(_mock_wandb_conf(run_id))
+            fetched = get_wandb_run_conf(_mock_wandb_conf(run_id), run_id)
 
         reconstructed = _reconstruct_from_dict(sweep, fetched)
         # First type in default sweep_schedule_conf_types is AlternatingSigmaAndClip.
@@ -211,7 +211,7 @@ class TestSweepPipeline:
         mock_api_run.config = run_conf
         with patch("conf.singleton_conf.wandb") as mock_wandb:
             mock_wandb.Api.return_value.run.return_value = mock_api_run
-            fetched = get_wandb_run_conf(_mock_wandb_conf(run_id))
+            fetched = get_wandb_run_conf(_mock_wandb_conf(run_id), run_id)
 
         reconstructed = _reconstruct_from_dict(sweep, fetched)
         assert isinstance(reconstructed.schedule_optimizer.schedule, expected_cls), (
@@ -255,7 +255,7 @@ class TestSweepPipeline:
             mock_api_run.config = run_conf
             with patch("conf.singleton_conf.wandb") as mock_wandb:
                 mock_wandb.Api.return_value.run.return_value = mock_api_run
-                fetched = get_wandb_run_conf(_mock_wandb_conf(run_id))
+                fetched = get_wandb_run_conf(_mock_wandb_conf(run_id), run_id)
             reconstructed = _reconstruct_from_dict(sweep, fetched)
             assert isinstance(reconstructed.schedule_optimizer.schedule, expected_cls), (
                 f"Run {run_id}: expected {expected_cls.__name__}, "
@@ -279,7 +279,7 @@ class TestSweepPipeline:
         with patch("conf.singleton_conf.wandb") as mock_wandb:
             mock_wandb.Api.return_value.run.return_value = mock_api_run
             wandb_conf = _mock_wandb_conf(run_id)
-            get_wandb_run_conf(wandb_conf)
+            get_wandb_run_conf(wandb_conf, run_id)
             mock_wandb.Api.return_value.run.assert_called_once_with(
                 f"{wandb_conf.entity}/{wandb_conf.project}/{run_id}"
             )
@@ -299,7 +299,7 @@ class TestSweepPipeline:
         mock_api_run.config = run_conf
         with patch("conf.singleton_conf.wandb") as mock_wandb:
             mock_wandb.Api.return_value.run.return_value = mock_api_run
-            fetched = get_wandb_run_conf(_mock_wandb_conf("run-env-check"))
+            fetched = get_wandb_run_conf(_mock_wandb_conf("run-env-check"), "run-env-check")
 
         reconstructed = _reconstruct_from_dict(sweep, fetched)
         assert reconstructed.env.eps == pytest.approx(2.0)

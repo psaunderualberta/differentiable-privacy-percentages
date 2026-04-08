@@ -153,3 +153,27 @@ def to_wandb_sweep_params(obj) -> dict[str, Any]:
         else:
             params[field.name] = {"value": attr}
     return {"parameters": params}
+
+
+def to_wandb_conf(obj) -> dict[str, Any]:
+    """Derive W&B sweep parameters from a dataclass by inspecting its fields.
+
+    Fields annotated with tyro.conf.Fixed are excluded automatically.
+    """
+    if not dataclasses.is_dataclass(obj):
+        raise TypeError(f"Expected a dataclass instance, got {type(obj)}")
+
+    params: dict[str, object] = {}
+    cls = type(obj)
+    for field in dataclasses.fields(obj):
+        if _is_fixed_field(cls, field.name):
+            continue
+        attr = getattr(obj, field.name)
+        if hasattr(attr, "to_wandb_conf") and callable(attr.to_wandb_conf):
+            nested = attr.to_wandb_conf()
+            if _is_union_field(cls, field.name):
+                nested["_type"] = type(attr).__name__
+            params[field.name] = nested
+        else:
+            params[field.name] = attr
+    return params

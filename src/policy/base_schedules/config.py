@@ -3,11 +3,12 @@ from typing import Annotated, Union
 
 import tyro
 
-from conf.config_util import to_wandb_sweep_params
+from conf.config_util import to_wandb_conf, to_wandb_sweep_params
 
 
 class AbstractScheduleConfig:
-    pass
+    def to_wandb_conf(self):
+        return to_wandb_conf(self)
 
 
 @dataclass

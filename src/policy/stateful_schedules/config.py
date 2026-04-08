@@ -1,10 +1,11 @@
 from dataclasses import dataclass
 
-from conf.config_util import to_wandb_sweep_params
+from conf.config_util import to_wandb_conf, to_wandb_sweep_params
 
 
 class AbstractStatefulScheduleConfig:
-    pass
+    def to_wandb_conf(self):
+        return to_wandb_conf(self)
 
 
 @dataclass

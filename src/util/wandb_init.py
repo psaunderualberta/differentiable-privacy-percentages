@@ -46,7 +46,7 @@ def init_wandb_run(
             project=branch_project,
             entity=wandb_config.entity,
             mode=wandb_config.mode,
-            config=sweep_config.to_wandb_sweep(),
+            config=sweep_config.to_wandb_conf(),
             notes=notes,
             dir=wandb_dir,
         )
@@ -58,7 +58,7 @@ def init_wandb_run(
             entity=wandb_config.entity,
             id=wandb_config.restart_run_id,
             mode=wandb_config.mode,
-            config=sweep_config.to_wandb_sweep(),
+            config=sweep_config.to_wandb_conf(),
             resume="allow",
             dir=wandb_dir,
         )

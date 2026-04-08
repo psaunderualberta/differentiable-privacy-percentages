@@ -93,8 +93,11 @@ def _reconstruct_from_dict(obj, d: dict):
         current = getattr(obj, key, None)
 
         if isinstance(current, DistributionConfig):
-            # W&B stores the sampled scalar; wrap it back into a constant dist.
-            updates[key] = dist_config_helper(value=item, distribution="constant")
+            if isinstance(item, dict):
+                updates[key] = dist_config_helper(**item)
+            else:
+                # W&B stores the sampled scalar; wrap it back into a constant dist.
+                updates[key] = dist_config_helper(value=item, distribution="constant")
 
         elif isinstance(item, dict) and "_type" in item:
             # Union-typed field: use the stored class name to pick the variant.

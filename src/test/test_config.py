@@ -46,6 +46,7 @@ from policy.schedules.config import (
     PolicyAndClipScheduleConfig,
     SigmaAndClipScheduleConfig,
     WarmupAlternatingSigmaAndClipScheduleConfig,
+    WarmupParallelSigmaAndClipScheduleConfig,
 )
 from policy.stateful_schedules.config import StatefulMedianGradientNoiseAndClipConfig
 
@@ -242,12 +243,12 @@ class TestToWandbSweepParams:
 
     def test_union_field_gets_type_discriminator(self):
         # schedule is a Union-typed field; _type must be injected.
-        conf = ScheduleOptimizerConfig()  # default: AlternatingSigmaAndClipScheduleConfig
+        conf = ScheduleOptimizerConfig()  # default: WarmupParallelSigmaAndClipScheduleConfig
         result = to_wandb_sweep_params(conf)
         schedule_params = result["parameters"]["schedule"]["parameters"]
         assert "_type" in schedule_params
         assert schedule_params["_type"] == {
-            "value": "AlternatingSigmaAndClipScheduleConfig",
+            "value": "WarmupParallelSigmaAndClipScheduleConfig",
         }
 
     def test_non_union_nested_no_type_discriminator(self):
@@ -822,6 +823,6 @@ class TestConfigDefaults:
 
     def test_policy_config_defaults(self):
         conf = ScheduleOptimizerConfig()
-        assert isinstance(conf.schedule, AlternatingSigmaAndClipScheduleConfig)
+        assert isinstance(conf.schedule, WarmupParallelSigmaAndClipScheduleConfig)
         assert conf.batch_size == 1
         assert conf.max_sigma == pytest.approx(10.0)

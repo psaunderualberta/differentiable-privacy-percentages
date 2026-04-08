@@ -9,6 +9,7 @@ from conf.config_util import (
     DistributionConfig,
     dist_config_helper,
     merge_wandb_sweep_union,
+    to_wandb_conf,
     to_wandb_sweep_params,
 )
 from networks.auto.config import AutoNetworkConfig
@@ -112,8 +113,10 @@ class ScheduleOptimizerConfig:
             result["parameters"]["schedule"] = merge_wandb_sweep_union(instances)
         return result
 
+    def to_wandb_conf(self) -> dict[str, Any]:
+        return to_wandb_conf(self)  # ---
 
-# ---
+
 # Config for the private environment
 # ---
 
@@ -146,6 +149,9 @@ class EnvConfig:
 
     def to_wandb_sweep(self) -> dict[str, Any]:
         return to_wandb_sweep_params(self)
+
+    def to_wandb_conf(self) -> dict[str, Any]:
+        return to_wandb_conf(self)
 
 
 @dataclass
@@ -191,6 +197,9 @@ class SweepConfig:
         if self.name is not None:
             config["name"] = self.name
         return config
+
+    def to_wandb_conf(self) -> dict[str, Any]:
+        return to_wandb_conf(self)
 
 
 @dataclass

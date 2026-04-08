@@ -1,7 +1,7 @@
 import dataclasses
 from dataclasses import dataclass
 
-from conf.config_util import to_wandb_sweep_params
+from conf.config_util import to_wandb_conf, to_wandb_sweep_params
 from policy.base_schedules.config import (
     BaseScheduleConfig,
     BSplineScheduleConfig,
@@ -11,6 +11,9 @@ from policy.base_schedules.config import (
 
 class AbstractNoiseAndClipScheduleConfig:
     pass
+
+    def to_wandb_conf(self) -> dict[str, object]:
+        return to_wandb_conf(self)
 
 
 @dataclass

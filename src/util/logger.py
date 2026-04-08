@@ -166,9 +166,19 @@ class WandbTableLogger(eqx.Module):
         final_tables_pd = {
             tablename: pd.read_csv(filename.name) for tablename, filename in self.files.items()
         }
+
+        # For quick loading of artifact, as this is the main result we
+        # use for symbolic regression
+        final_tables_last_row_pd = {
+            f"{tablename}-last-row": df[df["step"] == df["step"].max()]
+            if "step" in df.columns
+            else df.iloc[-1]
+            for (tablename, df) in final_tables_pd.items()
+        }
+
         final_tables = {
             name: wandb.Table(dataframe=table, log_mode="IMMUTABLE")
-            for (name, table) in final_tables_pd.items()
+            for (name, table) in [*final_tables_pd.items(), *final_tables_last_row_pd.items()]
         }
 
         wandb.log(final_tables)

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from conf.config_util import to_wandb_sweep_params
+from conf.config_util import to_wandb_conf, to_wandb_sweep_params
 
 
 @dataclass
@@ -18,3 +18,6 @@ class MLPConfig:
 
     def to_wandb_sweep(self) -> dict[str, object]:
         return to_wandb_sweep_params(self)
+
+    def to_wandb_conf(self) -> dict[str, object]:
+        return to_wandb_conf(self)

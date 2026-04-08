@@ -1,7 +1,7 @@
 import dataclasses
 from dataclasses import dataclass
 
-from conf.config_util import to_wandb_sweep_params
+from conf.config_util import to_wandb_conf, to_wandb_sweep_params
 from networks.mlp.config import MLPConfig
 
 
@@ -23,3 +23,6 @@ class CNNConfig:
 
     def to_wandb_sweep(self) -> dict[str, object]:
         return to_wandb_sweep_params(self)
+
+    def to_wandb_conf(self) -> dict[str, object]:
+        return to_wandb_conf(self)
