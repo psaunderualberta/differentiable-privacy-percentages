@@ -92,7 +92,7 @@ def main(
                 "cat",
                 f"cc/sweeps/{sweep_id}.txt",
                 "|",
-                "parallel -q uv run cc/slurm/run-starter.py --runtime.short"
+                "parallel -j10 -q uv run cc/slurm/run-starter.py --runtime.short",
                 f"--run_id={{}} --wandb-proj {project} --jobname='\"{sweep}\"'",
             ]
         )
