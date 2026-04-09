@@ -171,7 +171,7 @@ def _make_sweep_config(
             scan_segments=T,  # Loading data as-needed
         ),
         schedule_optimizer=ScheduleOptimizerConfig(
-            schedule=WarmupParallelSigmaAndClipScheduleConfig(),
+            schedule=WarmupParallelSigmaAndClipScheduleConfig(use_fista=False),
         ),
     )
 

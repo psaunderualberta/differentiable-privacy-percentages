@@ -246,8 +246,10 @@ class WarmupParallelSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         x_prev_sig = jnp.where(self._fista_t == 1.0, x_sig, self._x_prev_sigmas)
         x_prev_clip = jnp.where(self._fista_t == 1.0, x_clip, self._x_prev_clips)
 
-        y_sig = x_sig + mom * (x_sig - x_prev_sig)
-        y_clip = x_clip + mom * (x_clip - x_prev_clip)
+        l_clip = jnp.float32(1e-6)
+        u_clip = jnp.float32(50.0)
+        y_sig = jnp.clip(x_sig + mom * (x_sig - x_prev_sig), l_clip, u_clip)
+        y_clip = jnp.clip(x_clip + mom * (x_clip - x_prev_clip), l_clip, u_clip)
 
         y_noise_warmup = ConstantSchedule.from_projection(self.noise_warmup, y_sig)
         y_clip_warmup = ConstantSchedule.from_projection(self.clip_warmup, y_clip)

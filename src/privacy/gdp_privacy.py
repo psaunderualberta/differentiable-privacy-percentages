@@ -14,9 +14,16 @@ from util.util import pytree_has_inf
 # via outer bisection on the dual variable lambda and inner 2D Newton solve.
 # ---------------------------------------------------------------------------
 
+_MAX_MU2 = jnp.float32(80.0)
+
+
+# Protect agains (exp(mu2)) overflowing
+def _mu_two(a, b):
+    return jnp.minimum((a / b) ** 2, _MAX_MU2)
+
 
 def _sc_residual(a, b, x, y, lam):
-    mu2 = (a / b) ** 2
+    mu2 = _mu_two(a, b)
     e = jnp.exp(mu2)
     f0 = a - x + lam * (2.0 * a / b**2) * e
     f1 = b - y - lam * (2.0 * a**2 / b**3) * e
@@ -24,7 +31,7 @@ def _sc_residual(a, b, x, y, lam):
 
 
 def _sc_jacobian(a, b, lam):
-    mu2 = (a / b) ** 2
+    mu2 = _mu_two(a, b)
     e = jnp.exp(mu2)
     c = lam * e
     j00 = 1.0 + (2.0 * c / b**2) * (1.0 + 2.0 * mu2)

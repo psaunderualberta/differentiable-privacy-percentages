@@ -44,7 +44,8 @@ class InterpolatedExponentialSchedule(AbstractSchedule):
         schedule: "InterpolatedExponentialSchedule",
         projection: Array,
     ) -> "InterpolatedExponentialSchedule":
-        reset_projection = jnp.log(jnp.exp(projection) - 1 + 1e-6)
+        safe = jnp.clip(projection, 1e-5)
+        reset_projection = jnp.log(jnp.exp(safe) - 1 + 1e-6)
         return InterpolatedExponentialSchedule(
             keypoints=schedule.keypoints,
             values=reset_projection[schedule.keypoints.astype(int)],
