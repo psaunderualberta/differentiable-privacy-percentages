@@ -1,7 +1,11 @@
+import jax
+import numpy as np
 import optax
 import tqdm
-from jax import devices
+from jax import device_put, devices
 from jax import random as jr
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 
 import wandb
 from conf.singleton_conf import SingletonConfig
@@ -54,9 +58,9 @@ def main():
     for schema in schedule.get_logging_schemas() + get_private_model_training_schemas():
         logger.add_schema(schema)
 
-    # Build the JIT-compiled, shard-mapped training loss function
+    # Build mesh (for sharding noise_keys) and the JIT-compiled training loss function
     mesh = get_optimal_mesh(devices("gpu"), schedule_batch_size)
-    get_training_loss = make_training_loss_fn(mesh, env_params)
+    get_training_loss = make_training_loss_fn(env_params)
 
     # Initialise optimizer and PRNG keys (may be overwritten by checkpoint restore)
     optimizer = optax.sgd(
@@ -85,6 +89,20 @@ def main():
             opt_state = restored_state["opt_state"]
             key = restored_state["key"]
             init_key = restored_state["init_key"]
+            # Orbax restores arrays as device-committed (bound to device 0).
+            # This conflicts with sharded noise_keys inside the JIT call.
+            # Round-trip through numpy to produce uncommitted arrays, matching
+            # what a fresh (non-checkpoint) run provides.
+            schedule = jax.tree_util.tree_map(
+                lambda x: jax.numpy.array(np.asarray(x)) if isinstance(x, jax.Array) else x,
+                schedule,
+            )
+            opt_state = jax.tree_util.tree_map(
+                lambda x: jax.numpy.array(np.asarray(x)) if isinstance(x, jax.Array) else x,
+                opt_state,
+            )
+            key = jax.numpy.array(np.asarray(key))
+            init_key = jax.numpy.array(np.asarray(init_key))
 
     # --- W&B init ---
     print("Starting...")
@@ -105,7 +123,7 @@ def main():
         desc="Training Progress",
         total=num_outer_steps - start_step,
     )
-
+    sharding = NamedSharding(mesh, P("x", None))
     for t in iterator:
         key, _ = jr.split(key)
 
@@ -117,11 +135,15 @@ def main():
         key, mb_key, noise_key = jr.split(key, 3)
         if not sweep_config.train_on_single_network:
             key, init_key = jr.split(key)
+
+        # mb_key = device_put(mb_key, sharding)
+        # init_key = device_put(init_key, sharding)
+        noise_keys = device_put(jr.split(noise_key, schedule_batch_size), sharding)
         (loss, (losses, accuracies, val_accs)), grads = get_training_loss(
             schedule,
             mb_key,
             init_key,
-            jr.split(noise_key, schedule_batch_size),
+            noise_keys,
         )
 
         logger.log(Loggable(table_name="train_losses", data={"losses": losses}))

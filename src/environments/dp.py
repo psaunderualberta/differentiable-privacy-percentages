@@ -160,12 +160,10 @@ def train_with_noise(
     # --- Create network ---
     network = reinit_model(cast(eqx.Module, params.network), init_key)
     net_params, net_static = eqx.partition(network, eqx.is_array)
-    net_params = eqx.filter_jit(jax.lax.pvary)(net_params, "x")
 
     optimizer = getattr(optax, params.optimizer)(params.lr)
     opt_state = optimizer.init(net_params)
     opt_state_params, opt_state_static = eqx.partition(opt_state, eqx.is_array)
-    opt_state_params = eqx.filter_jit(jax.lax.pvary)(opt_state_params, "x")
 
     # --- Segmented scan-of-scans ---
     # Reshape (T, ...) → (K, T//K, ...) for the outer scan over K segments.
@@ -308,12 +306,10 @@ def train_with_stateful_noise(
     # --- Create network ---
     network = reinit_model(cast(eqx.Module, params.network), init_key)
     net_params, net_static = eqx.partition(network, eqx.is_array)
-    net_params = eqx.filter_jit(jax.lax.pvary)(net_params, "x")
 
     optimizer = getattr(optax, params.optimizer)(params.lr)
     opt_state = optimizer.init(net_params)
     opt_state_params, opt_state_static = eqx.partition(opt_state, eqx.is_array)
-    opt_state_params = eqx.filter_jit(jax.lax.pvary)(opt_state_params, "x")
 
     # --- Segmented scan-of-scans ---
     # iters is a 1-D array of length T; zip with idx_segs for the inner scan.
