@@ -1,9 +1,9 @@
 import equinox as eqx
 import jax.lax as jlax
 import jax.numpy as jnp
-import jax.scipy.stats as jstats
 from jaxtyping import Array
 from scipy import optimize
+from scipy.stats import norm as sp_norm
 
 from conf.singleton_conf import SingletonConfig
 from util.util import pytree_has_inf
@@ -101,9 +101,9 @@ def approx_to_gdp(eps, delta, tol=1e-12) -> float:
         raise ValueError("epsilon must be non-negative")
 
     def f(current_mu):
-        current_delta = jstats.norm.cdf(-eps / current_mu + current_mu / 2) - jnp.exp(
+        current_delta = sp_norm.cdf(-eps / current_mu + current_mu / 2) - jnp.exp(
             eps,
-        ) * jstats.norm.cdf(-eps / current_mu - current_mu / 2)
+        ) * sp_norm.cdf(-eps / current_mu - current_mu / 2)
         return current_delta - delta
 
     return optimize.root_scalar(f, bracket=[tol, 100], method="brentq").root
@@ -181,7 +181,7 @@ class GDPPrivacyParameters(eqx.Module):
 
     def compute_expenditure(self, sigmas: Array, clips: Array) -> Array:
         """Compute the total GDP μ expenditure for a given σ/clip schedule."""
-        return jnp.sum(self.p * jnp.sqrt(jnp.exp((clips / sigmas) ** 2) - 1))
+        return jnp.sqrt(jnp.sum(self.p * jnp.exp((clips / sigmas) ** 2) - 1))
 
     def weights_to_mu_schedule(self, schedule: Array) -> Array:
         """Convert a GDP mu parameter to a Poisson subsampling schedule.

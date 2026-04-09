@@ -160,6 +160,7 @@ def _make_sweep_config(
         dataset=ds,
         num_outer_steps=NUM_OUTER_STEPS,
         with_baselines=True,
+        baseline_log_interval=50,
         prng_seed=dist_config_helper(value=float(seed), distribution="constant"),
         env=EnvConfig(
             network=network_conf,

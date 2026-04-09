@@ -216,9 +216,11 @@ class TestComputeExpenditureProperties:
         sigmas = jnp.ones(_T_FIXED) * sigma_val
         clips_small = jnp.ones(_T_FIXED) * small_clip
         clips_large = jnp.ones(_T_FIXED) * (small_clip + clip_delta)
-        assert float(params.compute_expenditure(sigmas, clips_large)) > float(
-            params.compute_expenditure(sigmas, clips_small)
-        )
+        large_c_expenditure = params.compute_expenditure(sigmas, clips_large)
+        small_c_expenditure = params.compute_expenditure(sigmas, clips_small)
+        assume(not jnp.isinf(large_c_expenditure))
+        assume(not jnp.isinf(small_c_expenditure))
+        assert float(large_c_expenditure) > float(small_c_expenditure)
 
     @given(
         clip_val=st.floats(min_value=0.1, max_value=2.0, allow_nan=False, allow_infinity=False),

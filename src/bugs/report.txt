@@ -1,0 +1,85 @@
+Bug Report: privacy/gdp_privacy.py
+===================================
+Date: 2026-04-09
+
+---------------------------------------------------------------------------
+BUG 1 (High Severity): compute_expenditure uses linear sum instead of L2 norm
+File: privacy/gdp_privacy.py, line 182-184
+---------------------------------------------------------------------------
+
+Current code:
+    def compute_expenditure(self, sigmas: Array, clips: Array) -> Array:
+        """Compute the total GDP μ expenditure for a given σ/clip schedule."""
+        return jnp.sum(self.p * jnp.sqrt(jnp.exp((clips / sigmas) ** 2) - 1))
+
+The per-step GDP parameter after Poisson subsampling at rate p is:
+    μᵢ = p * sqrt(exp((Cᵢ/σᵢ)²) - 1)
+
+Under the GDP composition theorem (Dong, Roth & Su 2019), T independent steps
+compose to a total GDP of:
+    μ_total = sqrt(∑ μᵢ²) = p * sqrt(∑(exp((Cᵢ/σᵢ)²) - 1))
+
+The code instead computes:
+    ∑(p * sqrt(exp((Cᵢ/σᵢ)²) - 1))  — a LINEAR sum over per-step μᵢ values
+
+For non-uniform schedules, ∑ sqrt(xᵢ) ≠ sqrt(∑ xᵢ), so this is incorrect.
+By the QM-AM inequality, the true expenditure ≤ the computed value, meaning the
+function consistently OVERESTIMATES the privacy cost by up to a factor of sqrt(T).
+
+The correct implementation is:
+    return self.p * jnp.sqrt(jnp.sum(jnp.exp((clips / sigmas) ** 2) - 1))
+
+Note: the privacy *constraint* in project_weights() and project_sigma_and_clip()
+uses the correct formula (bound = (μ/p)² + T, i.e., ∑ exp((C/σ)²) = (μ/p)² + T),
+so the actual privacy guarantee is maintained. The bug only affects compute_expenditure(),
+which is used for reporting and diagnostics (test_idea.py lines 26, 36; test_fista.py
+lines 263, 406, 416). However, misleading expenditure numbers could cause incorrect
+conclusions about how much privacy budget has been consumed.
+
+Confirming evidence — test_privacy.py line 248-256:
+    def test_sums_over_steps(self, params):
+        ...
+        assert jnp.isclose(total, T * single, rtol=1e-4)
+
+This test asserts expenditure scales linearly with T (total = T * single_step),
+which is only true for the WRONG linear-sum formula. With the correct L2-norm
+formula, the relationship for uniform schedules is:
+    total = sqrt(T) * single   (not T * single)
+
+The test itself is validating the bug.
+
+
+---------------------------------------------------------------------------
+BUG 2 (Low Severity): approx_to_gdp uses JAX functions inside scipy's root finder
+File: privacy/gdp_privacy.py, lines 103-108
+---------------------------------------------------------------------------
+
+Current code:
+    def f(current_mu):
+        current_delta = jstats.norm.cdf(-eps / current_mu + current_mu / 2) - jnp.exp(
+            eps,
+        ) * jstats.norm.cdf(-eps / current_mu - current_mu / 2)
+        return current_delta - delta
+
+    return optimize.root_scalar(f, bracket=[tol, 100], method="brentq").root
+
+scipy.optimize.root_scalar (Brent's method) calls f() with Python floats, but
+jstats.norm.cdf and jnp.exp return JAX DeviceArrays, not plain Python floats.
+This relies on implicit JAX-scalar ↔ float coercion, which works in practice today
+but is fragile: JAX scalar arrays are not Python floats, may trigger unnecessary
+JAX dispatch overhead on each Brent iteration, and could break with future JAX or
+scipy version changes (e.g. stricter type checking in scipy's brentq).
+
+The fix is to use pure numpy/scipy functions for this once-at-startup computation:
+    import numpy as np
+    from scipy.stats import norm as sp_norm
+
+    def f(current_mu):
+        current_delta = sp_norm.cdf(-eps / current_mu + current_mu / 2) - np.exp(
+            eps
+        ) * sp_norm.cdf(-eps / current_mu - current_mu / 2)
+        return current_delta - delta
+
+This is particularly important because approx_to_gdp() is called from
+GDPPrivacyParameters.__init__() (line 133), outside any JAX JIT region. There is
+no benefit to using JAX here.

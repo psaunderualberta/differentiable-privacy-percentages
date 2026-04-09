@@ -22,6 +22,10 @@ class DPTrainingParams(eqx.Module):
         network_arch: Network,
         loader: DatasetLoader,
     ) -> "DPTrainingParams":
+
+        assert conf.num_training_steps % conf.scan_segments_derived == 0, (
+            "Scan Segments does not cleanly divide training steps"
+        )
         return DPTrainingParams(
             loader=loader,
             lr=conf.lr.sample(),

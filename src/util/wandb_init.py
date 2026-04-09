@@ -33,7 +33,7 @@ def init_wandb_run(
     # per-job temp directory so the shared filesystem doesn't fill up.
     wandb_dir = os.environ.get("SLURM_TMPDIR", None)
 
-    is_branching = wandb_config.checkpoint_run_id is not None
+    is_branching = wandb_config.checkpoint_step is not None
 
     if is_branching:
         branch_project = (wandb_config.project or "runs") + "-branched"
@@ -51,7 +51,7 @@ def init_wandb_run(
             dir=wandb_dir,
         )
 
-    if wandb_config.restart_run_id is None:
+    if wandb_config.restart_run_id is None and wandb_config.checkpoint_run_id is None:
         # Fresh run — pass id=None explicitly so wandb auto-generates an ID.
         return wandb.init(
             project=wandb_config.project,
@@ -64,10 +64,12 @@ def init_wandb_run(
         )
 
     # Resuming an existing run — omit config so it is not overwritten.
+    run_id = wandb_config.restart_run_id or wandb_config.checkpoint_run_id
+    print(f"Continuing run {run_id}")
     return wandb.init(
         project=wandb_config.project,
         entity=wandb_config.entity,
-        id=wandb_config.restart_run_id,
+        id=run_id,
         mode=wandb_config.mode,
         resume="allow",
         dir=wandb_dir,
