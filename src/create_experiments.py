@@ -100,7 +100,7 @@ EPSILONS: list[float] = [1, 3, 5, 8]
 DELTA: float = 1e-6
 BATCH_SIZE: int = 250  # T=250 ≈ 1 MNIST epoch (N=60 000)
 DATASETS: list[str] = ["mnist", "fashion-mnist"]
-NUM_OUTER_STEPS: int = 3000
+NUM_OUTER_STEPS: int = 2000
 SEEDS: tuple[int, ...] = (447831761, 159020393, 435372193)
 
 # --- Axis 1: vary T, architecture fixed at medium MLP ---
@@ -160,7 +160,7 @@ def _make_sweep_config(
         dataset=ds,
         num_outer_steps=NUM_OUTER_STEPS,
         with_baselines=True,
-        baseline_log_interval=50,
+        baseline_log_interval=100,
         prng_seed=dist_config_helper(value=float(seed), distribution="constant"),
         env=EnvConfig(
             network=network_conf,
@@ -172,6 +172,7 @@ def _make_sweep_config(
         ),
         schedule_optimizer=ScheduleOptimizerConfig(
             schedule=WarmupParallelSigmaAndClipScheduleConfig(use_fista=False),
+            batch_size=4,
         ),
     )
 
