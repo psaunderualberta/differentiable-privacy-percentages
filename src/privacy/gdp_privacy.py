@@ -420,6 +420,10 @@ class GDPPrivacyParameters(eqx.Module):
         X_out = jnp.where(feasible, X, X_proj)
         Y_out = jnp.where(feasible, Y, Y_proj)
 
+        # convert to abs, as negative values also satisfy the constraint
+        X_out = jnp.abs(X_out)
+        Y_out = jnp.abs(Y_out)
+
         # X=clips, Y=sigmas — return (sigmas, clips)
         return Y_out, X_out
 
