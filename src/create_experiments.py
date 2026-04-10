@@ -104,7 +104,7 @@ NUM_OUTER_STEPS: int = 2000
 SEEDS: tuple[int, ...] = (447831761, 159020393, 435372193)
 
 # --- Axis 1: vary T, architecture fixed at medium MLP ---
-T_VALUES: list[int] = [50, 250, 750, 2000, 5000]
+T_VALUES: list[int] = [750, 1500, 2000, 3000, 5000]
 
 # --- Axis 2: vary architecture, T fixed at ~12 epochs ---
 T_FOR_ARCH_SWEEP: int = 3000

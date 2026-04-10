@@ -1,6 +1,7 @@
 import equinox as eqx
 import jax.lax as jlax
 import jax.numpy as jnp
+from jax import jit, vmap
 from jaxtyping import Array
 from scipy import optimize
 from scipy.stats import norm as sp_norm
@@ -18,10 +19,12 @@ _MAX_MU2 = jnp.float32(80.0)
 
 
 # Protect agains (exp(mu2)) overflowing
+@jit
 def _mu_two(a, b):
     return jnp.minimum((a / b) ** 2, _MAX_MU2)
 
 
+@jit
 def _sc_residual(a, b, x, y, lam):
     mu2 = _mu_two(a, b)
     e = jnp.exp(mu2)
@@ -30,6 +33,7 @@ def _sc_residual(a, b, x, y, lam):
     return f0, f1
 
 
+@jit
 def _sc_jacobian(a, b, lam):
     mu2 = _mu_two(a, b)
     e = jnp.exp(mu2)
@@ -41,6 +45,7 @@ def _sc_jacobian(a, b, lam):
     return j00, j01, j10, j11
 
 
+@jit
 def _sc_newton_step(a, b, x, y, lam):
     f0, f1 = _sc_residual(a, b, x, y, lam)
     j00, j01, j10, j11 = _sc_jacobian(a, b, lam)
@@ -67,13 +72,13 @@ def _sc_inner_solve_all(as_, bs_, xs, ys, lam):
     Returns:
         Tuple of projected (as_, bs_), each shape (T,).
     """
-    _TOL_SQ = jnp.float32(1e-10)  # squared residual tolerance (~3e-6 per component)
+    _TOL = jnp.float32(1e-6)  # squared residual tolerance (~3e-6 per component)
     _MAX_ITER = jnp.int32(500)
 
     def cond(state):
         as_, bs_, i = state
         f0s, f1s = _sc_residual(as_, bs_, xs, ys, lam)
-        return (jnp.max(f0s**2 + f1s**2) > _TOL_SQ) & (i < _MAX_ITER)
+        return (jnp.maximum(f0s, f1s).max() > _TOL) & (i < _MAX_ITER)
 
     def body(state):
         as_, bs_, i = state
@@ -379,16 +384,13 @@ class GDPPrivacyParameters(eqx.Module):
         X, Y = clips, sigmas
         B = (self.mu / self.p) ** 2 + self.T
 
-        S = jnp.sum(jnp.exp((X / Y) ** 2))
-        feasible = S <= B
-
         def _solve_for_lam(lam):
             X_p, Y_p = _sc_inner_solve_all(X, Y, X, Y, lam)
             h = jnp.sum(jnp.exp((X_p / Y_p) ** 2)) - B
             return h, X_p, Y_p
 
         # Find lambda_max by repeated doubling until h(lambda_max) <= 0.
-        init_h, _, _ = _solve_for_lam(jnp.asarray(1.0))
+        init_h, _, _ = _solve_for_lam(jnp.asarray(1e-6))
 
         def _double_cond(state):
             _, h = state
@@ -417,6 +419,8 @@ class GDPPrivacyParameters(eqx.Module):
         _, X_proj, Y_proj = _solve_for_lam(lam_final)
 
         # If already feasible, return originals unchanged.
+        S = jnp.sum(jnp.exp(vmap(_mu_two)(X, Y)))
+        feasible = jnp.logical_and(jnp.isfinite(S), S <= B)
         X_out = jnp.where(feasible, X, X_proj)
         Y_out = jnp.where(feasible, Y, Y_proj)
 
