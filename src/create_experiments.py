@@ -104,10 +104,10 @@ NUM_OUTER_STEPS: int = 2000
 SEEDS: tuple[int, ...] = (447831761, 159020393, 435372193)
 
 # --- Axis 1: vary T, architecture fixed at medium MLP ---
-T_VALUES: list[int] = [750, 1500, 2000, 3000, 5000]
+T_VALUES: list[int] = [500, 750, 1000, 1500, 2000, 3000]
 
-# --- Axis 2: vary architecture, T fixed at ~12 epochs ---
-T_FOR_ARCH_SWEEP: int = 3000
+# --- Axis 2: vary architecture, T fixed at ~8 epochs ---
+T_FOR_ARCH_SWEEP: int = 2000
 
 # MLP-only architectures
 MLP_ARCHS: list[MLPConfig] = [
@@ -210,8 +210,9 @@ def _build_experiments() -> list[tuple[str, str, SweepConfig]]:
 
             # Axis 2: architecture sweep (T=3000, CNN+MLP variants)
             for arch in CNN_ARCHS:
+                T = T_FOR_ARCH_SWEEP
                 for seed in SEEDS:
-                    name = f"arch-sweep/T={T_FOR_ARCH_SWEEP}/{_arch_label(arch)}/seed={seed}"
+                    name = get_name(ds, eps, "arch", T, arch, seed)
                     experiments.append(
                         (
                             "arch-sweep",
