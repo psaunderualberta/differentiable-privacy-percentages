@@ -39,6 +39,7 @@ def _handle_sigusr1(signum, frame):
 
 def register_signal_handler() -> None:
     """Register the SIGUSR1 handler.  Call this after wandb.init() so run.id is available."""
+    print("SIGUSR1: registering signal handler()")
     signal.signal(signal.SIGUSR1, _handle_sigusr1)
 
 
