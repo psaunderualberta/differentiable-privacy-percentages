@@ -176,6 +176,8 @@ class SweepConfig:
         distribution="values",
     )
     train_on_single_network: bool = False
+    shutdown_buffer_secs: int = 180
+    """Seconds before SLURM wall-time expiry to trigger graceful checkpoint-and-resubmit."""
 
     @property
     def plotting_steps(self) -> int:

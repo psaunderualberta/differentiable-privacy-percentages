@@ -81,9 +81,8 @@ class SlurmConfig:
 #SBATCH --job-name={self.jobname}
 #SBATCH --chdir={self.project_dir}
 #SBATCH --account={self.account}
-{"#SBATCH --signal=USR1@900" if self.runtime.short else ""}
 
-# Job-chaining context (read by main.py's SIGUSR1 handler to resubmit)
+# Job-chaining context (read by main.py to resubmit on graceful shutdown)
 export CHAIN_RESUBMIT_SCRIPT="{_THIS_SCRIPT}"
 export CHAIN_WANDB_PROJ="{self.wandb_proj}"
 export CHAIN_JOBNAME="{self.jobname}"

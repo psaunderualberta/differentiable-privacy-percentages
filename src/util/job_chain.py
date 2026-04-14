@@ -1,23 +1,31 @@
-"""SLURM job-chaining via SIGUSR1.
+"""SLURM job-chaining via wall-clock polling and SIGUSR1 fallback.
 
-When a job is submitted with ``--runtime.short`` (via run-starter.py), SLURM
-sends SIGUSR1 to the process 120 seconds before the walltime expires.  This
-module installs a handler that sets a flag the training loop can check, and
-provides the resubmit logic that launches a continuation job.
+The primary mechanism polls ``SLURM_JOB_END_TIME`` (a Unix timestamp set by
+SLURM in the job environment) at each outer loop iteration.  When the
+remaining wall time drops below ``SweepConfig.shutdown_buffer_secs``, the
+training loop checkpoints and resubmits.
+
+SIGUSR1 is kept as a fallback for clusters or environments where
+``SLURM_JOB_END_TIME`` is not set.
 
 Usage in main.py::
 
-    from util.job_chain import register_signal_handler, resubmit_if_requested, shutdown_requested
+    from util.job_chain import (
+        register_signal_handler,
+        resubmit_if_requested,
+        shutdown_requested,
+        time_limit_approaching,
+    )
 
     register_signal_handler()
 
     for t in iterator:
         ...
-        if shutdown_requested():
+        if shutdown_requested() or time_limit_approaching():
             # force checkpoint here, then break
             break
 
-    if shutdown_requested():
+    if shutdown_requested() or time_limit_approaching():
         logger.finish()
         run.finish()
         resubmit_if_requested(run.id)
@@ -28,6 +36,7 @@ import os
 import signal
 import subprocess
 import threading
+import time
 
 _shutdown_requested = threading.Event()
 
@@ -47,14 +56,34 @@ def shutdown_requested() -> bool:
     return _shutdown_requested.is_set()
 
 
-def resubmit_if_requested(run_id: str) -> None:
-    """If SIGUSR1 was received, resubmit a continuation job via run-starter.py.
+def time_limit_approaching() -> bool:
+    """Return True if SLURM wall time will expire within the configured buffer window.
 
+    Reads ``SLURM_JOB_END_TIME`` (Unix timestamp) from the environment and
+    compares against ``SweepConfig.shutdown_buffer_secs``.  Returns False
+    safely if the variable is absent (local runs, non-SLURM environments).
+    """
+    job_end = os.environ.get("SLURM_JOB_END_TIME", None)
+    if job_end is None:
+        return False
+    try:
+        from conf.singleton_conf import SingletonConfig
+
+        buffer = SingletonConfig.get_sweep_config_instance().shutdown_buffer_secs
+        return time.time() >= int(job_end) - buffer
+    except ValueError:
+        return False
+
+
+def resubmit_if_requested(run_id: str) -> None:
+    """Resubmit a continuation job via run-starter.py if a graceful shutdown was triggered.
+
+    Triggers on either SIGUSR1 receipt or wall-clock time limit approaching.
     Reads job context from CHAIN_* environment variables injected by run-starter.py.
     Does nothing (with a warning) if CHAIN_RESUBMIT_SCRIPT is not set, which is
     the case when running outside SLURM.
     """
-    if not _shutdown_requested.is_set():
+    if not (_shutdown_requested.is_set() or time_limit_approaching()):
         return
 
     resubmit_script = os.environ.get("CHAIN_RESUBMIT_SCRIPT")

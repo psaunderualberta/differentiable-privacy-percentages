@@ -17,7 +17,12 @@ from privacy.gdp_privacy import get_privacy_params
 from util.baselines import Baseline
 from util.checkpointing import load_checkpoint, make_state, save_checkpoint
 from util.dataloaders import get_dataset_shapes
-from util.job_chain import register_signal_handler, resubmit_if_requested, shutdown_requested
+from util.job_chain import (
+    register_signal_handler,
+    resubmit_if_requested,
+    shutdown_requested,
+    time_limit_approaching,
+)
 from util.logger import Loggable, WandbTableLogger
 from util.util import ensure_valid_pytree, get_optimal_mesh
 from util.wandb_init import init_wandb_run
@@ -182,7 +187,7 @@ def main():
             if log_baselines_during_training and (t + 1) % sweep_config.baseline_log_interval == 0:
                 baseline.log_comparison(schedule, eval_key)
 
-        if shutdown_requested():
+        if shutdown_requested() or time_limit_approaching():
             print(f"Graceful shutdown at step {t}; checkpointing for job-chain resubmit")
             save_checkpoint(make_state(schedule, opt_state, key, init_key, t), t, run)
             break
