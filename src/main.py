@@ -116,7 +116,7 @@ def main():
 
     # --- Baseline setup ---
     eval_key = jr.PRNGKey(0)
-    baseline = Baseline(env_params, gdp_params, num_reps=100)
+    baseline = Baseline(env_params, gdp_params, num_reps=12)
     log_baselines_during_training = (
         sweep_config.with_baselines and sweep_config.baseline_log_interval > 0
     )

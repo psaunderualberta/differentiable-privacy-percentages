@@ -78,6 +78,7 @@ _schedule_val_st = st.floats(min_value=-10.0, max_value=10.0, allow_nan=False, a
 # Fixed T used for all array-shape-dependent tests to avoid repeated JAX
 # recompilation across Hypothesis examples.
 _T_FIXED = 10
+_T_FIXED_LONG = 3000
 
 # Shared settings for tests that call compiled JAX operations.
 _jax_settings = settings(
@@ -218,8 +219,6 @@ class TestComputeExpenditureProperties:
         clips_large = jnp.ones(_T_FIXED) * (small_clip + clip_delta)
         large_c_expenditure = params.compute_expenditure(sigmas, clips_large)
         small_c_expenditure = params.compute_expenditure(sigmas, clips_small)
-        assume(not jnp.isinf(large_c_expenditure))
-        assume(not jnp.isinf(small_c_expenditure))
         assert float(large_c_expenditure) > float(small_c_expenditure)
 
     @given(
@@ -740,7 +739,14 @@ _sc_infeasible_st = st.fixed_dictionaries(
 _sc_feasible_st = st.fixed_dictionaries(
     {
         "sigma": st.floats(min_value=2.0, max_value=5.0, allow_nan=False, allow_infinity=False),
-        "clip": st.floats(min_value=0.1, max_value=1.0, allow_nan=False, allow_infinity=False),
+        "clip": st.floats(min_value=0.1, max_value=5.0, allow_nan=False, allow_infinity=False),
+    }
+)
+
+_sc_large_vals = st.fixed_dictionaries(
+    {
+        "sigma": st.floats(min_value=2.0, max_value=20.0, allow_nan=False, allow_infinity=False),
+        "clip": st.floats(min_value=0.1, max_value=20.0, allow_nan=False, allow_infinity=False),
     }
 )
 
@@ -784,6 +790,7 @@ class TestProjectSigmaAndClipProperties:
         """A feasible (sigma, clip) point is returned unchanged."""
         sigmas = jnp.ones(_T_FIXED) * d["sigma"]
         clips = jnp.ones(_T_FIXED) * d["clip"]
+        assume(_SC_PARAMS.compute_expenditure(sigmas, clips) < _SC_PARAMS.mu)
         ps, pc = _SC_PARAMS.project_sigma_and_clip(sigmas, clips)
         assert jnp.allclose(ps, sigmas, atol=1e-4)
         assert jnp.allclose(pc, clips, atol=1e-4)
@@ -855,6 +862,28 @@ class TestProjectSigmaAndClipProperties:
         ps, pc = _SC_PARAMS.project_sigma_and_clip(sigmas, clips)
         assert jnp.all(ps > 0)
         assert jnp.all(pc > 0)
+
+    @given(d=_sc_large_vals)
+    @_jax_settings
+    def test_very_large_projection_is_finite(self, d):
+        sigmas = jnp.ones(_T_FIXED_LONG) * d["sigma"]
+        clips = jnp.ones(_T_FIXED_LONG) * d["clip"]
+        params = GDPPrivacyParameters(8.0, _DELTA, _P, _T_FIXED_LONG)
+        with jax.debug_nans(True), jax.debug_infs(True):
+            ps, pc = params.project_sigma_and_clip(sigmas, clips)
+        assert jnp.isfinite(ps).all() and jnp.isfinite(pc).all()
+
+    @given(d=_sc_large_vals)
+    @_jax_settings
+    def test_very_large_projection_adheres(self, d):
+        sigmas = jnp.ones(_T_FIXED_LONG) * d["sigma"]
+        clips = jnp.ones(_T_FIXED_LONG) * d["clip"]
+        params = GDPPrivacyParameters(8.0, _DELTA, _P, _T_FIXED_LONG)
+        _mu = params.compute_expenditure(sigmas, clips)
+        assume(_mu > params.mu)
+        ps, pc = params.project_sigma_and_clip(sigmas, clips)
+        _mu = params.compute_expenditure(ps, pc)
+        assert jnp.isclose(_mu, params.mu, atol=1e-5)
 
 
 # ===========================================================================

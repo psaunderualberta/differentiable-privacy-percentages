@@ -7,7 +7,7 @@ from scipy import optimize
 from scipy.stats import norm as sp_norm
 
 from conf.singleton_conf import SingletonConfig
-from util.util import pytree_has_inf
+from util.util import ensure_valid_pytree, pytree_has_inf
 
 # ---------------------------------------------------------------------------
 # Helpers for project_sigma_and_clip — Euclidean projection onto
@@ -24,24 +24,50 @@ def _mu_two(a, b):
     return jnp.minimum((a / b) ** 2, _MAX_MU2)
 
 
+# Cap on the single log-magnitude fed to exp() anywhere inside the Newton
+# hot path.  exp(80) ≈ 5.5e34 is still ~10^4× below float32's overflow
+# boundary (3.4e38), leaving headroom for the (1 + 2·mu2) etc. multipliers
+# that sit outside the exp.
+_MAX_LOG = jnp.float32(80.0)
+
+
+@jit
+def _sc_logQ(a, b, lam):
+    """log(2λ · exp(mu²)) = log(2λ) + mu², with mu² already clipped by _mu_two.
+
+    Every overflow-prone coefficient in the residual / Jacobian is of the
+    form (poly in mu²) · exp(log_Q + n·log(a) + m·log(b)); evaluating the
+    exponent as a single scalar avoids intermediate a/b**k overflow.
+    """
+    mu2 = _mu_two(a, b)
+    return jnp.log(2.0 * lam) + mu2, mu2
+
+
 @jit
 def _sc_residual(a, b, x, y, lam):
-    mu2 = _mu_two(a, b)
-    e = jnp.exp(mu2)
-    f0 = a - x + lam * (2.0 * a / b**2) * e
-    f1 = b - y - lam * (2.0 * a**2 / b**3) * e
+    log_Q, _ = _sc_logQ(a, b, lam)
+    log_a = jnp.log(a)
+    log_b = jnp.log(b)
+    t0 = jnp.exp(jnp.minimum(log_Q + log_a - 2.0 * log_b, _MAX_LOG))
+    t1 = jnp.exp(jnp.minimum(log_Q + 2.0 * log_a - 3.0 * log_b, _MAX_LOG))
+    f0 = a - x + t0
+    f1 = b - y - t1
     return f0, f1
 
 
 @jit
 def _sc_jacobian(a, b, lam):
-    mu2 = _mu_two(a, b)
-    e = jnp.exp(mu2)
-    c = lam * e
-    j00 = 1.0 + (2.0 * c / b**2) * (1.0 + 2.0 * mu2)
-    j01 = -4.0 * c * a / b**3 * (1.0 + mu2)
+    log_Q, mu2 = _sc_logQ(a, b, lam)
+    log_a = jnp.log(a)
+    log_b = jnp.log(b)
+    # exp(log_Q + n log(a) + m log(b)) for the three ratios that appear.
+    e00 = jnp.exp(jnp.minimum(log_Q - 2.0 * log_b, _MAX_LOG))  # Q/b²
+    e01 = jnp.exp(jnp.minimum(log_Q + log_a - 3.0 * log_b, _MAX_LOG))  # Qa/b³
+    e11 = jnp.exp(jnp.minimum(log_Q + 2.0 * log_a - 4.0 * log_b, _MAX_LOG))  # Qa²/b⁴
+    j00 = 1.0 + (1.0 + 2.0 * mu2) * e00
+    j01 = -2.0 * (1.0 + mu2) * e01
     j10 = j01
-    j11 = 1.0 + 2.0 * c * a**2 / b**4 * (3.0 + 2.0 * mu2)
+    j11 = 1.0 + (3.0 + 2.0 * mu2) * e11
     return j00, j01, j10, j11
 
 
@@ -49,10 +75,24 @@ def _sc_jacobian(a, b, lam):
 def _sc_newton_step(a, b, x, y, lam):
     f0, f1 = _sc_residual(a, b, x, y, lam)
     j00, j01, j10, j11 = _sc_jacobian(a, b, lam)
-    det = j00 * j11 - j01 * j10
-    det = jnp.where(jnp.abs(det) < 1e-30, 1e-30, det)
-    da = -(j11 * f0 - j01 * f1) / det
-    db = -(-j10 * f0 + j00 * f1) / det
+
+    # Row-scale the 2x2 system by each row's infinity norm so products
+    # of Jacobian entries stay within float32 range.  Cramer's rule is
+    # invariant under row scaling, so the da/db values are unchanged in
+    # exact arithmetic.
+    s0 = jnp.maximum(jnp.abs(j00), jnp.abs(j01))
+    s1 = jnp.maximum(jnp.abs(j10), jnp.abs(j11))
+    s0 = jnp.where(s0 < 1e-30, jnp.float32(1.0), s0)
+    s1 = jnp.where(s1 < 1e-30, jnp.float32(1.0), s1)
+
+    j00s, j01s = j00 / s0, j01 / s0
+    j10s, j11s = j10 / s1, j11 / s1
+    f0s, f1s = f0 / s0, f1 / s1
+
+    det = j00s * j11s - j01s * j10s
+    det = jnp.where(jnp.abs(det) < 1e-30, jnp.float32(1e-30), det)
+    da = -(j11s * f0s - j01s * f1s) / det
+    db = -(-j10s * f0s + j00s * f1s) / det
     return da, db
 
 
@@ -72,13 +112,13 @@ def _sc_inner_solve_all(as_, bs_, xs, ys, lam):
     Returns:
         Tuple of projected (as_, bs_), each shape (T,).
     """
-    _TOL = jnp.float32(1e-6)  # squared residual tolerance (~3e-6 per component)
-    _MAX_ITER = jnp.int32(500)
+    _SQ_TOL = jnp.float32(1e-10)  # squared residual tolerance (~3e-6 per component)
+    _MAX_ITER = jnp.int32(2000)
 
     def cond(state):
         as_, bs_, i = state
         f0s, f1s = _sc_residual(as_, bs_, xs, ys, lam)
-        return (jnp.maximum(f0s, f1s).max() > _TOL) & (i < _MAX_ITER)
+        return (jnp.max(f0s**2 + f1s**2) > _SQ_TOL) & (i < _MAX_ITER)
 
     def body(state):
         as_, bs_, i = state
@@ -193,7 +233,7 @@ class GDPPrivacyParameters(eqx.Module):
 
     def compute_expenditure(self, sigmas: Array, clips: Array) -> Array:
         """Compute the total GDP μ expenditure for a given σ/clip schedule."""
-        return jnp.sqrt(jnp.sum(self.p * jnp.exp((clips / sigmas) ** 2) - 1))
+        return self.p * jnp.sqrt(jnp.sum(jnp.exp((clips / sigmas) ** 2) - 1))
 
     def weights_to_mu_schedule(self, schedule: Array) -> Array:
         """Convert a GDP mu parameter to a Poisson subsampling schedule.
@@ -368,7 +408,7 @@ class GDPPrivacyParameters(eqx.Module):
         """Project (sigmas, clips) onto the GDP privacy constraint in Euclidean space.
 
         Finds the nearest point (in L2) satisfying
-            sum_i (exp((clip_i / sigma_i)^2) - 1) <= (mu/p)^2.
+            sum_i (exp((clip_i / sigma_i)^2) - 1) <= (mu/p)^2.ƒ
 
         Uses outer bisection on the dual variable lambda and a per-component
         2D Newton solve for the proximal subproblem, fully JIT-compatible.
@@ -383,6 +423,8 @@ class GDPPrivacyParameters(eqx.Module):
         # Constraint: sum_i (exp(X_i^2/Y_i^2) - 1) <= B  with X=clips, Y=sigmas
         X, Y = clips, sigmas
         B = (self.mu / self.p) ** 2 + self.T
+        S = jnp.sum(jnp.exp(vmap(_mu_two)(X, Y)))
+        feasible = jnp.logical_and(jnp.isfinite(S), S <= B)
 
         def _solve_for_lam(lam):
             X_p, Y_p = _sc_inner_solve_all(X, Y, X, Y, lam)
@@ -390,19 +432,21 @@ class GDPPrivacyParameters(eqx.Module):
             return h, X_p, Y_p
 
         # Find lambda_max by repeated doubling until h(lambda_max) <= 0.
-        init_h, _, _ = _solve_for_lam(jnp.asarray(1e-6))
+        lam_lo = jnp.asarray(1e-6)
+        init_h, _, _ = _solve_for_lam(lam_lo)
 
-        def _double_cond(state):
+        def _find_lam_max_cond(state):
             _, h = state
+            h = ensure_valid_pytree(h, "h")
             return h > 0
 
-        def _double_body(state):
+        def _find_lam_max_body(state):
             lam_max, _ = state
-            lam_max = lam_max * 2.0
+            lam_max = lam_max * 1.15
             h, _, _ = _solve_for_lam(lam_max)
             return (lam_max, h)
 
-        lam_max, _ = jlax.while_loop(_double_cond, _double_body, (jnp.asarray(1.0), init_h))
+        lam_max, _ = jlax.while_loop(_find_lam_max_cond, _find_lam_max_body, (lam_lo, init_h))
 
         # Bisect over [0, lam_max] for 60 iterations (~1e-18 relative precision).
         def bisect_body(_, state):
@@ -413,7 +457,7 @@ class GDPPrivacyParameters(eqx.Module):
             lam_hi = jnp.where(h > 0, lam_hi, lam_mid)
             return (lam_lo, lam_hi)
 
-        lam_lo, lam_hi = jlax.fori_loop(0, 60, bisect_body, (jnp.asarray(0.0), lam_max))
+        lam_lo, lam_hi = jlax.fori_loop(0, 60, bisect_body, (lam_lo, lam_max))
 
         lam_final = (lam_lo + lam_hi) / 2.0
         _, X_proj, Y_proj = _solve_for_lam(lam_final)

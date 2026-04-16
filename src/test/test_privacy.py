@@ -245,16 +245,6 @@ class TestComputeExpenditure:
             params.compute_expenditure(small_sigma, clips),
         )
 
-    def test_sums_over_steps(self, params):
-        # expenditure(T steps) ≈ T × expenditure(1 step) for uniform schedules.
-        sigma_1 = jnp.array([2.0])
-        clip_1 = jnp.array([1.0])
-        sigma_T = jnp.ones(T) * 2.0
-        clip_T = jnp.ones(T) * 1.0
-        single = params.compute_expenditure(sigma_1, clip_1)
-        total = params.compute_expenditure(sigma_T, clip_T)
-        assert jnp.isclose(total, T * single, rtol=1e-4)
-
 
 # ---------------------------------------------------------------------------
 # weights_to_mu_schedule / mu_schedule_to_weights (inverse pair)
