@@ -15,7 +15,13 @@ from environments.outer_loop import make_training_loss_fn
 from policy.factory import make_schedule
 from privacy.gdp_privacy import get_privacy_params
 from util.baselines import Baseline
-from util.checkpointing import load_checkpoint, make_state, save_checkpoint
+from util.checkpointing import (
+    load_baseline_data,
+    load_checkpoint,
+    make_state,
+    save_baseline_data,
+    save_checkpoint,
+)
 from util.dataloaders import get_dataset_shapes
 from util.job_chain import (
     register_signal_handler,
@@ -120,8 +126,27 @@ def main():
     log_baselines_during_training = (
         sweep_config.with_baselines and sweep_config.baseline_log_interval > 0
     )
-    if log_baselines_during_training:
-        baseline.generate_baseline_data(eval_key)
+    baseline_data_saved = False
+    if sweep_config.with_baselines:
+        # On checkpoint restarts, reuse the baseline data from the source run
+        cached_df = None
+        if wandb_config.checkpoint_run_id is not None:
+            cached_df = load_baseline_data(
+                wandb_config.checkpoint_run_id,
+                wandb_config.entity,
+                wandb_config.project,
+            )
+        if cached_df is not None:
+            baseline.original_df = cached_df
+            baseline.df = cached_df.copy()
+            print("Reusing cached baseline data from checkpoint run.")
+            baseline_data_saved = True  # already persisted under source run_id
+        elif log_baselines_during_training:
+            # Pre-generate now so periodic log_comparison calls work immediately.
+            # End-only case (baseline_log_interval == 0) is deferred to log_comparison().
+            baseline.generate_baseline_data(eval_key)
+            save_baseline_data(baseline.original_df, run.id, run)
+            baseline_data_saved = True
 
     iterator = tqdm.tqdm(
         range(start_step, num_outer_steps),
@@ -198,6 +223,10 @@ def main():
 
     if sweep_config.with_baselines:
         baseline.log_comparison(schedule, eval_key)
+        if not baseline_data_saved:
+            # End-only case: log_comparison() lazily generated baseline data above;
+            # save it now so future restarts can skip the sweep.
+            save_baseline_data(baseline.original_df, run.id, run)
 
     for multi_line_table in schedule.get_logging_schemas():
         logger.line_plot(multi_line_table.table_name)

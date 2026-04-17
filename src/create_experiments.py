@@ -100,7 +100,7 @@ EPSILONS: list[float] = [1, 3, 5, 8]
 DELTA: float = 1e-6
 BATCH_SIZE: int = 250  # T=250 ≈ 1 MNIST epoch (N=60 000)
 DATASETS: list[str] = ["mnist", "fashion-mnist"]
-NUM_OUTER_STEPS: int = 2000
+NUM_OUTER_STEPS: int = 1000
 SEEDS: tuple[int, ...] = (447831761, 159020393, 435372193)
 
 # --- Axis 1: vary T, architecture fixed at medium MLP ---
@@ -171,7 +171,7 @@ def _make_sweep_config(
             scan_segments=T,  # Loading data as-needed
         ),
         schedule_optimizer=ScheduleOptimizerConfig(
-            schedule=WarmupParallelSigmaAndClipScheduleConfig(use_fista=False),
+            schedule=WarmupParallelSigmaAndClipScheduleConfig(use_fista=True),
             batch_size=4,
         ),
     )
