@@ -86,10 +86,10 @@ class WarmupAlternatingSigmaAndClipScheduleConfig(AbstractNoiseAndClipScheduleCo
 @dataclass
 class ParallelSigmaAndClipScheduleConfig(AbstractNoiseAndClipScheduleConfig):
     noise: BaseScheduleConfig = dataclasses.field(
-        default_factory=InterpolatedExponentialScheduleConfig,
+        default_factory=BSplineScheduleConfig,
     )
     clip: BaseScheduleConfig = dataclasses.field(
-        default_factory=InterpolatedExponentialScheduleConfig,
+        default_factory=BSplineScheduleConfig,
     )
     use_fista: bool = False
 

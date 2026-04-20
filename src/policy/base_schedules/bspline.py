@@ -1,4 +1,3 @@
-import jax
 import jax.lax as jlax
 import jax.numpy as jnp
 import numpy as np
@@ -65,23 +64,11 @@ class BSplineSchedule(AbstractSchedule):
         basis = jnp.array(basis_np)
         basis_pinv = jnp.array(np.linalg.pinv(basis_np))
 
-        # Initialise control points so that softplus(cp) = init_value uniformly.
-        v = conf.init_value
-        raw_init = float(np.log(np.expm1(v) + 1e-8))
-
-        control_points = jnp.full((conf.num_control_points,), raw_init, dtype=jnp.float32)
+        control_points = jnp.full((conf.num_control_points,), conf.init_value, dtype=jnp.float32)
         return cls(control_points, basis, basis_pinv)
 
-    def _apply_positivity(self, x: Array) -> Array:
-        return jnp.where(x > 20, x, jax.nn.softplus(x))
-
-    def _invert_positivity(self, y: Array) -> Array:
-        """Invert softplus: softplus^{-1}(y) = log(exp(y) - 1)."""
-        return jnp.where(y > 20, y, jnp.log(jnp.expm1(jnp.clip(y, 1e-6)) + 1e-8))
-
     def get_valid_schedule(self) -> Array:
-        pos_cp = self._apply_positivity(self.control_points)
-        return jlax.stop_gradient(self.basis) @ pos_cp
+        return jlax.stop_gradient(self.basis) @ self.control_points
 
     def get_raw_schedule(self) -> Array:
         return jlax.stop_gradient(self.basis) @ self.control_points
@@ -92,11 +79,10 @@ class BSplineSchedule(AbstractSchedule):
         schedule: "BSplineSchedule",
         projection: Array,
     ) -> "BSplineSchedule":
-        # Least-squares fit: find pos_cp ≈ pinv(basis) @ projection, then invert.
+        # Least-squares fit: find pos_cp ≈ pinv(basis) @ projection
         pos_cp = jlax.stop_gradient(schedule.basis_pinv) @ projection
-        raw_cp = schedule._invert_positivity(pos_cp)
         return BSplineSchedule(
-            control_points=raw_cp,
+            control_points=pos_cp,
             basis=schedule.basis,
             basis_pinv=schedule.basis_pinv,
         )

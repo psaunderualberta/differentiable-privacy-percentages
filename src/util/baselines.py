@@ -6,10 +6,10 @@ from typing import cast
 import jax.random as jr
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import tqdm
 from jaxtyping import Array, PRNGKeyArray
 
-import wandb
 from environments.dp import (
     DPTrainingParams,
     train_with_noise,
@@ -24,6 +24,8 @@ from policy.stateful_schedules.median_gradient import (
     StatefulMedianGradientNoiseAndClipSchedule,
 )
 from privacy.gdp_privacy import GDPPrivacyParameters
+from util.aggregators import multi_line_plotter
+from util.logger import WandbTableLogger
 
 file_location = os.path.abspath(os.path.dirname(__file__))
 
@@ -168,7 +170,7 @@ class Baseline:
         | type[AbstractStatefulNoiseAndClipSchedule],
         num_runs_in_sweep: int = 20,
         with_progress_bar: bool = True,
-    ) -> pd.DataFrame:
+    ) -> tuple[pd.DataFrame, AbstractNoiseAndClipSchedule | AbstractStatefulNoiseAndClipSchedule]:
         num_params = len(params)
         best_params = []
         best_run_accuracy = 0
@@ -201,12 +203,15 @@ class Baseline:
 
         schedule = schedule_class(*best_params)
 
-        return self.generate_schedule_data(schedule, name, key, with_progress_bar=with_progress_bar)
+        return self.generate_schedule_data(
+            schedule, name, key, with_progress_bar=with_progress_bar
+        ), schedule
 
     def log_comparison(
         self,
         schedule: "AbstractNoiseAndClipSchedule | AbstractStatefulNoiseAndClipSchedule",
         eval_key: PRNGKeyArray,
+        logger: WandbTableLogger,
         label: str = "Learned Schedule",
     ) -> None:
         """Log the final baseline comparison, generating baseline data if needed.
@@ -221,13 +226,32 @@ class Baseline:
             self.delete_non_baseline_data()
 
         eval_df = self.generate_schedule_data(schedule, label, eval_key)
-        final_loss_fig = self.baseline_comparison_final_loss_plotter(eval_df)
-        accuracy_fig = self.baseline_comparison_accuracy_plotter(eval_df)
-        wandb.log(
-            {
-                "Baseline vs. Losses": final_loss_fig,
-                "Baseline vs. Accuracy": accuracy_fig,
-            },
+        logger.log_figure(
+            "Baseline vs. Losses", self.baseline_comparison_final_loss_plotter(eval_df)
+        )
+        logger.log_figure(
+            "Baseline vs. Accuracy", self.baseline_comparison_accuracy_plotter(eval_df)
+        )
+        fig_sigmas, fig_clips = self.plot_sigma_clip_schedules()
+        logger.log_figure("Baseline Sigma Schedule", fig_sigmas)
+        logger.log_figure("Baseline Clip Schedule", fig_clips)
+
+    def plot_sigma_clip_schedules(self) -> tuple[go.Figure, go.Figure]:
+        if not hasattr(self, "best_dynamic_schedule"):
+            raise RuntimeError("Call generate_baseline_data first.")
+        schedule = self.best_dynamic_schedule
+        T = int(schedule.privacy_params.T)
+        name = "Dynamic-DPSGD"
+
+        sigmas = [float(v) for v in schedule.get_private_sigmas()]
+        sigma_df = pd.DataFrame([{"type": name, **{i: sigmas[i] for i in range(T)}}])
+
+        clips = [float(v) for v in schedule.get_private_clips()]
+        clip_df = pd.DataFrame([{"type": name, **{i: clips[i] for i in range(T)}}])
+
+        return (
+            multi_line_plotter(sigma_df, col_name="sigma", color_indicator="type"),
+            multi_line_plotter(clip_df, col_name="clip", color_indicator="type"),
         )
 
     def generate_baseline_data(
@@ -243,7 +267,7 @@ class Baseline:
         ]
 
         key, sweep_key = jr.split(key)
-        median_df = self.baseline_sweep(
+        median_df, _ = self.baseline_sweep(
             sweep_key,
             params,
             name,
@@ -264,19 +288,22 @@ class Baseline:
 
         name = "Dynamic-DPSGD"
         params = [
-            lambda key: jr.uniform(key, shape=(), minval=1.5, maxval=5.0),  # c_0
-            lambda key: jr.uniform(key, shape=(), minval=1, maxval=10),  # rho_mu
-            lambda key: jr.uniform(key, shape=(), minval=1, maxval=10),  # rho_c
+            lambda key: jr.uniform(key, shape=(), minval=1, maxval=5),  # rho_mu
+            lambda key: jr.uniform(key, shape=(), minval=1, maxval=5),  # rho_c
+            lambda key: jr.uniform(key, shape=(), minval=1.0, maxval=20.0),  # c_0
             lambda _: self.privacy_params,  # privacy_params
         ]
 
         key, sweep_key = jr.split(key)
-        dynamic_df = self.baseline_sweep(
+        dynamic_df, dynamic_schedule = self.baseline_sweep(
             sweep_key,
             params,
             name,
             DynamicDPSGDSchedule,
             with_progress_bar=with_progress_bar,
+        )
+        self.best_dynamic_schedule: DynamicDPSGDSchedule = cast(
+            DynamicDPSGDSchedule, dynamic_schedule
         )
 
         # c_0 = jnp.asarray(2.5)

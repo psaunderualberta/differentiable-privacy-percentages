@@ -209,7 +209,7 @@ def main():
             save_checkpoint(make_state(schedule, opt_state, key, init_key, t), t, run)
 
         if log_baselines_during_training and (t + 1) % sweep_config.baseline_log_interval == 0:
-            baseline.log_comparison(schedule, eval_key)
+            baseline.log_comparison(schedule, eval_key, logger=logger)
 
         if shutdown_requested() or time_limit_approaching():
             print(f"Graceful shutdown at step {t}; checkpointing for job-chain resubmit")
@@ -221,7 +221,7 @@ def main():
         logger.log(loggable_item)
 
     if sweep_config.with_baselines:
-        baseline.log_comparison(schedule, eval_key)
+        baseline.log_comparison(schedule, eval_key, logger=logger)
         if not baseline_data_saved:
             # End-only case: log_comparison() lazily generated baseline data above;
             # save it now so future restarts can skip the sweep.
