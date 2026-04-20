@@ -1,0 +1,18 @@
+[project]
+name = "dp-psac-ref"
+version = "0.1.0"
+description = "Standalone DP-PSAC reference implementation (Xia et al. 2023)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "jaxtyping",
+    "equinox>=0.11",
+    "optax>=0.2",
+    "numpy>=1.26",
+    "opacus>=1.5",
+    "torch>=2.2",
+    "torchvision>=0.17",
+    "tyro>=0.8",
+    "pytest>=8.0",
+    "jax[cuda]>=0.6.2",
+]
