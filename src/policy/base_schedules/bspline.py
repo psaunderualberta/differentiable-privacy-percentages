@@ -73,11 +73,11 @@ class BSplineSchedule(AbstractSchedule):
         return cls(control_points, basis, basis_pinv)
 
     def _apply_positivity(self, x: Array) -> Array:
-        return jax.nn.softplus(x)
+        return jnp.where(x > 20, x, jax.nn.softplus(x))
 
     def _invert_positivity(self, y: Array) -> Array:
         """Invert softplus: softplus^{-1}(y) = log(exp(y) - 1)."""
-        return jnp.log(jnp.expm1(jnp.clip(y, 1e-6)) + 1e-8)
+        return jnp.where(y > 20, y, jnp.log(jnp.expm1(jnp.clip(y, 1e-6)) + 1e-8))
 
     def get_valid_schedule(self) -> Array:
         pos_cp = self._apply_positivity(self.control_points)
