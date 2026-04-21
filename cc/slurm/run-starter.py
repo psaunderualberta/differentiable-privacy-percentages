@@ -58,6 +58,7 @@ class SlurmConfig:
     mem_per_gpu: str = "6G"
     account: str = "aip-nidhih"
     wandb_proj: str = "Testing Mu-gdp"
+    prerequisites: tuple[str, ...] = ()
 
     @property
     def main_args(self) -> str:
@@ -113,9 +114,15 @@ if __name__ == "__main__":
         f.write(conf.sbatch_file)
         f.flush()
 
-        print(f"sbatch {f.name}")
+        cmd_list = ["sbatch"]
+        if len(conf.prerequisites) > 0:
+            cmd_list.append("-d after:" + ",".join(jobid for jobid in conf.prerequisites))
+        cmd_list.append(f"{f.name}")
+        cmd = " ".join(cmd_list)
+
+        print(cmd)
         process_out = subprocess.run(
-            f"sbatch {f.name}",
+            cmd,
             shell=True,
             capture_output=True,
         )

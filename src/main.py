@@ -216,6 +216,9 @@ def main():
             save_checkpoint(make_state(schedule, opt_state, key, init_key, t), t, run)
             break
 
+    # Resubmit job (dependency ensures won't start until current ends)
+    resubmit_if_requested(run.id)
+
     # Final logging
     for loggable_item in schedule.get_loggables(force=True):
         logger.log(loggable_item)
@@ -234,9 +237,6 @@ def main():
 
     logger.finish()
     run.finish()
-
-    # Resubmit if finished
-    resubmit_if_requested(run.id)
 
 
 if __name__ == "__main__":
