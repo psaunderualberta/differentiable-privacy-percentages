@@ -40,7 +40,6 @@ from typing import Any
 import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as ocp
-import pandas as pd
 
 import wandb
 
@@ -58,14 +57,6 @@ def _ckpt_dir(run_id: str) -> pathlib.Path:
 
 def _artifact_name(run_id: str) -> str:
     return f"checkpoint-{run_id}"
-
-
-def _baseline_path(run_id: str) -> pathlib.Path:
-    return _ckpt_dir(run_id) / "baseline_data.pkl"
-
-
-def _baseline_artifact_name(run_id: str) -> str:
-    return f"baseline-{run_id}"
 
 
 def _find_local_checkpoint(run_id: str, step: int | None) -> pathlib.Path | None:
@@ -207,55 +198,4 @@ def load_checkpoint(
 
     except Exception as e:
         print(f"Warning: could not load checkpoint {artifact_path}: {e}")
-        return None
-
-
-def save_baseline_data(df: pd.DataFrame, run_id: str, run: Any) -> None:
-    """Pickle the baseline DataFrame locally and upload as a W&B artifact.
-
-    Mirrors the local-first pattern of ``save_checkpoint``: always writes to
-    disk first, then uploads to W&B (no-op when the run is in disabled mode).
-    """
-    path = _baseline_path(run_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_pickle(str(path))
-
-    artifact = wandb.Artifact(
-        name=_baseline_artifact_name(run_id),
-        type="baseline",
-        metadata={"run_id": run_id},
-    )
-    artifact.add_file(str(path))
-    run.log_artifact(artifact, aliases=["latest"])
-    print(f"Baseline data saved → {path}")
-
-
-def load_baseline_data(
-    run_id: str,
-    entity: str | None,
-    project: str | None,
-) -> pd.DataFrame | None:
-    """Load baseline data, checking local disk before attempting a W&B download.
-
-    Returns the cached DataFrame, or ``None`` if neither source is available.
-    """
-    path = _baseline_path(run_id)
-    if path.exists():
-        print(f"Loading baseline data from {path}")
-        return pd.read_pickle(str(path))
-
-    if entity is None or project is None:
-        return None
-
-    artifact_path = f"{entity}/{project}/{_baseline_artifact_name(run_id)}:latest"
-    print(f"Attempting to download baseline artifact: {artifact_path}")
-    try:
-        artifact = wandb.Api().artifact(artifact_path)
-        local_dir = pathlib.Path(artifact.download())
-        pkl_files = list(local_dir.glob("*.pkl"))
-        if not pkl_files:
-            return None
-        return pd.read_pickle(str(pkl_files[0]))
-    except Exception as e:
-        print(f"Warning: could not load baseline artifact {artifact_path}: {e}")
         return None

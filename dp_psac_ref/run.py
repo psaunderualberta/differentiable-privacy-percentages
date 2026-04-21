@@ -6,8 +6,15 @@ Usage (local schedules):
         --dataset mnist --batch-size 512 --lr 1.0 --r 0.1 \
         --delta 1e-5 --arch cnn --seed 0 --out results.json
 
-Usage (W&B checkpoint):
+Usage (W&B checkpoint — learned schedule):
     uv run run.py schedule:wandb-schedule \
+        --schedule.run-id <run_id> --schedule.entity <entity> \
+        --schedule.project <project> \
+        --dataset mnist --batch-size 512 --lr 1.0 --r 0.1 \
+        --delta 1e-5 --arch cnn --seed 0 --out results.json
+
+Usage (W&B baseline — Dynamic-DPSGD schedule from baseline artifact):
+    uv run run.py schedule:wandb-baseline-schedule \
         --schedule.run-id <run_id> --schedule.entity <entity> \
         --schedule.project <project> \
         --dataset mnist --batch-size 512 --lr 1.0 --r 0.1 \
@@ -45,8 +52,15 @@ class WandbSchedule:
 
 
 @dataclass
+class WandbBaselineSchedule:
+    run_id: str
+    entity: str
+    project: str
+
+
+@dataclass
 class Args:
-    schedule: LocalSchedule | WandbSchedule
+    schedule: LocalSchedule | WandbSchedule | WandbBaselineSchedule
     dataset: str = "mnist"
     arch: str = "mlp"  # "mlp" or "cnn"
     batch_size: int = 512
@@ -58,16 +72,23 @@ class Args:
     log_every: int = 50
 
 
-def _load_schedules(schedule: LocalSchedule | WandbSchedule) -> tuple[np.ndarray, np.ndarray]:
+def _load_schedules(
+    schedule: LocalSchedule | WandbSchedule | WandbBaselineSchedule,
+) -> tuple[np.ndarray, np.ndarray]:
     if isinstance(schedule, LocalSchedule):
         return np.load(schedule.sigmas), np.load(schedule.clips)
 
     import wandb
 
     api = wandb.Api()
-    alias = "latest" if schedule.step is None else f"step-{schedule.step}"
-    artifact_path = f"{schedule.entity}/{schedule.project}/checkpoint-{schedule.run_id}:{alias}"
-    print(f"Downloading checkpoint artifact: {artifact_path}")
+
+    if isinstance(schedule, WandbSchedule):
+        alias = "latest" if schedule.step is None else f"step-{schedule.step}"
+        artifact_path = f"{schedule.entity}/{schedule.project}/checkpoint-{schedule.run_id}:{alias}"
+    else:
+        artifact_path = f"{schedule.entity}/{schedule.project}/baseline-{schedule.run_id}:latest"
+
+    print(f"Downloading artifact: {artifact_path}")
     artifact = api.artifact(artifact_path)
     local_dir = Path(artifact.download())
     return np.load(local_dir / "sigmas.npy"), np.load(local_dir / "clips.npy")

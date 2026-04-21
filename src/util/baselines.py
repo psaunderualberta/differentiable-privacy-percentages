@@ -1,15 +1,18 @@
 import inspect
 import os
+import pathlib
 from collections.abc import Callable
-from typing import cast
+from typing import Any, cast
 
 import jax.random as jr
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import tqdm
 from jaxtyping import Array, PRNGKeyArray
 
+import wandb
 from environments.dp import (
     DPTrainingParams,
     train_with_noise,
@@ -25,9 +28,18 @@ from policy.stateful_schedules.median_gradient import (
 )
 from privacy.gdp_privacy import GDPPrivacyParameters
 from util.aggregators import multi_line_plotter
+from util.checkpointing import _ckpt_dir
 from util.logger import WandbTableLogger
 
 file_location = os.path.abspath(os.path.dirname(__file__))
+
+
+def _baseline_path(run_id: str) -> pathlib.Path:
+    return _ckpt_dir(run_id) / "baseline_data.pkl"
+
+
+def _baseline_artifact_name(run_id: str) -> str:
+    return f"baseline-{run_id}"
 
 
 class Baseline:
@@ -48,6 +60,73 @@ class Baseline:
             "losses",
             "accuracies",
         ]
+
+    def save(self, run_id: str, run: Any) -> None:
+        """Pickle the baseline DataFrame locally and upload as a W&B artifact.
+
+        If ``best_dynamic_schedule`` is available (i.e. ``generate_baseline_data``
+        has been called), also saves ``sigmas.npy`` / ``clips.npy`` alongside the
+        pickle so that ``dp_psac_ref`` can consume the schedule without importing
+        any ``src/`` modules.
+        """
+        path = _baseline_path(run_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.original_df.to_pickle(str(path))
+
+        artifact = wandb.Artifact(
+            name=_baseline_artifact_name(run_id),
+            type="baseline",
+            metadata={"run_id": run_id},
+        )
+        artifact.add_file(str(path))
+
+        if hasattr(self, "best_dynamic_schedule"):
+            sigmas_path = path.parent / "sigmas.npy"
+            clips_path = path.parent / "clips.npy"
+            np.save(sigmas_path, np.asarray(self.best_dynamic_schedule.get_private_sigmas()))
+            np.save(clips_path, np.asarray(self.best_dynamic_schedule.get_private_clips()))
+            artifact.add_file(str(sigmas_path))
+            artifact.add_file(str(clips_path))
+
+        run.log_artifact(artifact, aliases=["latest"])
+        print(f"Baseline data saved → {path}")
+
+    def restore_from_cache(
+        self,
+        run_id: str,
+        entity: str | None,
+        project: str | None,
+    ) -> bool:
+        """Populate ``original_df`` / ``df`` from local disk or a W&B artifact.
+
+        Returns ``True`` on success, ``False`` if neither source is available.
+        """
+        path = _baseline_path(run_id)
+        if path.exists():
+            print(f"Loading baseline data from {path}")
+            df = pd.read_pickle(str(path))
+            self.original_df = df
+            self.df = df.copy()
+            return True
+
+        if entity is None or project is None:
+            return False
+
+        artifact_path = f"{entity}/{project}/{_baseline_artifact_name(run_id)}:latest"
+        print(f"Attempting to download baseline artifact: {artifact_path}")
+        try:
+            artifact = wandb.Api().artifact(artifact_path)
+            local_dir = pathlib.Path(artifact.download())
+            pkl_files = list(local_dir.glob("*.pkl"))
+            if not pkl_files:
+                return False
+            df = pd.read_pickle(str(pkl_files[0]))
+            self.original_df = df
+            self.df = df.copy()
+            return True
+        except Exception as e:
+            print(f"Warning: could not load baseline artifact {artifact_path}: {e}")
+            return False
 
     def delete_non_baseline_data(self):
         self.df = self.original_df.copy()
