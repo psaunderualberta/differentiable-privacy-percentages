@@ -21,6 +21,7 @@ from util.checkpointing import (
     save_checkpoint,
 )
 from util.dataloaders import get_dataset_shapes
+from util.eval import make_dp_psac_ref_cmd
 from util.job_chain import (
     register_signal_handler,
     resubmit_if_requested,
@@ -117,6 +118,18 @@ def main():
     print("Starting...")
     run = init_wandb_run(wandb_config, sweep_config)
     register_signal_handler()
+
+    _dp_psac_ref_cmd = make_dp_psac_ref_cmd(
+        run_id=run.id,
+        entity=wandb_config.entity,
+        project=wandb_config.project,
+        dataset=sweep_config.dataset,
+        batch_size=sweep_config.env.batch_size,
+        lr=env_params.lr,
+        delta=gdp_params.delta,
+        arch=type(env_params.network).__name__.lower(),
+    )
+    print(f"dp_psac_ref eval command:\n  {_dp_psac_ref_cmd}")
 
     # --- Baseline setup ---
     eval_key = jr.PRNGKey(0)
@@ -229,6 +242,7 @@ def main():
         logger.bulk_line_plots(bulk_line_table.table_name)
 
     logger.finish()
+    print(f"dp_psac_ref eval command:\n  {_dp_psac_ref_cmd}")
     run.finish()
 
 

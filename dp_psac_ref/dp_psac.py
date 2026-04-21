@@ -90,10 +90,10 @@ def psac_clip(per_sample_grads: PyTree, C: Array, r: float) -> PyTree:
     )
 
 
-def add_gaussian_noise(summed_grads: PyTree, C: Array, sigma: Array, key: PRNGKeyArray) -> PyTree:
+def add_gaussian_noise(summed_grads: PyTree, sigma: Array, key: PRNGKeyArray) -> PyTree:
     leaves, treedef = jax.tree_util.tree_flatten(summed_grads)
     keys = jr.split(key, len(leaves))
-    noised = [g + C * sigma * jr.normal(k, g.shape) for g, k in zip(leaves, keys)]
+    noised = [g + sigma * jr.normal(k, g.shape) for g, k in zip(leaves, keys)]
     return jax.tree_util.tree_unflatten(treedef, noised)
 
 
@@ -133,7 +133,7 @@ def make_train_step(
         per_sample = per_sample_grad_fn(params, xb, yb)
         clipped = psac_clip(per_sample, C_t, r)
         summed = jax.tree_util.tree_map(lambda g: g.sum(0), clipped)
-        noisy = add_gaussian_noise(summed, C_t, sigma_t, noise_key)
+        noisy = add_gaussian_noise(summed, sigma_t, noise_key)
         avg = jax.tree_util.tree_map(lambda g: g / batch_size, noisy)
 
         updates, opt_state = optimizer.update(avg, opt_state, params)

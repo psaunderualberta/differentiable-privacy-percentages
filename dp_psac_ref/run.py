@@ -149,7 +149,7 @@ def main(args: Args) -> None:
     fig.set_x_limits(min_=0.0)
     print(fig.show())
 
-    eps = accountant.epsilon_spent(sigmas, sample_rate=q, delta=args.delta)
+    eps = accountant.epsilon_spent(sigmas / clips, sample_rate=q, delta=args.delta)
 
     result = {
         "test_accuracy": float(metrics["test_accuracy"]),
