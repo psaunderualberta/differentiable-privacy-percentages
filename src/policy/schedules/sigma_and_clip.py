@@ -61,18 +61,23 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
     @eqx.filter_jit
     def project(self) -> Self:
-        private_weights = self.get_private_weights()
-        private_clips = self.get_private_clips()
+        sigma_proj, clip_proj = self.privacy_params.project_sigma_and_clip(
+            self.get_private_sigmas(), self.get_private_clips()
+        )
 
-        new_noises = private_clips / private_weights
         new_noise_schedule = self.noise_schedule.__class__.from_projection(
             self.noise_schedule,
-            new_noises,
+            sigma_proj,
+        )
+
+        new_clip_schedule = self.clip_schedule.__class__.from_projection(
+            self.clip_schedule,
+            clip_proj,
         )
 
         return self.__class__(
             noise_schedule=new_noise_schedule,
-            clip_schedule=self.clip_schedule,
+            clip_schedule=new_clip_schedule,
             privacy_params=self.privacy_params,
         )
 

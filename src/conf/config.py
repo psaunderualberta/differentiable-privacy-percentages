@@ -133,7 +133,7 @@ class EnvConfig:
 
     # Privacy Parameters
     eps: float = 0.5
-    delta: float = 1e-7
+    delta: float = 1e-6
     batch_size: int = 250
     num_training_steps: int = 100
     scan_segments: int = -1

@@ -32,9 +32,11 @@ import dp_psac
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
+import plotille
 import tyro
 
 import data
+import wandb
 
 
 @dataclass
@@ -63,10 +65,10 @@ class Args:
     schedule: LocalSchedule | WandbSchedule | WandbBaselineSchedule
     dataset: str = "mnist"
     arch: str = "mlp"  # "mlp" or "cnn"
-    batch_size: int = 512
+    batch_size: int = 250
     lr: float = 1.0
     r: float = 0.1
-    delta: float = 1e-5
+    delta: float = 1e-6
     seed: int = 0
     out: Path | None = None
     log_every: int = 50
@@ -77,8 +79,6 @@ def _load_schedules(
 ) -> tuple[np.ndarray, np.ndarray]:
     if isinstance(schedule, LocalSchedule):
         return np.load(schedule.sigmas), np.load(schedule.clips)
-
-    import wandb
 
     api = wandb.Api()
 
@@ -100,7 +100,15 @@ def main(args: Args) -> None:
         f"sigmas and clips must be 1D arrays of equal length; got {sigmas.shape} and {clips.shape}"
     )
     T = int(sigmas.shape[0])
-    print(f"loaded schedules: T={T}  sigma[0]={sigmas[0]:.4f} clip[0]={clips[0]:.4f}")
+    fig = plotille.Figure()
+    fig.width = 60
+    fig.height = 15
+    fig.x_label = "step"
+    fig.y_label = "value"
+    fig.plot(range(T), sigmas.tolist(), label="sigma")
+    fig.plot(range(T), clips.tolist(), label="clip")
+    fig.set_x_limits(min_=0.0)
+    print(fig.show(legend=True))
 
     x_train, y_train, x_test, y_test = data.load(args.dataset, args.arch)
     n = int(x_train.shape[0])
@@ -131,6 +139,15 @@ def main(args: Args) -> None:
         key=train_key,
         log_every=args.log_every,
     )
+
+    fig = plotille.Figure()
+    fig.width = 60
+    fig.height = 15
+    fig.x_label = "step"
+    fig.y_label = "loss"
+    fig.plot(range(T), metrics["train_losses"])
+    fig.set_x_limits(min_=0.0)
+    print(fig.show())
 
     eps = accountant.epsilon_spent(sigmas, sample_rate=q, delta=args.delta)
 

@@ -16,4 +16,5 @@ dependencies = [
     "pytest>=8.0",
     "jax[cuda]>=0.6.2",
     "wandb>=0.17",
+    "plotille>=6.0.5",
 ]

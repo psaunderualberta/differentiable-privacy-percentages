@@ -18,8 +18,10 @@ from environments.dp import (
     train_with_noise,
     train_with_stateful_noise,
 )
+from policy.base_schedules.constant import ConstantSchedule
 from policy.schedules.abstract import AbstractNoiseAndClipSchedule
 from policy.schedules.dynamic_dpsgd import DynamicDPSGDSchedule
+from policy.schedules.sigma_and_clip import SigmaAndClipSchedule
 from policy.stateful_schedules.abstract import (
     AbstractStatefulNoiseAndClipSchedule,
 )
@@ -81,8 +83,8 @@ class Baseline:
         artifact.add_file(str(path))
 
         if hasattr(self, "best_dynamic_schedule"):
-            sigmas_path = path.parent / "sigmas.npy"
-            clips_path = path.parent / "clips.npy"
+            sigmas_path = path.parent / "dynamic" / "sigmas.npy"
+            clips_path = path.parent / "dynamic" / "clips.npy"
             np.save(sigmas_path, np.asarray(self.best_dynamic_schedule.get_private_sigmas()))
             np.save(clips_path, np.asarray(self.best_dynamic_schedule.get_private_clips()))
             artifact.add_file(str(sigmas_path))
@@ -247,7 +249,7 @@ class Baseline:
         name: str,
         schedule_class: type[AbstractNoiseAndClipSchedule]
         | type[AbstractStatefulNoiseAndClipSchedule],
-        num_runs_in_sweep: int = 20,
+        num_runs_in_sweep: int = 30,
         with_progress_bar: bool = True,
     ) -> tuple[pd.DataFrame, AbstractNoiseAndClipSchedule | AbstractStatefulNoiseAndClipSchedule]:
         num_params = len(params)
@@ -276,6 +278,7 @@ class Baseline:
 
         # Print sweep results w/ argument names
         class_params = inspect.signature(schedule_class).parameters
+        print(f"Best Accuracy for {schedule_class.__name__}: {best_run_accuracy:0.4f}")
         print(f"Best Parameters for {schedule_class.__name__}:")
         for param_name, param in zip(class_params, best_params):
             print(f"\t{param_name} = {param}")
@@ -333,6 +336,65 @@ class Baseline:
             multi_line_plotter(clip_df, col_name="clip", color_indicator="type"),
         )
 
+    def _constant_schedule_sweep(
+        self,
+        key: PRNGKeyArray,
+        name: str = "Constant Noise & Clip",
+        num_runs_in_sweep: int = 30,
+        with_progress_bar: bool = True,
+    ) -> pd.DataFrame:
+        """Sweep over constant σ/clip values and return data for the best setting.
+
+        `project()` rescales σ to satisfy the privacy budget while keeping the
+        sampled clip value fixed, so the sweep effectively explores different
+        constant clip thresholds.
+        """
+        T = int(self.privacy_params.T)
+        best_sigma: Array | None = None
+        best_clip: Array | None = None
+        best_run_accuracy = 0.0
+
+        for _ in tqdm.tqdm(range(num_runs_in_sweep), desc=f"Sweep: {name}"):
+            key, sigma_key, clip_key = jr.split(key, 3)
+            sigma_val = jr.uniform(sigma_key, shape=(), minval=0.5, maxval=10.0)
+            clip_val = jr.uniform(clip_key, shape=(), minval=0.1, maxval=10.0)
+
+            schedule = SigmaAndClipSchedule(
+                ConstantSchedule(sigma_val, T),
+                ConstantSchedule(clip_val, T),
+                self.privacy_params,
+            ).project()
+
+            # Update to values post-projection
+            sigma_val = schedule.get_private_sigmas().mean()
+            clip_val = schedule.get_private_clips().mean()
+
+            key, eval_key = jr.split(key)
+            df = self.generate_schedule_data(
+                schedule, name, eval_key, with_progress_bar=False, iterations=10
+            )
+
+            run_accuracy = float(df["accuracy"].mean())
+            if run_accuracy > best_run_accuracy:
+                best_run_accuracy = run_accuracy
+                best_sigma = sigma_val
+                best_clip = clip_val
+
+        print("Best Parameters for Constant Noise & Clip:")
+        print(f"\tsigma = {best_sigma}")
+        print(f"\tclip  = {best_clip}")
+
+        best_schedule = SigmaAndClipSchedule(
+            ConstantSchedule(best_sigma, T),
+            ConstantSchedule(best_clip, T),
+            self.privacy_params,
+        )
+
+        key, eval_key = jr.split(key)
+        return self.generate_schedule_data(
+            best_schedule, name, eval_key, with_progress_bar=with_progress_bar
+        )
+
     def generate_baseline_data(
         self,
         key: PRNGKeyArray,
@@ -340,7 +402,7 @@ class Baseline:
     ) -> pd.DataFrame:
         name = "Clip to Median Gradient Norm"
         params = [
-            lambda key: jr.uniform(key, shape=(), minval=0.01, maxval=1.0),  # c_0
+            lambda key: jr.uniform(key, shape=(), minval=0.01, maxval=5.0),  # c_0
             lambda key: jr.uniform(key, shape=(), minval=0.1, maxval=1.0),  # eta_C
             lambda _: self.privacy_params,  # privacy_params
         ]
@@ -390,7 +452,13 @@ class Baseline:
         # rho_c = jnp.asarray(2)
         # schedule = DynamicDPSGDSchedule(rho_mu, rho_c, c_0, self.privacy_params)
 
-        self.original_df = pd.concat([median_df, dynamic_df], axis=0)
+        key, sweep_key = jr.split(key)
+        constant_df = self._constant_schedule_sweep(
+            sweep_key,
+            with_progress_bar=with_progress_bar,
+        )
+
+        self.original_df = pd.concat([median_df, dynamic_df, constant_df], axis=0)
         self.df = self.original_df.copy()
 
         return self.df.copy()
