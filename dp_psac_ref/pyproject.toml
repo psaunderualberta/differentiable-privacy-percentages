@@ -15,4 +15,5 @@ dependencies = [
     "tyro>=0.8",
     "pytest>=8.0",
     "jax[cuda]>=0.6.2",
+    "wandb>=0.17",
 ]

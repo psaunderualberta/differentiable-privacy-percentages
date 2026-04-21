@@ -1,9 +1,17 @@
 """CLI entrypoint for the standalone DP-PSAC runner.
 
-Usage:
-    uv run run.py --sigmas sigmas.npy --clips clips.npy \\
-                  --dataset mnist --batch-size 512 --lr 1.0 --r 0.1 \\
-                  --delta 1e-5 --arch cnn --seed 0 --out results.json
+Usage (local schedules):
+    uv run run.py schedule:local-schedule \
+        --schedule.sigmas sigmas.npy --schedule.clips clips.npy \
+        --dataset mnist --batch-size 512 --lr 1.0 --r 0.1 \
+        --delta 1e-5 --arch cnn --seed 0 --out results.json
+
+Usage (W&B checkpoint):
+    uv run run.py schedule:wandb-schedule \
+        --schedule.run-id <run_id> --schedule.entity <entity> \
+        --schedule.project <project> \
+        --dataset mnist --batch-size 512 --lr 1.0 --r 0.1 \
+        --delta 1e-5 --arch cnn --seed 0 --out results.json
 """
 
 from __future__ import annotations
@@ -23,9 +31,22 @@ import data
 
 
 @dataclass
-class Args:
+class LocalSchedule:
     sigmas: Path
     clips: Path
+
+
+@dataclass
+class WandbSchedule:
+    run_id: str
+    entity: str
+    project: str
+    step: int | None = None  # None → "latest" checkpoint
+
+
+@dataclass
+class Args:
+    schedule: LocalSchedule | WandbSchedule
     dataset: str = "mnist"
     arch: str = "mlp"  # "mlp" or "cnn"
     batch_size: int = 512
@@ -37,9 +58,23 @@ class Args:
     log_every: int = 50
 
 
+def _load_schedules(schedule: LocalSchedule | WandbSchedule) -> tuple[np.ndarray, np.ndarray]:
+    if isinstance(schedule, LocalSchedule):
+        return np.load(schedule.sigmas), np.load(schedule.clips)
+
+    import wandb
+
+    api = wandb.Api()
+    alias = "latest" if schedule.step is None else f"step-{schedule.step}"
+    artifact_path = f"{schedule.entity}/{schedule.project}/checkpoint-{schedule.run_id}:{alias}"
+    print(f"Downloading checkpoint artifact: {artifact_path}")
+    artifact = api.artifact(artifact_path)
+    local_dir = Path(artifact.download())
+    return np.load(local_dir / "sigmas.npy"), np.load(local_dir / "clips.npy")
+
+
 def main(args: Args) -> None:
-    sigmas = np.load(args.sigmas)
-    clips = np.load(args.clips)
+    sigmas, clips = _load_schedules(args.schedule)
     assert sigmas.shape == clips.shape and sigmas.ndim == 1, (
         f"sigmas and clips must be 1D arrays of equal length; got {sigmas.shape} and {clips.shape}"
     )

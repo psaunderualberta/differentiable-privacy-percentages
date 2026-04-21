@@ -38,6 +38,7 @@ import pathlib
 from typing import Any
 
 import jax.numpy as jnp
+import numpy as np
 import orbax.checkpoint as ocp
 import pandas as pd
 
@@ -124,6 +125,12 @@ def save_checkpoint(
     # StandardCheckpointer uses async I/O internally; wait here so the step
     # directory exists on disk before we try to add it to the W&B artifact.
     checkpointer.wait_until_finished()
+
+    # Save human-readable schedules alongside the Orbax checkpoint so that
+    # dp_psac_ref/run.py can consume them without importing src/.
+    schedule = state["schedule"]
+    np.save(step_dir / "sigmas.npy", np.asarray(schedule.get_private_sigmas()))
+    np.save(step_dir / "clips.npy", np.asarray(schedule.get_private_clips()))
 
     artifact = wandb.Artifact(
         name=_artifact_name(run.id),
