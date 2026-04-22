@@ -85,6 +85,7 @@ class Baseline:
         if hasattr(self, "best_dynamic_schedule"):
             sigmas_path = path.parent / "dynamic" / "sigmas.npy"
             clips_path = path.parent / "dynamic" / "clips.npy"
+            sigmas_path.parent.mkdir(parents=True, exist_ok=True)
             np.save(sigmas_path, np.asarray(self.best_dynamic_schedule.get_private_sigmas()))
             np.save(clips_path, np.asarray(self.best_dynamic_schedule.get_private_clips()))
             artifact.add_file(str(sigmas_path))
@@ -339,7 +340,7 @@ class Baseline:
     def _constant_schedule_sweep(
         self,
         key: PRNGKeyArray,
-        name: str = "Constant Noise & Clip",
+        name: str = "Constant σ/clip",  # noqa: RUF001
         num_runs_in_sweep: int = 30,
         with_progress_bar: bool = True,
     ) -> pd.DataFrame:
@@ -380,7 +381,8 @@ class Baseline:
                 best_sigma = sigma_val
                 best_clip = clip_val
 
-        print("Best Parameters for Constant Noise & Clip:")
+        print(f"Best Accuracy for {name}: {best_run_accuracy:0.4f}")
+        print(f"Best Parameters for {name}:")
         print(f"\tsigma = {best_sigma}")
         print(f"\tclip  = {best_clip}")
 
