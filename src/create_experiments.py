@@ -104,10 +104,10 @@ NUM_OUTER_STEPS: int = 1000
 SEEDS: tuple[int, ...] = (447831761, 159020393, 435372193)
 
 # --- Axis 1: vary T, architecture fixed at medium MLP ---
-T_VALUES: list[int] = [500, 750, 1000, 1500, 2000, 3000]
+T_VALUES: list[int] = [1000, 1500, 2000, 3000, 5000]
 
-# --- Axis 2: vary architecture, T fixed at ~8 epochs ---
-T_FOR_ARCH_SWEEP: int = 2000
+# --- Axis 2: vary architecture, T fixed at ~14 epochs ---
+T_FOR_ARCH_SWEEP: int = 3500
 
 # MLP-only architectures
 MLP_ARCHS: list[MLPConfig] = [
@@ -168,7 +168,7 @@ def _make_sweep_config(
             delta=DELTA,
             batch_size=BATCH_SIZE,
             num_training_steps=T,
-            scan_segments=T,  # Loading data as-needed
+            scan_segments=T // 100,  # Loading data as-needed
         ),
         schedule_optimizer=ScheduleOptimizerConfig(
             schedule=WarmupParallelSigmaAndClipScheduleConfig(use_fista=True),

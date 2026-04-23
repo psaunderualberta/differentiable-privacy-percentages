@@ -357,7 +357,7 @@ class Baseline:
 
         for _ in tqdm.tqdm(range(num_runs_in_sweep), desc=f"Sweep: {name}"):
             key, sigma_key, clip_key = jr.split(key, 3)
-            sigma_val = jr.uniform(sigma_key, shape=(), minval=0.5, maxval=10.0)
+            sigma_val = jr.uniform(sigma_key, shape=(), minval=0.1, maxval=10.0)
             clip_val = jr.uniform(clip_key, shape=(), minval=0.1, maxval=10.0)
 
             schedule = SigmaAndClipSchedule(
@@ -431,8 +431,8 @@ class Baseline:
 
         name = "Dynamic-DPSGD"
         params = [
-            lambda key: jr.uniform(key, shape=(), minval=1, maxval=5),  # rho_mu
-            lambda key: jr.uniform(key, shape=(), minval=1, maxval=5),  # rho_c
+            lambda key: jr.uniform(key, shape=(), minval=0.5, maxval=5),  # rho_mu
+            lambda key: jr.uniform(key, shape=(), minval=0.5, maxval=5),  # rho_c
             lambda key: jr.uniform(key, shape=(), minval=1.0, maxval=20.0),  # c_0
             lambda _: self.privacy_params,  # privacy_params
         ]
