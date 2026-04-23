@@ -8,6 +8,7 @@ from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 
 import wandb
+from conf.scope import RunContext, current, using
 from conf.singleton_conf import SingletonConfig
 from environments.dp import get_private_model_training_schemas
 from environments.dp_params import DPTrainingParams
@@ -35,8 +36,8 @@ from util.wandb_init import init_wandb_run
 
 def main():
     """Run the outer gradient-based loop that learns the DP-SGD noise/clip schedule."""
-    sweep_config = SingletonConfig.get_sweep_config_instance()
-    wandb_config = SingletonConfig.get_wandb_config_instance()
+    sweep_config = current().config.sweep
+    wandb_config = current().config.wandb_conf
 
     num_outer_steps = sweep_config.num_outer_steps
     env_prng_seed = sweep_config.prng_seed.sample()
@@ -53,7 +54,7 @@ def main():
     print(f"\tmu-GDP: {gdp_params.mu}")
 
     # Initialize schedule
-    schedule_conf = SingletonConfig.get_schedule_optimizer_config().schedule
+    schedule_conf = current().config.sweep.schedule_optimizer.schedule
     schedule = make_schedule(schedule_conf, gdp_params)
     schedule = schedule.project()
     if getattr(schedule, "use_fista", False):
@@ -247,4 +248,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    with using(RunContext(SingletonConfig.get_instance())):
+        main()

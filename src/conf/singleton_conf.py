@@ -1,4 +1,5 @@
 import dataclasses
+from contextlib import contextmanager
 from dataclasses import replace
 from functools import cache
 from pprint import pprint
@@ -168,6 +169,16 @@ class SingletonConfig:
     def get_object(cls, obj):
         """Convert a dataclass instance to a plain dict."""
         return dataclasses.asdict(obj)
+
+    @classmethod
+    @contextmanager
+    def override(cls, cfg: Config):
+        prev = cls.config
+        cls.config = cfg
+        try:
+            yield
+        finally:
+            cls.config = prev
 
 
 if __name__ == "__main__":
