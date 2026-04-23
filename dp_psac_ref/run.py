@@ -36,6 +36,7 @@ import numpy as np
 import optax
 import plotille
 import tyro
+from opacus.accountants.utils import get_noise_multiplier
 
 import data
 import wandb
@@ -43,8 +44,8 @@ import wandb
 
 @dataclass
 class LocalSchedule:
-    sigmas: Path
-    clips: Path
+    clip: float = 0.1
+    T: int = 2000
 
 
 @dataclass
@@ -99,17 +100,26 @@ class Args:
     lr: float = 1.0
     r: float = 0.1
     delta: float = 1e-6
+    eps: float = 1
     seed: int = 0
     out: Path | None = None
     log_every: int = 50
     optimizer: SGDConfig | AdamConfig | AdamWConfig = dataclasses.field(default_factory=SGDConfig)
 
 
-def _load_schedules(
-    schedule: LocalSchedule | WandbSchedule | WandbBaselineSchedule,
-) -> tuple[np.ndarray, np.ndarray]:
+def _load_schedules(args: Args, n: int, q: float) -> tuple[np.ndarray, np.ndarray]:
+    schedule = args.schedule
     if isinstance(schedule, LocalSchedule):
-        return np.load(schedule.sigmas), np.load(schedule.clips)
+        sigma = get_noise_multiplier(
+            target_epsilon=args.eps,
+            target_delta=args.delta,
+            sample_rate=q,
+            steps=n,
+            accountant="rdp",
+        )
+        sigmas = np.full(schedule.T, sigma, dtype=np.float32)
+        clips = np.full(schedule.T, schedule.clip, dtype=np.float32)
+        return sigmas, clips
 
     api = wandb.Api()
 
@@ -126,7 +136,12 @@ def _load_schedules(
 
 
 def main(args: Args) -> None:
-    sigmas, clips = _load_schedules(args.schedule)
+    x_train, y_train, x_test, y_test = data.load(args.dataset, args.arch)
+    n = int(x_train.shape[0])
+    q = args.batch_size / n
+    print(f"dataset={args.dataset} arch={args.arch} N={n} B={args.batch_size} q={q:.6f}")
+
+    sigmas, clips = _load_schedules(args, n, q)
     assert sigmas.shape == clips.shape and sigmas.ndim == 1, (
         f"sigmas and clips must be 1D arrays of equal length; got {sigmas.shape} and {clips.shape}"
     )
@@ -138,13 +153,8 @@ def main(args: Args) -> None:
     fig.y_label = "value"
     fig.plot(range(T), sigmas.tolist(), label="sigma")
     fig.plot(range(T), clips.tolist(), label="clip")
-    fig.set_x_limits(min_=0.0)
+    fig.set_x_limits(min_=0.0, max_=T)
     print(fig.show(legend=True))
-
-    x_train, y_train, x_test, y_test = data.load(args.dataset, args.arch)
-    n = int(x_train.shape[0])
-    q = args.batch_size / n
-    print(f"dataset={args.dataset} arch={args.arch} N={n} B={args.batch_size} q={q:.6f}")
 
     key = jr.PRNGKey(args.seed)
     init_key, train_key = jr.split(key)
@@ -178,7 +188,7 @@ def main(args: Args) -> None:
     fig.x_label = "step"
     fig.y_label = "loss"
     fig.plot(range(T), metrics["train_losses"])
-    fig.set_x_limits(min_=0.0)
+    fig.set_x_limits(min_=0.0, max_=T)
     print(fig.show())
 
     eps = accountant.epsilon_spent(sigmas / clips, sample_rate=q, delta=args.delta)
