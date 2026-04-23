@@ -159,12 +159,14 @@ def train(
     r: float,
     key: PRNGKeyArray,
     log_every: int = 50,
+    optimizer: optax.GradientTransformation | None = None,
 ) -> tuple[eqx.Module, dict]:
     assert sigmas.shape == clips.shape and sigmas.ndim == 1
     T = int(sigmas.shape[0])
 
     params, model_static = eqx.partition(model, eqx.is_inexact_array)
-    optimizer = optax.sgd(lr, momentum=0.9)
+    if optimizer is None:
+        optimizer = optax.sgd(lr, momentum=0.9)
     opt_state = optimizer.init(params)
 
     step = make_train_step(model_static, optimizer, batch_size, r, x_train, y_train)

@@ -23,6 +23,7 @@ Usage (W&B baseline — Dynamic-DPSGD schedule from baseline artifact):
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,7 @@ import dp_psac
 import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
+import optax
 import plotille
 import tyro
 
@@ -61,6 +63,34 @@ class WandbBaselineSchedule:
 
 
 @dataclass
+class SGDConfig:
+    momentum: float = 0.9
+
+
+@dataclass
+class AdamConfig:
+    b1: float = 0.9
+    b2: float = 0.999
+    eps: float = 1e-8
+
+
+@dataclass
+class AdamWConfig:
+    b1: float = 0.9
+    b2: float = 0.999
+    eps: float = 1e-8
+    weight_decay: float = 1e-4
+
+
+def _build_optimizer(lr: float, cfg: SGDConfig | AdamConfig | AdamWConfig):
+    if isinstance(cfg, SGDConfig):
+        return optax.sgd(lr, momentum=cfg.momentum)
+    if isinstance(cfg, AdamConfig):
+        return optax.adam(lr, b1=cfg.b1, b2=cfg.b2, eps=cfg.eps)
+    return optax.adamw(lr, b1=cfg.b1, b2=cfg.b2, eps=cfg.eps, weight_decay=cfg.weight_decay)
+
+
+@dataclass
 class Args:
     schedule: LocalSchedule | WandbSchedule | WandbBaselineSchedule
     dataset: str = "mnist"
@@ -72,6 +102,7 @@ class Args:
     seed: int = 0
     out: Path | None = None
     log_every: int = 50
+    optimizer: SGDConfig | AdamConfig | AdamWConfig = dataclasses.field(default_factory=SGDConfig)
 
 
 def _load_schedules(
@@ -138,6 +169,7 @@ def main(args: Args) -> None:
         r=args.r,
         key=train_key,
         log_every=args.log_every,
+        optimizer=_build_optimizer(args.lr, args.optimizer),
     )
 
     fig = plotille.Figure()
