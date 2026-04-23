@@ -80,7 +80,7 @@ class ScheduleOptimizerConfig:
         default_factory=WarmupParallelSigmaAndClipScheduleConfig,
     )
     batch_size: int = 1
-    lr: DistributionConfig = dist_config_helper(value=1e-3, distribution="constant")
+    lr: DistributionConfig = dist_config_helper(value=0.05, distribution="constant")
     momentum: DistributionConfig = dist_config_helper(
         values=(0.0, 0.1, 0.3),
         distribution="values",
@@ -127,7 +127,7 @@ class EnvConfig:
 
     network: NetworkConfig = dataclasses.field(default_factory=AutoNetworkConfig)
 
-    lr: DistributionConfig = dist_config_helper(value=0.1, distribution="constant")
+    lr: DistributionConfig = dist_config_helper(value=1e-3, distribution="constant")
     optimizer: Literal["sgd", "adam", "adamw"] = "sgd"
     loss_type: Literal["mse", "cce"] = "cce"
 
