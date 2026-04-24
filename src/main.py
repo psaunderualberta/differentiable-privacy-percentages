@@ -224,23 +224,25 @@ def main():
             break
 
     # Resubmit job (dependency ensures won't start until current ends)
-    resubmit_if_requested(run.id)
+    if shutdown_requested() or time_limit_approaching():
+        resubmit_if_requested(run.id)
+    else:
+        # Final logging
+        for loggable_item in schedule.get_loggables(force=True):
+            logger.log(loggable_item)
 
-    # Final logging
-    for loggable_item in schedule.get_loggables(force=True):
-        logger.log(loggable_item)
+        if sweep_config.with_baselines:
+            baseline.log_comparison(schedule, eval_key, logger=logger)
 
-    if sweep_config.with_baselines:
-        baseline.log_comparison(schedule, eval_key, logger=logger)
-        if not baseline_data_saved:
-            # End-only case: log_comparison() lazily generated baseline data above;
-            # save it now so future restarts can skip the sweep.
-            baseline.save(run.id, run)
+        for multi_line_table in schedule.get_logging_schemas():
+            logger.line_plot(multi_line_table.table_name)
+        for bulk_line_table in get_private_model_training_schemas():
+            logger.bulk_line_plots(bulk_line_table.table_name)
 
-    for multi_line_table in schedule.get_logging_schemas():
-        logger.line_plot(multi_line_table.table_name)
-    for bulk_line_table in get_private_model_training_schemas():
-        logger.bulk_line_plots(bulk_line_table.table_name)
+    # End-only case: log_comparison() lazily generated baseline data above;
+    # save it now so future restarts can skip the sweep.
+    if sweep_config.with_baselines and not baseline_data_saved:
+        baseline.save(run.id, run)
 
     logger.finish()
     print(f"dp_psac_ref eval command:\n  {_dp_psac_ref_cmd}")

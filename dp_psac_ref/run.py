@@ -110,16 +110,16 @@ class Args:
 def _load_schedules(args: Args, n: int, q: float) -> tuple[np.ndarray, np.ndarray]:
     schedule = args.schedule
     if isinstance(schedule, LocalSchedule):
-        sigma = get_noise_multiplier(
+        noise_multiplier = get_noise_multiplier(
             target_epsilon=args.eps,
             target_delta=args.delta,
             sample_rate=q,
-            steps=n,
+            steps=schedule.T,
             accountant="rdp",
         )
-        sigmas = np.full(schedule.T, sigma, dtype=np.float32)
         clips = np.full(schedule.T, schedule.clip, dtype=np.float32)
-        return sigmas, clips
+        sigmas = clips * np.full(schedule.T, noise_multiplier, dtype=np.float32)
+        return sigmas * clips, clips
 
     api = wandb.Api()
 
