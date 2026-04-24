@@ -145,6 +145,10 @@ CNN_ARCHS: list[CNNConfig] = [
 ]
 
 
+def _group_label(ds: str, eps: float, axis: str) -> str:
+    return f"ds{ds.upper()}/eps={eps}/{axis}"
+
+
 def _arch_label(arch: MLPConfig | CNNConfig) -> str:
     if isinstance(arch, MLPConfig):
         return "mlp-" + "x".join(str(h) for h in arch.hidden_sizes)
@@ -177,9 +181,9 @@ def _make_sweep_config(
     )
 
 
-def _build_experiments() -> list[tuple[str, str, SweepConfig]]:
-    """Return (axis_tag, run_name, SweepConfig) for every condition × seed."""
-    experiments: list[tuple[str, str, SweepConfig]] = []
+def _build_experiments() -> list[tuple[str, str, str, SweepConfig]]:
+    """Return (axis_tag, group, run_name, SweepConfig) for every condition × seed."""
+    experiments: list[tuple[str, str, str, SweepConfig]] = []
 
     def get_name(ds: str, eps: float, tpe: str, T: int, arch: MLPConfig | CNNConfig, seed: int):
         return f"ds{ds.upper()}/e{eps}/{tpe}-sweep/T={T}/{_arch_label(arch)}/seed={seed}"
@@ -192,7 +196,12 @@ def _build_experiments() -> list[tuple[str, str, SweepConfig]]:
                 for seed in SEEDS:
                     name = get_name(ds, eps, "T", T, arch, seed)
                     experiments.append(
-                        ("T-sweep", name, _make_sweep_config(ds, eps, T, arch, seed))
+                        (
+                            "T-sweep",
+                            _group_label(ds, eps, "T-sweep"),
+                            name,
+                            _make_sweep_config(ds, eps, T, arch, seed),
+                        )
                     )
 
             # Axis 2: architecture sweep (T=3000, MLP variants excluding the anchor already above)
@@ -203,6 +212,7 @@ def _build_experiments() -> list[tuple[str, str, SweepConfig]]:
                     experiments.append(
                         (
                             "arch-sweep",
+                            _group_label(ds, eps, "arch-sweep"),
                             name,
                             _make_sweep_config(ds, eps, T_FOR_ARCH_SWEEP, arch, seed),
                         )
@@ -216,6 +226,7 @@ def _build_experiments() -> list[tuple[str, str, SweepConfig]]:
                     experiments.append(
                         (
                             "arch-sweep",
+                            _group_label(ds, eps, "arch-sweep"),
                             name,
                             _make_sweep_config(ds, eps, T_FOR_ARCH_SWEEP, arch, seed),
                         )
@@ -254,18 +265,19 @@ if __name__ == "__main__":
     print(f"{len(experiments)} runs  →  project '{conf.project}'")
 
     if conf.dry_run:
-        for _axis, name, sweep_conf in experiments:
+        for _axis, group, name, sweep_conf in experiments:
             print(f"\n{'─' * 64}")
-            print(f"  {name}")
+            print(f"  {name}  [group={group}]")
             print(json.dumps(_to_run_config(sweep_conf), indent=2, default=str))
         print(f"\nWould write {len(experiments)} run IDs to:\n  {output_path}")
     else:
         with open(output_path, "w") as f:
-            for axis, name, sweep_conf in experiments:
+            for axis, group, name, sweep_conf in experiments:
                 run = wandb.init(
                     project=conf.project,
                     entity=conf.entity,
                     name=name,
+                    group=group,
                     config=_to_run_config(sweep_conf),
                     job_type="config-seed",
                     tags=["config-seed", axis],
