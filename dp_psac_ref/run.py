@@ -119,7 +119,7 @@ def _load_schedules(args: Args, n: int, q: float) -> tuple[np.ndarray, np.ndarra
         )
         clips = np.full(schedule.T, schedule.clip, dtype=np.float32)
         sigmas = clips * np.full(schedule.T, noise_multiplier, dtype=np.float32)
-        return sigmas * clips, clips
+        return sigmas, clips
 
     api = wandb.Api()
 

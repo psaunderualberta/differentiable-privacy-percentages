@@ -161,7 +161,7 @@ def train_with_noise(
     network = reinit_model(cast(eqx.Module, params.network), init_key)
     net_params, net_static = eqx.partition(network, eqx.is_array)
 
-    optimizer = optax.sgd(params.lr, momentum=0.9)
+    optimizer = params.optimizer
     opt_state = optimizer.init(net_params)
     opt_state_params, opt_state_static = eqx.partition(opt_state, eqx.is_array)
 
@@ -307,7 +307,7 @@ def train_with_stateful_noise(
     network = reinit_model(cast(eqx.Module, params.network), init_key)
     net_params, net_static = eqx.partition(network, eqx.is_array)
 
-    optimizer = optax.sgd(params.lr, momentum=0.9)
+    optimizer = params.optimizer
     opt_state = optimizer.init(net_params)
     opt_state_params, opt_state_static = eqx.partition(opt_state, eqx.is_array)
 

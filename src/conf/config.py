@@ -12,6 +12,7 @@ from conf.config_util import (
     to_wandb_conf,
     to_wandb_sweep_params,
 )
+from conf.optimizer_config import OptimizerConfig, SGDConfig
 from networks.auto.config import AutoNetworkConfig
 from networks.cnn.config import CNNConfig
 from networks.mlp.config import MLPConfig
@@ -127,8 +128,7 @@ class EnvConfig:
 
     network: NetworkConfig = dataclasses.field(default_factory=AutoNetworkConfig)
 
-    lr: DistributionConfig = dist_config_helper(value=1e-3, distribution="constant")
-    optimizer: Literal["sgd", "adam", "adamw"] = "sgd"
+    optimizer: OptimizerConfig = dataclasses.field(default_factory=SGDConfig)
     loss_type: Literal["mse", "cce"] = "cce"
 
     # Privacy Parameters

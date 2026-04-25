@@ -191,7 +191,6 @@ class TestIsUnionField:
 
     def test_distribution_config_field_not_union(self):
         assert _is_union_field(ScheduleOptimizerConfig, "lr") is False
-        assert _is_union_field(EnvConfig, "lr") is False
 
     def test_non_existent_field_returns_false(self):
         assert _is_union_field(ScheduleOptimizerConfig, "no_such_field") is False
@@ -252,8 +251,8 @@ class TestToWandbSweepParams:
         }
 
     def test_non_union_nested_no_type_discriminator(self):
-        # EnvConfig.lr is DistributionConfig (not Union), no _type expected.
-        conf = EnvConfig()
+        # ScheduleOptimizerConfig.lr is DistributionConfig (not Union), no _type expected.
+        conf = ScheduleOptimizerConfig()
         result = to_wandb_sweep_params(conf)
         lr_params = result["parameters"]["lr"]
         assert "_type" not in lr_params
@@ -536,12 +535,10 @@ class TestReconstructFromDict:
             _reconstruct_from_dict(conf, run_conf)
 
     def test_non_union_nested_dataclass_updated(self):
-        # EnvConfig.lr is DistributionConfig; eps is a plain float.
+        # EnvConfig.eps is a plain float; confirm non-union scalar fields update.
         conf = EnvConfig()
-        result = _reconstruct_from_dict(conf, {"eps": 2.0, "lr": 0.01})
+        result = _reconstruct_from_dict(conf, {"eps": 2.0})
         assert result.eps == pytest.approx(2.0)
-        assert isinstance(result.lr, DistributionConfig)
-        assert result.lr.value == pytest.approx(0.01)
 
     def test_network_variant_switch(self):
         conf = EnvConfig()  # default: MLPConfig
@@ -812,9 +809,11 @@ class TestConfigDefaults:
         assert conf.pool_kernel_size == 2
 
     def test_env_config_defaults(self):
+        from conf.optimizer_config import SGDConfig
+
         conf = EnvConfig()
         assert isinstance(conf.network, AutoNetworkConfig)
-        assert conf.optimizer == "sgd"
+        assert isinstance(conf.optimizer, SGDConfig)
         assert conf.loss_type == "cce"
         assert conf.eps == pytest.approx(0.5)
         assert conf.delta == pytest.approx(1e-7)

@@ -442,7 +442,7 @@ class GDPPrivacyParameters(eqx.Module):
 
         def _find_lam_max_body(state):
             lam_max, _ = state
-            lam_max = lam_max * 1.15
+            lam_max = lam_max * 1.05
             h, _, _ = _solve_for_lam(lam_max)
             return (lam_max, h)
 

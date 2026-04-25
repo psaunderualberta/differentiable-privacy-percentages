@@ -52,6 +52,10 @@ def _get_config_classes() -> dict[str, type]:
     ]:
         importlib.import_module(_mod)
 
+    # Importing optimizer_config triggers make_optimizer_config at module load,
+    # which populates the optimizer registry as a side effect.
+    import conf.optimizer_config  # noqa: F401
+    from conf.optimizer_registry import _REGISTRY as _opt_reg
     from networks._registry import _REGISTRY as _network_reg
     from networks.auto.config import AutoNetworkConfig
     from policy.base_schedules._registry import _REGISTRY as _base_reg
@@ -63,6 +67,7 @@ def _get_config_classes() -> dict[str, type]:
         for registry in (_base_reg, _sched_reg, _stateful_reg, _network_reg)
         for config_cls in registry
     }
+    result.update(_opt_reg)  # optimizer registry is already {name: cls}
     result["AutoNetworkConfig"] = AutoNetworkConfig  # sentinel, not in registry
     return result
 

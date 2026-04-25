@@ -41,7 +41,7 @@ class InterpolatedClippedScheduleConfig(AbstractScheduleConfig):
 class BSplineScheduleConfig(AbstractScheduleConfig):
     num_control_points: int = 4
     degree: int = 3
-    init_value: float = 5.0
+    init_value: float = 0.5
 
     def to_wandb_sweep(self):
         return to_wandb_sweep_params(self)
