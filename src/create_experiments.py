@@ -41,10 +41,11 @@ from conf.config_util import (
     _is_union_field,
     dist_config_helper,
 )
+from conf.optimizer_config import AdamConfig
 from networks.cnn.config import CNNConfig
 from networks.mlp.config import MLPConfig
 from policy.schedules.config import (
-    WarmupParallelSigmaAndClipScheduleConfig,
+    ParallelSigmaAndClipScheduleConfig,
 )
 
 # ---------------------------------------------------------------------------
@@ -168,6 +169,7 @@ def _make_sweep_config(
         prng_seed=dist_config_helper(value=float(seed), distribution="constant"),
         env=EnvConfig(
             network=network_conf,
+            optimizer=AdamConfig(),
             eps=eps,
             delta=DELTA,
             batch_size=BATCH_SIZE,
@@ -175,7 +177,8 @@ def _make_sweep_config(
             scan_segments=T // 100,  # Loading data as-needed
         ),
         schedule_optimizer=ScheduleOptimizerConfig(
-            schedule=WarmupParallelSigmaAndClipScheduleConfig(use_fista=True),
+            schedule=ParallelSigmaAndClipScheduleConfig(use_fista=True),
+            lr=dist_config_helper(value=0.5, distribution="constant"),
             batch_size=4,
         ),
     )
@@ -186,7 +189,7 @@ def _build_experiments() -> list[tuple[str, str, str, SweepConfig]]:
     experiments: list[tuple[str, str, str, SweepConfig]] = []
 
     def get_name(ds: str, eps: float, tpe: str, T: int, arch: MLPConfig | CNNConfig, seed: int):
-        return f"ds{ds.upper()}/e{eps}/{tpe}-sweep/T={T}/{_arch_label(arch)}/seed={seed}"
+        return f"adam/ds{ds.upper()}/e{eps}/{tpe}-sweep/T={T}/{_arch_label(arch)}/seed={seed}"
 
     for ds in DATASETS:
         for eps in EPSILONS:

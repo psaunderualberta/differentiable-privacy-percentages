@@ -16,7 +16,7 @@ def make_dp_psac_ref_cmd(
         f" --lr {lr}"
         f" --delta {delta}"
         f" --arch {arch}"
-        "schedule:wandb-schedule"
+        " schedule:wandb-schedule"
         f" --schedule.run-id {run_id}"
         f" --schedule.entity {entity}"
         f" --schedule.project {project}"

@@ -49,10 +49,12 @@ class Baseline:
         self,
         env_params: DPTrainingParams,
         privacy_params: GDPPrivacyParameters,
+        schedule_data_generation_key: PRNGKeyArray,
         num_reps: int = 8,
     ):
         self.env_params = env_params
         self.privacy_params = privacy_params
+        self.schedule_data_generation_key = schedule_data_generation_key
         self.num_repetitions: int = num_reps
         self.columns: list[str] = [
             "type",
@@ -200,11 +202,14 @@ class Baseline:
         self,
         schedule: AbstractNoiseAndClipSchedule | AbstractStatefulNoiseAndClipSchedule,
         name: str,
-        key: PRNGKeyArray,
+        key: PRNGKeyArray | None = None,
         with_progress_bar: bool = True,
         iterations: int = -1,
     ) -> pd.DataFrame:
         df = pd.DataFrame(columns=self.columns)  # type: ignore[arg-type]
+
+        if key is None:
+            key = self.schedule_data_generation_key
 
         if iterations < 0:
             iterations = self.num_repetitions
@@ -308,7 +313,7 @@ class Baseline:
         else:
             self.delete_non_baseline_data()
 
-        eval_df = self.generate_schedule_data(schedule, label, eval_key)
+        eval_df = self.generate_schedule_data(schedule, label)
         logger.log_figure(
             "Baseline vs. Losses", self.baseline_comparison_final_loss_plotter(eval_df)
         )
@@ -371,9 +376,7 @@ class Baseline:
             clip_val = schedule.get_private_clips().mean()
 
             key, eval_key = jr.split(key)
-            df = self.generate_schedule_data(
-                schedule, name, eval_key, with_progress_bar=False, iterations=10
-            )
+            df = self.generate_schedule_data(schedule, name, with_progress_bar=False, iterations=10)
 
             run_accuracy = float(df["accuracy"].mean())
             if run_accuracy > best_run_accuracy:
