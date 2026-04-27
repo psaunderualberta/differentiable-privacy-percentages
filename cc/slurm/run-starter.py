@@ -109,7 +109,8 @@ echo "Job finished with exit code $? at: `date`"
 if __name__ == "__main__":
     conf = tyro.cli(SlurmConfig)
 
-    with NamedTemporaryFile(mode="w", suffix=".sh", dir="/tmp") as f:
+    tmpdir = os.path.expandvars(os.path.abspath("/scratch/$USER"))
+    with NamedTemporaryFile(mode="w", suffix=".sh", dir=tmpdir) as f:
         print(conf.sbatch_file)
         f.write(conf.sbatch_file)
         f.flush()
