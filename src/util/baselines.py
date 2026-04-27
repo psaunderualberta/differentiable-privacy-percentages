@@ -269,13 +269,7 @@ class Baseline:
                 run_params.append(param_fun(param_key))
 
             schedule = schedule_class(*run_params)
-            df = self.generate_schedule_data(
-                schedule,
-                name,
-                key,
-                with_progress_bar=False,
-                iterations=10,
-            )
+            df = self.generate_schedule_data(schedule, name, with_progress_bar=False, iterations=10)
 
             run_accuracy = df["accuracy"].mean()
             if df["accuracy"].mean() > best_run_accuracy:
@@ -362,8 +356,8 @@ class Baseline:
 
         for _ in tqdm.tqdm(range(num_runs_in_sweep), desc=f"Sweep: {name}"):
             key, sigma_key, clip_key = jr.split(key, 3)
-            sigma_val = jr.uniform(sigma_key, shape=(), minval=0.1, maxval=10.0)
-            clip_val = jr.uniform(clip_key, shape=(), minval=0.1, maxval=10.0)
+            sigma_val = jr.uniform(sigma_key, shape=(), minval=0.1, maxval=5.0)
+            clip_val = jr.uniform(clip_key, shape=(), minval=0.1, maxval=5.0)
 
             schedule = SigmaAndClipSchedule(
                 ConstantSchedule(sigma_val, T),
@@ -375,7 +369,6 @@ class Baseline:
             sigma_val = schedule.get_private_sigmas().mean()
             clip_val = schedule.get_private_clips().mean()
 
-            key, eval_key = jr.split(key)
             df = self.generate_schedule_data(schedule, name, with_progress_bar=False, iterations=10)
 
             run_accuracy = float(df["accuracy"].mean())
@@ -395,10 +388,7 @@ class Baseline:
             self.privacy_params,
         )
 
-        key, eval_key = jr.split(key)
-        return self.generate_schedule_data(
-            best_schedule, name, eval_key, with_progress_bar=with_progress_bar
-        )
+        return self.generate_schedule_data(best_schedule, name, with_progress_bar=with_progress_bar)
 
     def generate_baseline_data(
         self,
@@ -408,7 +398,7 @@ class Baseline:
         name = "Clip to Median Gradient Norm"
         params = [
             lambda key: jr.uniform(key, shape=(), minval=0.01, maxval=5.0),  # c_0
-            lambda key: jr.uniform(key, shape=(), minval=0.1, maxval=1.0),  # eta_C
+            lambda key: jr.uniform(key, shape=(), minval=0.01, maxval=1.0),  # eta_C
             lambda _: self.privacy_params,  # privacy_params
         ]
 
@@ -421,22 +411,11 @@ class Baseline:
             with_progress_bar=with_progress_bar,
         )
 
-        # Uniform schedule
-        # c_0 = jnp.asarray(0.1)
-        # eta_C = jnp.asarray(0.2)
-        # schedule = StatefulMedianGradientNoiseAndClipSchedule(
-        #     c_0, eta_C, self.privacy_params
-        # )
-
-        # median_df = self.generate_schedule_data(
-        #     schedule, name, key, with_progress_bar=with_progress_bar
-        # )
-
         name = "Dynamic-DPSGD"
         params = [
-            lambda key: jr.uniform(key, shape=(), minval=0.5, maxval=5),  # rho_mu
-            lambda key: jr.uniform(key, shape=(), minval=0.5, maxval=5),  # rho_c
-            lambda key: jr.uniform(key, shape=(), minval=1.0, maxval=20.0),  # c_0
+            lambda key: jr.uniform(key, shape=(), minval=0.5, maxval=5.0),  # rho_mu
+            lambda key: jr.uniform(key, shape=(), minval=0.5, maxval=5.0),  # rho_c
+            lambda key: jr.uniform(key, shape=(), minval=0.5, maxval=5.0),  # c_0
             lambda _: self.privacy_params,  # privacy_params
         ]
 
