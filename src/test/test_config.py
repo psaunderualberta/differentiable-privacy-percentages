@@ -43,10 +43,10 @@ from policy.base_schedules.config import (
 from policy.schedules.config import (
     AlternatingSigmaAndClipScheduleConfig,
     DynamicDPSGDScheduleConfig,
+    ParallelSigmaAndClipScheduleConfig,
     PolicyAndClipScheduleConfig,
     SigmaAndClipScheduleConfig,
     WarmupAlternatingSigmaAndClipScheduleConfig,
-    WarmupParallelSigmaAndClipScheduleConfig,
 )
 from policy.stateful_schedules.config import StatefulMedianGradientNoiseAndClipConfig
 
@@ -247,7 +247,7 @@ class TestToWandbSweepParams:
         schedule_params = result["parameters"]["schedule"]["parameters"]
         assert "_type" in schedule_params
         assert schedule_params["_type"] == {
-            "value": "WarmupParallelSigmaAndClipScheduleConfig",
+            "value": "ParallelSigmaAndClipScheduleConfig",
         }
 
     def test_non_union_nested_no_type_discriminator(self):
@@ -816,12 +816,12 @@ class TestConfigDefaults:
         assert isinstance(conf.optimizer, SGDConfig)
         assert conf.loss_type == "cce"
         assert conf.eps == pytest.approx(0.5)
-        assert conf.delta == pytest.approx(1e-7)
+        assert conf.delta == pytest.approx(1e-6)
         assert conf.batch_size == 250
         assert conf.num_training_steps == 100
 
     def test_policy_config_defaults(self):
         conf = ScheduleOptimizerConfig()
-        assert isinstance(conf.schedule, WarmupParallelSigmaAndClipScheduleConfig)
+        assert isinstance(conf.schedule, ParallelSigmaAndClipScheduleConfig)
         assert conf.batch_size == 1
         assert conf.max_sigma == pytest.approx(10.0)

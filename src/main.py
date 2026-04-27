@@ -83,7 +83,9 @@ def main():
     key = jr.PRNGKey(env_prng_seed)
     key, init_key, _ = jr.split(key, 3)
 
-    # --- Checkpoint restore (happens before wandb.init so we know start_step) ---
+    # ---
+    # Checkpoint restore (happens before wandb.init so we know start_step)
+    # ---
     start_step = 0
     if wandb_config.checkpoint_run_id is not None:
         state_template = make_state(schedule, opt_state, key, init_key, 0)
@@ -115,7 +117,9 @@ def main():
             key = jax.numpy.array(np.asarray(key))
             init_key = jax.numpy.array(np.asarray(init_key))
 
-    # --- W&B init ---
+    # ---
+    # W&B init
+    # ---
     print("Starting...")
     run = init_wandb_run(wandb_config, sweep_config)
     register_signal_handler()
@@ -132,7 +136,9 @@ def main():
     )
     print(f"dp_psac_ref eval command:\n  {_dp_psac_ref_cmd}")
 
-    # --- Baseline setup ---
+    # ---
+    # Baseline setup
+    # ---
     eval_key = jr.PRNGKey(0)
     baseline = Baseline(env_params, gdp_params, eval_key)
     log_baselines_during_training = (
@@ -155,6 +161,12 @@ def main():
             baseline.save(run.id, run)
             baseline_data_saved = True
 
+    if log_baselines_during_training:
+        baseline.log_comparison(schedule, eval_key, logger=logger)
+
+    # ---
+    # Main Training Loop
+    # ---
     iterator = tqdm.tqdm(
         range(start_step, num_outer_steps),
         desc="Training Progress",

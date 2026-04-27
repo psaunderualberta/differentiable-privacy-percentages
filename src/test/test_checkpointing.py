@@ -37,6 +37,12 @@ class _SimpleSchedule(eqx.Module):
 
     weights: jnp.ndarray
 
+    def get_private_sigmas(self):
+        return self.weights
+
+    def get_private_clips(self):
+        return self.weights
+
 
 @dataclasses.dataclass
 class _MockRun:
