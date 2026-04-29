@@ -6,13 +6,14 @@ from typing import Any, cast
 
 import jax.random as jr
 import numpy as np
+import orbax.checkpoint as ocp
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import tqdm
+import wandb
 from jaxtyping import Array, PRNGKeyArray
 
-import wandb
 from environments.dp import (
     DPTrainingParams,
     train_with_noise,
@@ -85,6 +86,15 @@ class Baseline:
         artifact.add_file(str(path))
 
         if hasattr(self, "best_dynamic_schedule"):
+            dynamic_dir = path.parent / "dynamic"
+            checkpointer = ocp.StandardCheckpointer()
+            checkpointer.save(dynamic_dir, self.best_dynamic_schedule)
+            # StandardCheckpointer uses async I/O internally; wait here so the step
+            # directory exists on disk before we try to add it to the W&B artifact.
+            checkpointer.wait_until_finished()
+
+            # Save human-readable schedules alongside the Orbax checkpoint so that
+            # dp_psac_ref/run.py can consume them without importing src/.
             sigmas_path = path.parent / "dynamic" / "sigmas.npy"
             clips_path = path.parent / "dynamic" / "clips.npy"
             sigmas_path.parent.mkdir(parents=True, exist_ok=True)
@@ -112,7 +122,14 @@ class Baseline:
             df = pd.read_pickle(str(path))
             self.original_df = df
             self.df = df.copy()
-            return True
+
+            dynamic_dir = path.parent / "dynamic"
+            if dynamic_dir.exists():
+                checkpointer = ocp.StandardCheckpointer()
+                self.best_dynamic_schedule = checkpointer.restore(
+                    dynamic_dir, target=DynamicDPSGDSchedule(0.0, 0.0, 0.0, self.privacy_params)
+                )
+                return True
 
         if entity is None or project is None:
             return False

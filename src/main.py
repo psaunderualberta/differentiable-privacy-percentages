@@ -2,12 +2,12 @@ import jax
 import numpy as np
 import optax
 import tqdm
+import wandb
 from jax import device_put, devices
 from jax import random as jr
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 
-import wandb
 from conf.scope import RunContext, current, using
 from conf.singleton_conf import SingletonConfig
 from environments.dp import get_private_model_training_schemas
@@ -236,9 +236,7 @@ def main():
             break
 
     # Resubmit job (dependency ensures won't start until current ends)
-    if shutdown_requested() or time_limit_approaching():
-        resubmit_if_requested(run.id)
-    else:
+    if not shutdown_requested() and not time_limit_approaching():
         # Final logging
         for loggable_item in schedule.get_loggables(force=True):
             logger.log(loggable_item)
@@ -256,9 +254,12 @@ def main():
     if sweep_config.with_baselines and not baseline_data_saved:
         baseline.save(run.id, run)
 
+    run_id = run.id
     logger.finish()
     print(f"dp_psac_ref eval command:\n  {_dp_psac_ref_cmd}")
     run.finish()
+
+    resubmit_if_requested(run_id)
 
 
 if __name__ == "__main__":

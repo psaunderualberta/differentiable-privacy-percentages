@@ -111,8 +111,11 @@ def resubmit_if_requested(run_id: str) -> None:
         "--runtime.short",
         *prereqs,
     ]
+
+    # Resubmit without WANDB SOCKET environment variable
     print(f"Resubmitting: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    env_vars = {k: v for k, v in os.environ.items() if k != "WANDB_SERVICE"}
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env_vars)
     if result.returncode != 0:
         print(f"ERROR: resubmit failed:\n{result.stderr}")
     else:
