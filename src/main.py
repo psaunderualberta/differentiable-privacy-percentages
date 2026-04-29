@@ -1,13 +1,11 @@
-import jax
-import numpy as np
 import optax
 import tqdm
-import wandb
 from jax import device_put, devices
 from jax import random as jr
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 
+import wandb
 from conf.scope import RunContext, current, using
 from conf.singleton_conf import SingletonConfig
 from environments.dp import get_private_model_training_schemas
@@ -30,7 +28,7 @@ from util.job_chain import (
     time_limit_approaching,
 )
 from util.logger import Loggable, WandbTableLogger
-from util.util import ensure_valid_pytree, get_optimal_mesh
+from util.util import ensure_valid_pytree, get_optimal_mesh, jnp2np2jnp
 from util.wandb_init import init_wandb_run
 
 
@@ -106,16 +104,10 @@ def main():
             # This conflicts with sharded noise_keys inside the JIT call.
             # Round-trip through numpy to produce uncommitted arrays, matching
             # what a fresh (non-checkpoint) run provides.
-            schedule = jax.tree_util.tree_map(
-                lambda x: jax.numpy.array(np.asarray(x)) if isinstance(x, jax.Array) else x,
-                schedule,
-            )
-            opt_state = jax.tree_util.tree_map(
-                lambda x: jax.numpy.array(np.asarray(x)) if isinstance(x, jax.Array) else x,
-                opt_state,
-            )
-            key = jax.numpy.array(np.asarray(key))
-            init_key = jax.numpy.array(np.asarray(init_key))
+            schedule = jnp2np2jnp(schedule)
+            opt_state = jnp2np2jnp(opt_state)
+            key = jnp2np2jnp(key)
+            init_key = jnp2np2jnp(init_key)
 
     # ---
     # W&B init

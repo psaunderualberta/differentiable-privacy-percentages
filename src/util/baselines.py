@@ -11,9 +11,9 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import tqdm
-import wandb
 from jaxtyping import Array, PRNGKeyArray
 
+import wandb
 from environments.dp import (
     DPTrainingParams,
     train_with_noise,
@@ -33,6 +33,7 @@ from privacy.gdp_privacy import GDPPrivacyParameters
 from util.aggregators import multi_line_plotter
 from util.checkpointing import _ckpt_dir
 from util.logger import WandbTableLogger
+from util.util import jnp2np2jnp
 
 file_location = os.path.abspath(os.path.dirname(__file__))
 
@@ -92,16 +93,19 @@ class Baseline:
             # StandardCheckpointer uses async I/O internally; wait here so the step
             # directory exists on disk before we try to add it to the W&B artifact.
             checkpointer.wait_until_finished()
+            artifact.add_dir(str(dynamic_dir))
 
             # Save human-readable schedules alongside the Orbax checkpoint so that
             # dp_psac_ref/run.py can consume them without importing src/.
-            sigmas_path = path.parent / "dynamic" / "sigmas.npy"
-            clips_path = path.parent / "dynamic" / "clips.npy"
+            sigmas_path = dynamic_dir / "sigmas.npy"
+            clips_path = dynamic_dir / "clips.npy"
             sigmas_path.parent.mkdir(parents=True, exist_ok=True)
             np.save(sigmas_path, np.asarray(self.best_dynamic_schedule.get_private_sigmas()))
             np.save(clips_path, np.asarray(self.best_dynamic_schedule.get_private_clips()))
             artifact.add_file(str(sigmas_path))
             artifact.add_file(str(clips_path))
+
+            print(f"DynamicDPSGD Baseline data saved → {dynamic_dir}")
 
         run.log_artifact(artifact, aliases=["latest"])
         print(f"Baseline data saved → {path}")
@@ -125,11 +129,16 @@ class Baseline:
 
             dynamic_dir = path.parent / "dynamic"
             if dynamic_dir.exists():
+                print(f"Loading DynamicDPSGD schedule from {dynamic_dir}")
                 checkpointer = ocp.StandardCheckpointer()
                 self.best_dynamic_schedule = checkpointer.restore(
-                    dynamic_dir, target=DynamicDPSGDSchedule(0.0, 0.0, 0.0, self.privacy_params)
+                    # values save for privacy_params don't matter, will be overwritten by checkpointer
+                    dynamic_dir,
+                    target=DynamicDPSGDSchedule(1.0, 1.0, 1.0, self.privacy_params),
                 )
-                return True
+                self.best_dynamic_schedule = jnp2np2jnp(self.best_dynamic_schedule)
+
+            return True
 
         if entity is None or project is None:
             return False
