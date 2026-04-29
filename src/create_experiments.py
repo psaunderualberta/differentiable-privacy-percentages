@@ -41,6 +41,12 @@ from conf.config_util import (
     _is_union_field,
     dist_config_helper,
 )
+from conf.optimizer_config import (
+    AdamConfig,
+    AdamWConfig,
+    OptimizerConfig,
+    SGDConfig,
+)
 from networks.cnn.config import CNNConfig
 from networks.mlp.config import MLPConfig
 from policy.schedules.config import (
@@ -117,6 +123,17 @@ MLP_ARCHS: list[MLPConfig] = [
 ]
 
 # CNN+MLP architectures
+OPTIMIZERS: list[OptimizerConfig] = [
+    SGDConfig(learning_rate=dist_config_helper(value=0.1, distribution="constant")),
+    AdamConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
+    AdamWConfig(learning_rate=dist_config_helper(value=1e-4, distribution="constant")),
+]
+
+
+def _opt_tag(opt: OptimizerConfig) -> str:
+    return type(opt).__name__.removesuffix("Config").lower()
+
+
 CNN_ARCHS: list[CNNConfig] = [
     CNNConfig(  # ~11K
         channels=(16, 32),
@@ -145,8 +162,8 @@ CNN_ARCHS: list[CNNConfig] = [
 ]
 
 
-def _group_label(ds: str, eps: float, axis: str) -> str:
-    return f"ds{ds.upper()}/eps={eps}/{axis}/sgd"
+def _group_label(ds: str, eps: float, axis: str, opt_tag: str) -> str:
+    return f"ds{ds.upper()}/eps={eps}/{axis}/{opt_tag}"
 
 
 def _arch_label(arch: MLPConfig | CNNConfig) -> str:
@@ -158,7 +175,12 @@ def _arch_label(arch: MLPConfig | CNNConfig) -> str:
 
 
 def _make_sweep_config(
-    ds: str, eps: float, T: int, network_conf: MLPConfig | CNNConfig, seed: int
+    ds: str,
+    eps: float,
+    T: int,
+    network_conf: MLPConfig | CNNConfig,
+    seed: int,
+    optimizer: OptimizerConfig,
 ) -> SweepConfig:
     return SweepConfig(
         dataset=ds,
@@ -174,65 +196,78 @@ def _make_sweep_config(
             batch_size=BATCH_SIZE,
             num_training_steps=T,
             scan_segments=T // 100,  # Loading data as-needed
+            optimizer=optimizer,
         ),
         schedule_optimizer=ScheduleOptimizerConfig(
             schedule=ParallelSigmaAndClipScheduleConfig(use_fista=True),
-            lr=dist_config_helper(value=0.1, distribution="constant"),
+            lr=dist_config_helper(value=0.05, distribution="constant"),
             batch_size=4,
         ),
     )
 
 
-def _build_experiments() -> list[tuple[str, str, str, SweepConfig]]:
-    """Return (axis_tag, group, run_name, SweepConfig) for every condition × seed."""
-    experiments: list[tuple[str, str, str, SweepConfig]] = []
+def _build_experiments() -> dict[str, list[tuple[str, str, str, SweepConfig]]]:
+    """Return {opt_tag: [(axis_tag, group, run_name, SweepConfig), ...]} for every condition × seed."""
+    experiments: dict[str, list[tuple[str, str, str, SweepConfig]]] = {}
 
-    def get_name(ds: str, eps: float, tpe: str, T: int, arch: MLPConfig | CNNConfig, seed: int):
-        return f"sgd/ds{ds.upper()}/e{eps}/{tpe}-sweep/T={T}/{_arch_label(arch)}/seed={seed}"
+    def get_name(
+        ds: str,
+        eps: float,
+        tpe: str,
+        T: int,
+        arch: MLPConfig | CNNConfig,
+        seed: int,
+        opt_tag: str,
+    ):
+        return f"{opt_tag}/ds{ds.upper()}/e{eps}/{tpe}-sweep/T={T}/{_arch_label(arch)}/seed={seed}"
 
-    for ds in DATASETS:
-        for eps in EPSILONS:
-            # Axis 1: T sweep (medium MLP, all T values including T=3000 anchor)
-            for T in T_VALUES:
-                arch = DATASET_NETWORK_DEFAULTS[ds]
-                for seed in SEEDS:
-                    name = get_name(ds, eps, "T", T, arch, seed)
-                    experiments.append(
-                        (
-                            "T-sweep",
-                            _group_label(ds, eps, "T-sweep"),
-                            name,
-                            _make_sweep_config(ds, eps, T, arch, seed),
+    for opt in OPTIMIZERS:
+        opt_tag = _opt_tag(opt)
+        bucket: list[tuple[str, str, str, SweepConfig]] = []
+        for ds in DATASETS:
+            for eps in EPSILONS:
+                # Axis 1: T sweep (medium MLP, all T values including T=3000 anchor)
+                for T in T_VALUES:
+                    arch = DATASET_NETWORK_DEFAULTS[ds]
+                    for seed in SEEDS:
+                        name = get_name(ds, eps, "T", T, arch, seed, opt_tag)
+                        bucket.append(
+                            (
+                                "T-sweep",
+                                _group_label(ds, eps, "T-sweep", opt_tag),
+                                name,
+                                _make_sweep_config(ds, eps, T, arch, seed, opt),
+                            )
                         )
-                    )
 
-            # Axis 2: architecture sweep (T=3000, MLP variants excluding the anchor already above)
-            for arch in MLP_ARCHS:
-                T = T_FOR_ARCH_SWEEP
-                for seed in SEEDS:
-                    name = get_name(ds, eps, "arch", T, arch, seed)
-                    experiments.append(
-                        (
-                            "arch-sweep",
-                            _group_label(ds, eps, "arch-sweep"),
-                            name,
-                            _make_sweep_config(ds, eps, T_FOR_ARCH_SWEEP, arch, seed),
+                # Axis 2: architecture sweep (T=3000, MLP variants excluding the anchor already above)
+                for arch in MLP_ARCHS:
+                    T = T_FOR_ARCH_SWEEP
+                    for seed in SEEDS:
+                        name = get_name(ds, eps, "arch", T, arch, seed, opt_tag)
+                        bucket.append(
+                            (
+                                "arch-sweep",
+                                _group_label(ds, eps, "arch-sweep", opt_tag),
+                                name,
+                                _make_sweep_config(ds, eps, T_FOR_ARCH_SWEEP, arch, seed, opt),
+                            )
                         )
-                    )
 
-            # Axis 2: architecture sweep (T=3000, CNN+MLP variants)
-            for arch in CNN_ARCHS:
-                T = T_FOR_ARCH_SWEEP
-                for seed in SEEDS:
-                    name = get_name(ds, eps, "arch", T, arch, seed)
-                    experiments.append(
-                        (
-                            "arch-sweep",
-                            _group_label(ds, eps, "arch-sweep"),
-                            name,
-                            _make_sweep_config(ds, eps, T_FOR_ARCH_SWEEP, arch, seed),
+                # Axis 2: architecture sweep (T=3000, CNN+MLP variants)
+                for arch in CNN_ARCHS:
+                    T = T_FOR_ARCH_SWEEP
+                    for seed in SEEDS:
+                        name = get_name(ds, eps, "arch", T, arch, seed, opt_tag)
+                        bucket.append(
+                            (
+                                "arch-sweep",
+                                _group_label(ds, eps, "arch-sweep", opt_tag),
+                                name,
+                                _make_sweep_config(ds, eps, T_FOR_ARCH_SWEEP, arch, seed, opt),
+                            )
                         )
-                    )
+        experiments[opt_tag] = bucket
 
     return experiments
 
@@ -246,8 +281,6 @@ def _build_experiments() -> list[tuple[str, str, str, SweepConfig]]:
 class LauncherConfig:
     project: str
     entity: str
-    output_file: str = ""
-    """Path for the run-ID file. Defaults to cc/sweeps/<project>_<timestamp>.txt."""
     dry_run: bool = False
     """Print serialised configs without creating any W&B runs."""
 
@@ -256,43 +289,55 @@ if __name__ == "__main__":
     conf = tyro.cli(LauncherConfig)
 
     experiments = _build_experiments()
+    total = sum(len(v) for v in experiments.values())
 
-    if conf.output_file:
-        output_path = conf.output_file
-    else:
-        timestamp = int(time.time())
-        safe_name = conf.project.replace("/", "_").replace(" ", "_")
-        output_path = os.path.join(_CC_ROOT, "sweeps", f"{safe_name}_{timestamp}.txt")
+    timestamp = int(time.time())
+    safe_name = conf.project.replace("/", "_").replace(" ", "_")
+    output_paths: dict[str, str] = {
+        opt_tag: os.path.join(_CC_ROOT, "sweeps", f"{safe_name}_{opt_tag}_{timestamp}.txt")
+        for opt_tag in experiments
+    }
 
-    print(f"{len(experiments)} runs  →  project '{conf.project}'")
+    print(f"{total} runs across {len(experiments)} optimizers  →  project '{conf.project}'")
 
     if conf.dry_run:
-        for _axis, group, name, sweep_conf in experiments:
-            print(f"\n{'─' * 64}")
-            print(f"  {name}  [group={group}]")
-            print(json.dumps(_to_run_config(sweep_conf), indent=2, default=str))
-        print(f"\nWould write {len(experiments)} run IDs to:\n  {output_path}")
-    else:
-        with open(output_path, "w") as f:
-            for axis, group, name, sweep_conf in experiments:
-                run = wandb.init(
-                    project=conf.project,
-                    entity=conf.entity,
-                    name=name,
-                    group=group,
-                    config=_to_run_config(sweep_conf),
-                    job_type="config-seed",
-                    tags=["config-seed", axis],
-                )
-                assert run is not None
-                f.write(run.id + "\n")
-                f.flush()
-                run.finish()
-                print(f"  {run.id}  {name}")
+        run_counts = []
+        paths = []
+        for opt_tag, bucket in experiments.items():
+            for _axis, group, name, sweep_conf in bucket:
+                print(f"\n{'─' * 64}")
+                print(f"  {name}  [group={group}]")
+                print(json.dumps(_to_run_config(sweep_conf), indent=2, default=str))
+            run_counts.append(len(bucket))
+            paths.append(output_paths[opt_tag])
 
-        print(f"\nRun IDs → {output_path}")
+        print(f"Would write {sum(run_counts)} run IDs in total:")
+        for count, path in zip(run_counts, paths):
+            print(f"\t{count} run IDs to:\n  {path}")
+    else:
+        for opt_tag, bucket in experiments.items():
+            output_path = output_paths[opt_tag]
+            with open(output_path, "w") as f:
+                for axis, group, name, sweep_conf in bucket:
+                    run = wandb.init(
+                        project=conf.project,
+                        entity=conf.entity,
+                        name=name,
+                        group=group,
+                        config=_to_run_config(sweep_conf),
+                        job_type="config-seed",
+                        tags=["config-seed", axis, opt_tag],
+                    )
+                    assert run is not None
+                    f.write(run.id + "\n")
+                    f.flush()
+                    run.finish()
+                    print(f"  [{opt_tag}] {run.id}  {name}")
+            print(f"\nRun IDs ({opt_tag}) → {output_path}")
+
         print("\nSubmit to SLURM:")
-        print(
-            f"  cat {output_path} | parallel -q uv run cc/slurm/run-starter.py"
-            f" --run_id={{}} --jobname='\"schedule-T-arch\"'"
-        )
+        for opt_tag, output_path in output_paths.items():
+            print(
+                f"  cat {output_path} | parallel -q uv run cc/slurm/run-starter.py"
+                f" --run_id={{}} --jobname='\"{safe_name}-{opt_tag}\"'"
+            )
