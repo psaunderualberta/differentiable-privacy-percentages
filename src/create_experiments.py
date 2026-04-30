@@ -200,7 +200,7 @@ def _make_sweep_config(
         ),
         schedule_optimizer=ScheduleOptimizerConfig(
             schedule=ParallelSigmaAndClipScheduleConfig(use_fista=True),
-            lr=dist_config_helper(value=0.05, distribution="constant"),
+            lr=dist_config_helper(value=0.01, distribution="constant"),
             batch_size=4,
         ),
     )
