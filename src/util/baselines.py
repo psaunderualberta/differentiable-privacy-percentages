@@ -120,44 +120,53 @@ class Baseline:
 
         Returns ``True`` on success, ``False`` if neither source is available.
         """
+        """
         path = _baseline_path(run_id)
-        if path.exists():
-            print(f"Loading baseline data from {path}")
-            df = pd.read_pickle(str(path))
-            self.original_df = df
-            self.df = df.copy()
+        if not path.exists():
+            path = wandb_artifact_path
 
-            dynamic_dir = path.parent / "dynamic"
-            if dynamic_dir.exists():
-                print(f"Loading DynamicDPSGD schedule from {dynamic_dir}")
-                checkpointer = ocp.StandardCheckpointer()
-                self.best_dynamic_schedule = checkpointer.restore(
-                    # values save for privacy_params don't matter, will be overwritten by checkpointer
-                    dynamic_dir,
-                    target=DynamicDPSGDSchedule(1.0, 1.0, 1.0, self.privacy_params),
-                )
-                self.best_dynamic_schedule = jnp2np2jnp(self.best_dynamic_schedule)
+        """
 
-            return True
-
-        if entity is None or project is None:
-            return False
-
-        artifact_path = f"{entity}/{project}/{_baseline_artifact_name(run_id)}:latest"
-        print(f"Attempting to download baseline artifact: {artifact_path}")
-        try:
-            artifact = wandb.Api().artifact(artifact_path)
-            local_dir = pathlib.Path(artifact.download())
-            pkl_files = list(local_dir.glob("*.pkl"))
-            if not pkl_files:
+        pkl_path = _baseline_path(run_id)
+        local_dir = pkl_path.parent
+        if not pkl_path.exists():
+            if entity is None or project is None:
                 return False
-            df = pd.read_pickle(str(pkl_files[0]))
-            self.original_df = df
-            self.df = df.copy()
-            return True
+
+            artifact_path = f"{entity}/{project}/{_baseline_artifact_name(run_id)}:latest"
+            print(f"Attempting to download baseline artifact: {artifact_path}..")
+            try:
+                artifact = wandb.Api().artifact(artifact_path)
+                local_dir = pathlib.Path(artifact.download())
+                pkl_files = list(local_dir.glob("*.pkl"))
+                if not pkl_files:
+                    return False
+                pkl_path = pathlib.Path(str(pkl_files[0]))
+                print("Downloaded baseline artifact")
+            except Exception as e:
+                print(f"Warning: could not load baseline artifact {artifact_path}: {e}")
+                return False
+
+        print(f"Loading baseline data from {pkl_path}...")
+        df = pd.read_pickle(str(pkl_path))
+        self.original_df = df
+        self.df = df.copy()
+        print("Baseline data loaded")
+
+        try:
+            print("Loading DynamicDPSGD schedule...")
+            checkpointer = ocp.StandardCheckpointer()
+            self.best_dynamic_schedule = checkpointer.restore(
+                # values save for privacy_params don't matter, will be overwritten by checkpointer
+                local_dir,
+                target=DynamicDPSGDSchedule(1.0, 1.0, 1.0, self.privacy_params),
+            )
+            self.best_dynamic_schedule = jnp2np2jnp(self.best_dynamic_schedule)
+            print("DynamicDPSGD loaded")
         except Exception as e:
-            print(f"Warning: could not load baseline artifact {artifact_path}: {e}")
-            return False
+            print(f"Warning: could not load dynamicDPSGD baseline: {e}")
+
+        return True
 
     def delete_non_baseline_data(self):
         self.df = self.original_df.copy()
