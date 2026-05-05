@@ -21,7 +21,8 @@ class Runtime:
     hours: int = 0
     minutes: int = 0
     seconds: int = 0
-    short: bool = False  # sub-3hr job-chaining preset (2h50m + 5m pad = 2h55m)
+    short: bool = False  # sub-3hr job-chaining preset (2h55m)
+    medium: bool = False  # sub-12hr job-chaining preset (11h55m)
 
     @property
     def slurm_timestamp(self):
@@ -30,6 +31,8 @@ class Runtime:
         """
         if self.short:
             return "00-02:55:00"
+        if self.medium:
+            return "00-11:55:00"
         minutes = self.minutes + 5  # Add 5 minutes to account for setup and teardown
         minutes += self.seconds // 60
         seconds = self.seconds % 60

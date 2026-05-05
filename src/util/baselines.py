@@ -11,9 +11,9 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import tqdm
+import wandb
 from jaxtyping import Array, PRNGKeyArray
 
-import wandb
 from environments.dp import (
     DPTrainingParams,
     train_with_noise,
@@ -178,7 +178,7 @@ class Baseline:
         schedule_name: str = "Learned Schedule",
     ) -> pd.DataFrame:
         if df is None:
-            return self.df
+            return cast(pd.DataFrame, self.df)
 
         df = cast(pd.DataFrame, df[df["step"] == df["step"].max()].copy())
         df["type"] = schedule_name
@@ -186,7 +186,7 @@ class Baseline:
         self.df = pd.concat([self.df, df], axis=0).reset_index(
             drop=True,
         )  # concatenating along rows
-        return self.df
+        return cast(pd.DataFrame, self.df)
 
     def baseline_comparison_final_loss_plotter(self, df=None):
         df = self.combine_dataset(df)
