@@ -184,16 +184,19 @@ SGDConfig = make_optimizer_config(
     defaults={"learning_rate": 0.1, "momentum": 0.9},
 )
 
+# eps_root > 0 puts epsilon inside the sqrt (sqrt(v + eps_root)), which keeps
+# the backward pass finite when v_hat ≈ 0 — required when differentiating
+# through the inner DP-SGD scan into the schedule.
 AdamConfig = make_optimizer_config(
     optax.adam,
     name="AdamConfig",
-    defaults={"learning_rate": 1e-3},
+    defaults={"learning_rate": 1e-3, "eps_root": 1e-8},
 )
 
 AdamWConfig = make_optimizer_config(
     optax.adamw,
     name="AdamWConfig",
-    defaults={"learning_rate": 1e-3},
+    defaults={"learning_rate": 1e-3, "eps_root": 1e-8},
 )
 
 

@@ -15,6 +15,11 @@ Per optimizer the script writes:
         clip_shape.{pdf,png}
         t_sweep_table.{csv,tex}
         arch_sweep_table.{csv,tex}
+        curves/
+            t_sweep_loss__<dataset>.{pdf,png}
+            t_sweep_acc__<dataset>.{pdf,png}
+            arch_sweep_loss__<dataset>.{pdf,png}
+            arch_sweep_acc__<dataset>.{pdf,png}
 
 Usage (from src/):
     uv run compile_results_plot.py --in-dir cache/results/<entity>__<project>
@@ -23,6 +28,7 @@ Usage (from src/):
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -85,8 +91,8 @@ def paired_delta(
 ) -> pd.DataFrame:
     """Per-seed Δ = Learned − baseline, then aggregate across seeds."""
     keys = ["dataset", "eps", x_col, "seed"]
-    learned = df[df["schedule"] == LEARNED][*keys, metric].rename(columns={metric: "learned"})
-    base = df[df["schedule"] == baseline][*keys, metric].rename(columns={metric: "base"})
+    learned = df[df["schedule"] == LEARNED][[*keys, metric]].rename(columns={metric: "learned"})
+    base = df[df["schedule"] == baseline][[*keys, metric]].rename(columns={metric: "base"})
     merged = learned.merge(base, on=keys, how="inner")
     merged["delta"] = merged["learned"] - merged["base"]
     return (
@@ -464,6 +470,107 @@ def _latex_escape(s: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Training-curve plots (Learned only)
+# ---------------------------------------------------------------------------
+
+
+def plot_curves(
+    histories_df: pd.DataFrame,
+    axis: str,
+    metric: str,  # "val_loss" or "val_acc"
+    dataset: str,
+    out_path_stem: Path,
+) -> None:
+    """Per-(swept-var, eps) grid of outer-loop training curves for one dataset.
+
+    Each cell shows one thin line per seed (NaN preserved so divergence breaks
+    the line) plus a bold mean line across seeds. Only the Learned schedule
+    has history — baselines do not appear.
+    """
+    df = histories_df[(histories_df["axis"] == axis) & (histories_df["dataset"] == dataset)].copy()
+    if df.empty:
+        print(f"  [skip] no history for axis={axis}, dataset={dataset}")
+        return
+
+    if axis == "T-sweep":
+        x_col = "T"
+        row_vals = sorted(df[x_col].dropna().unique())
+        row_label = lambda v: f"T={int(v)}"  # noqa: E731
+    else:
+        x_col = "arch_label"
+        pairs = (
+            df.dropna(subset=["arch_param_count"])
+            .groupby("arch_label")["arch_param_count"]
+            .first()
+            .sort_values()
+        )
+        row_vals = list(pairs.index)
+        row_label = lambda v: str(v)  # noqa: E731
+
+    epsilons = sorted(df["eps"].dropna().unique())
+    if not row_vals or not epsilons:
+        print(f"  [skip] empty grid for axis={axis}, dataset={dataset}")
+        return
+
+    nrows, ncols = len(row_vals), len(epsilons)
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(3.0 * ncols + 1, 2.0 * nrows + 0.5),
+        squeeze=False,
+        sharex=True,
+        sharey="row",
+    )
+
+    ylabel = "val loss" if metric == "val_loss" else "val accuracy"
+
+    for i, rv in enumerate(row_vals):
+        for j, eps in enumerate(epsilons):
+            ax = axes[i, j]
+            cell = df[(df[x_col] == rv) & (df["eps"] == eps)]
+            if cell.empty:
+                ax.set_visible(False)
+                continue
+
+            # Per-seed pivot: rows=outer_step, cols=seed.
+            seed_groups = list(cell.groupby("seed", dropna=False))
+            seed_lengths = {s: len(g) for s, g in seed_groups}
+            if len(set(seed_lengths.values())) > 1:
+                warnings.warn(
+                    f"seeds disagree on outer-step count for "
+                    f"dataset={dataset}, eps={eps}, {x_col}={rv}: {seed_lengths}",
+                    stacklevel=2,
+                )
+                max_len = max(seed_lengths.values())
+                seed_groups = [(s, g) for (s, g) in seed_groups if len(g) == max_len]
+
+            sorted_groups = [g.sort_values("outer_step") for _, g in seed_groups]
+            xs = sorted_groups[0]["outer_step"].to_numpy()
+            for grp in sorted_groups:
+                ax.plot(
+                    xs,
+                    grp[metric].to_numpy(dtype=float),
+                    color="#1f77b4",
+                    alpha=0.35,
+                    linewidth=0.7,
+                )
+            stacked = np.vstack([g[metric].to_numpy(dtype=float) for g in sorted_groups])
+            ax.plot(xs, np.nanmean(stacked, axis=0), color="#1f77b4", linewidth=1.6)
+
+            ax.grid(True, alpha=0.3, linewidth=0.5)
+            ax.set_title(f"{row_label(rv)}, ε={eps:g}", fontsize=8)
+
+    for j in range(ncols):
+        axes[-1, j].set_xlabel("outer step")
+    for i in range(nrows):
+        axes[i, 0].set_ylabel(ylabel)
+
+    fig.suptitle(f"{dataset} — Learned schedule training curves ({axis})", fontsize=10)
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    _save(fig, out_path_stem)
+
+
+# ---------------------------------------------------------------------------
 # I/O
 # ---------------------------------------------------------------------------
 
@@ -495,6 +602,8 @@ def main(conf: PlotConfig) -> None:
     in_dir = Path(conf.in_dir)
     scalars = pd.read_parquet(in_dir / "scalars.parquet")
     schedules = pd.read_parquet(in_dir / "schedules.parquet")
+    histories_path = in_dir / "histories.parquet"
+    histories = pd.read_parquet(histories_path) if histories_path.exists() else pd.DataFrame()
     if scalars.empty:
         raise SystemExit(f"scalars.parquet at {in_dir} is empty")
 
@@ -522,6 +631,23 @@ def main(conf: PlotConfig) -> None:
 
         plot_shape(sch, "sigma", out / "sigma_shape")
         plot_shape(sch, "clip", out / "clip_shape")
+
+        if not histories.empty:
+            h = histories[histories["optimizer"] == opt]
+            if not h.empty:
+                curves_dir = out / "curves"
+                for dataset in sorted(h["dataset"].unique()):
+                    for axis_tag, prefix in (("T-sweep", "t_sweep"), ("arch-sweep", "arch_sweep")):
+                        plot_curves(
+                            h,
+                            axis_tag,
+                            "val_loss",
+                            dataset,
+                            curves_dir / f"{prefix}_loss__{dataset}",
+                        )
+                        plot_curves(
+                            h, axis_tag, "val_acc", dataset, curves_dir / f"{prefix}_acc__{dataset}"
+                        )
 
 
 if __name__ == "__main__":

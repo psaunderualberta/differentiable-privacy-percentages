@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """compile_results_fetch.py — Pull per-run scalars and final-schedule arrays
-from a W&B project produced by ``create_experiments.py``, and write three
+from a W&B project produced by ``create_experiments.py``, and write four
 artefacts under a cache dir:
 
     scalars.parquet    one row per (run_id, schedule)
     schedules.parquet  one row per (run_id, inner_step, var ∈ {sigma, clip})
+    histories.parquet  one row per (run_id, outer_step) — Learned only
     missing.csv        runs that were skipped, with reason
 
 Run once per project; ``compile_results_plot.py`` and ``symbolic_regression.py``
@@ -213,13 +214,23 @@ def _axis(tags: list[str], T: int | None) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _final_history(run: Any) -> tuple[float, float]:
-    """Return (val-accuracy, val-loss) at the final logged outer step."""
+def _history(run: Any) -> list[dict]:
+    """Return the full per-outer-step history as a list of dicts.
+
+    Each dict has keys: outer_step, val_acc, val_loss. NaN/Inf values are kept
+    so downstream plotting can show divergence as a break in the curve.
+    """
     rows = list(run.scan_history(keys=["val-accuracy", "val-loss"]))
     if not rows:
         raise RuntimeError("no val-accuracy / val-loss rows in run history")
-    last = rows[-1]
-    return float(last["val-accuracy"]), float(last["val-loss"])
+    return [
+        {
+            "outer_step": i,
+            "val_acc": float(r["val-accuracy"]),
+            "val_loss": float(r["val-loss"]),
+        }
+        for i, r in enumerate(rows)
+    ]
 
 
 def _baseline_means(api: wandb.Api, entity: str, project: str, run_id: str) -> pd.DataFrame:
@@ -260,7 +271,7 @@ def _final_schedule_arrays(run: Any) -> tuple[list[float], list[float]]:
 
 def _fetch_one_run(
     api: wandb.Api, run: Any, entity: str, project: str
-) -> tuple[list[dict], list[dict]]:
+) -> tuple[list[dict], list[dict], list[dict]]:
     cfg = run.config
     env = cfg.get("env", {}) or {}
     dataset = cfg.get("dataset")
@@ -287,7 +298,9 @@ def _fetch_one_run(
         "optimizer": optimizer,
     }
 
-    learned_acc, learned_loss = _final_history(run)
+    history = _history(run)
+    learned_acc = history[-1]["val_acc"]
+    learned_loss = history[-1]["val_loss"]
     bdf = _baseline_means(api, entity, project, run.id)
     means = bdf.groupby("type")[["accuracy", "loss"]].mean()
     counts = bdf.groupby("type").size()
@@ -334,7 +347,9 @@ def _fetch_one_run(
             }
         )
 
-    return scalars, schedule_rows
+    history_rows: list[dict] = [{**common, **h} for h in history]
+
+    return scalars, schedule_rows, history_rows
 
 
 # ---------------------------------------------------------------------------
@@ -368,28 +383,33 @@ def main(conf: FetchConfig) -> None:
 
     scalars: list[dict] = []
     schedules: list[dict] = []
+    histories: list[dict] = []
     missing: list[dict] = []
 
     for run in tqdm.tqdm(runs, desc="runs"):
         try:
-            s, sch = _fetch_one_run(api, run, conf.entity, conf.project)
+            s, sch, hist = _fetch_one_run(api, run, conf.entity, conf.project)
             scalars.extend(s)
             schedules.extend(sch)
+            histories.extend(hist)
         except Exception as exc:
             missing.append({"run_id": run.id, "run_name": run.name, "reason": str(exc)})
             tqdm.tqdm.write(f"  skipping {run.id} ({run.name}): {exc}")
 
     scalars_df = pd.DataFrame(scalars)
     schedules_df = pd.DataFrame(schedules)
+    histories_df = pd.DataFrame(histories)
     missing_df = pd.DataFrame(missing)
 
     scalars_df.to_parquet(out_dir / "scalars.parquet", index=False)
     schedules_df.to_parquet(out_dir / "schedules.parquet", index=False)
+    histories_df.to_parquet(out_dir / "histories.parquet", index=False)
     missing_df.to_csv(out_dir / "missing.csv", index=False)
 
     print(f"\n→ {out_dir}")
     print(f"  scalars.parquet:   {len(scalars_df)} rows")
     print(f"  schedules.parquet: {len(schedules_df)} rows")
+    print(f"  histories.parquet: {len(histories_df)} rows")
     print(f"  missing.csv:       {len(missing_df)} runs")
 
 
