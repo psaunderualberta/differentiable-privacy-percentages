@@ -438,6 +438,7 @@ def _write_latex(table: pd.DataFrame, path: Path) -> None:
     cols = list(table.columns)
     idx_names = list(table.index.names)
     n_idx = len(idx_names)
+    n_total = n_idx + len(cols)
     col_spec = "l" * n_idx + "c" * len(cols)
 
     lines: list[str] = []
@@ -446,11 +447,39 @@ def _write_latex(table: pd.DataFrame, path: Path) -> None:
     header = " & ".join(idx_names + cols) + " \\\\"
     lines.append(header)
     lines.append("\\midrule")
-    for idx, row in table.iterrows():
+
+    prev_dataset: object = None
+    prev_eps: object = None
+    for i, (idx, row) in enumerate(table.iterrows()):
         idx_tuple = idx if isinstance(idx, tuple) else (idx,)
-        idx_cells = [_latex_escape(str(v)) for v in idx_tuple]
+        dataset = idx_tuple[0] if n_idx >= 1 else None
+        eps = idx_tuple[1] if n_idx >= 2 else None
+
+        if i > 0:
+            if dataset != prev_dataset:
+                lines.append("\\midrule")
+            elif eps != prev_eps:
+                lines.append(f"\\cmidrule(lr){{2-{n_total}}}")
+
+        new_dataset = dataset != prev_dataset
+        new_eps = new_dataset or eps != prev_eps
+
+        idx_cells: list[str] = []
+        for k, v in enumerate(idx_tuple):
+            if k == 0:
+                cell = _latex_escape(str(v)) if new_dataset else ""
+            elif k == 1:
+                cell = _latex_escape(str(v)) if new_eps else ""
+            else:
+                cell = _latex_escape(str(v))
+            idx_cells.append(cell)
+
         body_cells = [_latex_cell(v) for v in row.tolist()]
         lines.append(" & ".join(idx_cells + body_cells) + " \\\\")
+
+        prev_dataset = dataset
+        prev_eps = eps
+
     lines.append("\\bottomrule")
     lines.append("\\end{tabular}")
     path.write_text("\n".join(lines) + "\n")
