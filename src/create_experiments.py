@@ -45,7 +45,6 @@ from conf.optimizer_config import (
     AdamConfig,
     AdamWConfig,
     OptimizerConfig,
-    SGDConfig,
 )
 from networks.cnn.config import CNNConfig
 from networks.mlp.config import MLPConfig
@@ -106,14 +105,14 @@ EPSILONS: list[float] = [1, 3, 5, 8]
 DELTA: float = 1e-6
 BATCH_SIZE: int = 250  # T=250 ≈ 1 MNIST epoch (N=60 000)
 DATASETS: list[str] = ["mnist", "fashion-mnist"]
-NUM_OUTER_STEPS: int = 1000
+NUM_OUTER_STEPS: int = 2000
 SEEDS: tuple[int, ...] = (447831761, 159020393, 435372193)
 
 # --- Axis 1: vary T, architecture fixed at medium MLP ---
-T_VALUES: list[int] = [1000, 1500, 2000, 3000, 5000]
+T_VALUES: list[int] = [1000, 1500, 2000, 3000, 5000, 7000]
 
-# --- Axis 2: vary architecture, T fixed at ~14 epochs ---
-T_FOR_ARCH_SWEEP: int = 3500
+# --- Axis 2: vary architecture, T fixed at ~20 epochs ---
+T_FOR_ARCH_SWEEP: int = 5000
 
 # MLP-only architectures
 MLP_ARCHS: list[MLPConfig] = [
@@ -124,9 +123,9 @@ MLP_ARCHS: list[MLPConfig] = [
 
 # CNN+MLP architectures
 OPTIMIZERS: list[OptimizerConfig] = [
-    SGDConfig(learning_rate=dist_config_helper(value=0.1, distribution="constant")),
+    # SGDConfig(learning_rate=dist_config_helper(value=0.1, distribution="constant")),
     AdamConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
-    AdamWConfig(learning_rate=dist_config_helper(value=1e-4, distribution="constant")),
+    AdamWConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
 ]
 
 
@@ -159,6 +158,14 @@ CNN_ARCHS: list[CNNConfig] = [
         pool_kernel_size=2,
         mlp=MLPConfig(hidden_sizes=(128,)),
     ),
+    CNNConfig(  # ~141K
+        channels=(128, 256),
+        kernel_sizes=(8, 4),
+        paddings=(2, 0),
+        strides=(2, 2),
+        pool_kernel_size=2,
+        mlp=MLPConfig(hidden_sizes=(256,)),
+    ),
 ]
 
 
@@ -186,8 +193,8 @@ def _make_sweep_config(
         dataset=ds,
         num_outer_steps=NUM_OUTER_STEPS,
         with_baselines=True,
-        baseline_log_interval=100,
-        plotting_interval=10,
+        baseline_log_interval=200,
+        plotting_interval=30,
         prng_seed=dist_config_helper(value=float(seed), distribution="constant"),
         env=EnvConfig(
             network=network_conf,

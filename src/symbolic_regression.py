@@ -15,7 +15,6 @@ _NON_FEATURE_COLS: tuple[str, ...] = (
     "optimizer",
     "seed",
     "axis",
-    "inner_step",
 )
 
 
@@ -23,7 +22,10 @@ _NON_FEATURE_COLS: tuple[str, ...] = (
 class PySRConfig:
     cache_dir: str
     """Path to the <entity>__<project> directory produced by compile_results_fetch.py."""
-    targets: tuple[Literal["sigma", "clip"], ...] = ("sigma",)
+    targets: tuple[Literal["sigma", "clip", "mu"], ...] = ("sigma",)
+    datapoint_frequency: int = (
+        100  # Frequency to use inner step datapoints in regression (i.e. every 100 steps)
+    )
     datasets: tuple[str, ...] = ()
     arch_labels: tuple[str, ...] = ()
     optimizers: tuple[str, ...] = ()
@@ -84,7 +86,7 @@ def run_regression(df: pd.DataFrame, target_col: str) -> PySRRegressor:
 
     model = PySRRegressor(
         batching=True,
-        maxsize=30,
+        maxsize=20,
         niterations=2000,
         binary_operators=["+", "-", "*", "/"],
         unary_operators=[
@@ -111,6 +113,7 @@ def main(conf: PySRConfig):
 
     schedules = _apply_row_filters(schedules, conf)
     scalars = _apply_row_filters(scalars, conf)
+    schedules["mu"] = schedules["clip"] / schedules["sigma"]
 
     keep_runs = set(schedules["run_id"].unique())
     if not conf.include_nonfinite_schedules:
@@ -124,11 +127,12 @@ def main(conf: PySRConfig):
 
     print(f"Regressing on {len(keep_runs)} runs ({len(schedules)} rows)")
 
-    feature_df = schedules.drop(columns=list(_NON_FEATURE_COLS), errors="ignore")
+    feature_df = schedules[schedules["inner_step"] % conf.datapoint_frequency == 0]
+    feature_df = feature_df.drop(columns=list(_NON_FEATURE_COLS), errors="ignore")
 
     for target in conf.targets:
-        other = "clip" if target == "sigma" else "sigma"
-        target_df = feature_df.drop(columns=[other], errors="ignore").copy()
+        others = {"sigma", "clip", "mu"} - {target}
+        target_df = feature_df.drop(columns=[*others], errors="ignore").copy()
         target_df = _filter_features(target_df, conf, target)
 
         print(f"=== {target} regression ===")
