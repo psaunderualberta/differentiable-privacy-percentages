@@ -20,6 +20,12 @@ Per optimizer the script writes:
             t_sweep_acc__<dataset>.{pdf,png}
             arch_sweep_loss__<dataset>.{pdf,png}
             arch_sweep_acc__<dataset>.{pdf,png}
+        shape_variants/
+            <var>_shape__T_sweep__by_T.{pdf,png}
+            <var>_shape__T_sweep__by_seed.{pdf,png}
+            <var>_shape__arch_sweep__by_arch.{pdf,png}
+            <var>_shape__arch_sweep__by_seed.{pdf,png}
+            (var ∈ {sigma, clip})
 
 Usage (from src/):
     uv run compile_results_plot.py --in-dir cache/results/<entity>__<project>
@@ -357,6 +363,133 @@ def plot_shape(
     _save(fig, out_path_stem)
 
 
+def plot_shape_variant(
+    schedules_df: pd.DataFrame,
+    var: str,  # "sigma" or "clip"
+    axis_tag: str,  # "T-sweep" or "arch-sweep"
+    color_col: str,  # "T", "arch_label", or "seed"
+    out_path_stem: Path,
+) -> None:
+    """Exploratory shape plot: filter to one axis-tag, color curves by color_col.
+
+    Grid: rows = ε, cols = dataset. Within each cell, thin per-run lines colored
+    by ``color_col``; for structural axes (T, arch) also draw a bold per-value
+    mean across seeds. ``seed`` is treated as a sanity-check axis — thin lines
+    only, no mean.
+    """
+    if schedules_df.empty:
+        print(f"  [skip] no schedule rows for {var}")
+        return
+
+    df = schedules_df[schedules_df["axis"] == axis_tag]
+    if df.empty:
+        print(f"  [skip] no rows for axis={axis_tag} ({var}, color={color_col})")
+        return
+
+    datasets = sorted(df["dataset"].unique())
+    epsilons = sorted(df["eps"].dropna().unique())
+    if not datasets or not epsilons:
+        print(f"  [skip] empty grid for {var}, {axis_tag}, color={color_col}")
+        return
+
+    if color_col == "seed":
+        values = sorted(df["seed"].dropna().unique())
+        cmap = plt.get_cmap("tab10")
+        value_to_color = {v: cmap(i % 10) for i, v in enumerate(values)}
+        draw_mean = False
+        legend_label = lambda v: f"seed={int(v)}"  # noqa: E731
+    elif color_col == "T":
+        values = sorted(df["T"].dropna().unique())
+        cmap = plt.get_cmap("viridis")
+        value_to_color = {v: cmap(i / max(1, len(values) - 1)) for i, v in enumerate(values)}
+        draw_mean = True
+        legend_label = lambda v: f"T={int(v)}"  # noqa: E731
+    elif color_col == "arch_label":
+        pairs = (
+            df.dropna(subset=["arch_param_count"])
+            .groupby("arch_label")["arch_param_count"]
+            .first()
+            .sort_values()
+        )
+        values = list(pairs.index)
+        cmap = plt.get_cmap("viridis")
+        value_to_color = {v: cmap(i / max(1, len(values) - 1)) for i, v in enumerate(values)}
+        draw_mean = True
+        legend_label = lambda v: str(v)  # noqa: E731
+    else:
+        raise ValueError(f"unknown color_col: {color_col}")
+
+    if not values:
+        print(f"  [skip] no {color_col} values for {var}, {axis_tag}")
+        return
+
+    nrows, ncols = len(epsilons), len(datasets)
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(3.5 * ncols + 1, 2.6 * nrows + 0.5),
+        squeeze=False,
+        sharex=True,
+        sharey="row",
+    )
+
+    for i, eps in enumerate(epsilons):
+        for j, ds in enumerate(datasets):
+            ax = axes[i, j]
+            cell = df[(df["dataset"] == ds) & (df["eps"] == eps)]
+            if cell.empty:
+                continue
+            for val in values:
+                grp_df = cell[cell[color_col] == val]
+                if grp_df.empty:
+                    continue
+                color = value_to_color[val]
+                for _run_id, run_grp in grp_df.groupby("run_id"):
+                    run_grp = run_grp.sort_values("inner_step")
+                    ax.plot(
+                        run_grp["step_norm"],
+                        run_grp[var],
+                        color=color,
+                        alpha=0.35,
+                        linewidth=0.7,
+                    )
+                if draw_mean:
+                    mean_vals = grp_df.groupby("inner_step")[var].mean().sort_index()
+                    mean_x = grp_df.groupby("inner_step")["step_norm"].first().sort_index()
+                    ax.plot(
+                        mean_x.to_numpy(),
+                        mean_vals.to_numpy(),
+                        color=color,
+                        linewidth=1.8,
+                    )
+            ax.grid(True, alpha=0.3, linewidth=0.5)
+
+    for j, ds in enumerate(datasets):
+        axes[0, j].set_title(ds)
+    for i, eps in enumerate(epsilons):
+        axes[i, 0].set_ylabel(f"ε = {eps:g}\n{var}")
+    for j in range(ncols):
+        axes[-1, j].set_xlabel("t / T")
+
+    legend_handles = [
+        Line2D([], [], color=value_to_color[v], label=legend_label(v)) for v in values
+    ]
+    fig.legend(
+        handles=legend_handles,
+        loc="lower center",
+        ncol=min(len(values), 6),
+        bbox_to_anchor=(0.5, -0.04),
+        frameon=False,
+    )
+    fig.suptitle(
+        f"{var} schedules — {axis_tag}, colored by {color_col}"
+        + ("" if draw_mean else " (thin lines only — sanity check)"),
+        fontsize=10,
+    )
+    fig.tight_layout(rect=(0, 0.04, 1, 0.97))
+    _save(fig, out_path_stem)
+
+
 # ---------------------------------------------------------------------------
 # Tables
 # ---------------------------------------------------------------------------
@@ -512,15 +645,45 @@ def plot_curves(
 ) -> None:
     """Per-(swept-var, eps) grid of outer-loop training curves for one dataset.
 
-    Each cell shows one thin line per seed (NaN preserved so divergence breaks
-    the line) plus a bold mean line across seeds. Only the Learned schedule
-    has history — baselines do not appear.
+    If the held-fixed axis (arch for T-sweep, T for arch-sweep) has more than
+    one value in the data, emit one plot per value with a filename suffix and
+    warn that the plot was split.
     """
     df = histories_df[(histories_df["axis"] == axis) & (histories_df["dataset"] == dataset)].copy()
     if df.empty:
         print(f"  [skip] no history for axis={axis}, dataset={dataset}")
         return
 
+    held_col = "arch_label" if axis == "T-sweep" else "T"
+    held_values = sorted(df[held_col].dropna().unique())
+
+    if len(held_values) > 1:
+        warnings.warn(
+            f"axis={axis}, dataset={dataset}: held-fixed axis {held_col} has "
+            f"{len(held_values)} distinct values {held_values}; splitting plot "
+            f"into one per value.",
+            stacklevel=2,
+        )
+        for hv in held_values:
+            sub = df[df[held_col] == hv]
+            safe = str(int(hv)) if held_col == "T" else str(hv).replace("/", "_").replace(" ", "_")
+            sub_stem = out_path_stem.with_name(f"{out_path_stem.name}__{held_col}-{safe}")
+            _plot_curves_single(sub, axis, metric, dataset, held_col, hv, sub_stem)
+        return
+
+    held_val = held_values[0] if held_values else None
+    _plot_curves_single(df, axis, metric, dataset, held_col, held_val, out_path_stem)
+
+
+def _plot_curves_single(
+    df: pd.DataFrame,
+    axis: str,
+    metric: str,
+    dataset: str,
+    held_col: str,
+    held_val: object,
+    out_path_stem: Path,
+) -> None:
     if axis == "T-sweep":
         x_col = "T"
         row_vals = sorted(df[x_col].dropna().unique())
@@ -561,7 +724,6 @@ def plot_curves(
                 ax.set_visible(False)
                 continue
 
-            # Per-seed pivot: rows=outer_step, cols=seed.
             seed_groups = list(cell.groupby("seed", dropna=False))
             seed_lengths = {s: len(g) for s, g in seed_groups}
             if len(set(seed_lengths.values())) > 1:
@@ -587,14 +749,21 @@ def plot_curves(
             ax.plot(xs, np.nanmean(stacked, axis=0), color="#1f77b4", linewidth=1.6)
 
             ax.grid(True, alpha=0.3, linewidth=0.5)
-            ax.set_title(f"{row_label(rv)}, ε={eps:g}", fontsize=8)
 
+    for j, eps in enumerate(epsilons):
+        axes[0, j].set_title(f"ε = {eps:g}")
+    for i, rv in enumerate(row_vals):
+        axes[i, 0].set_ylabel(f"{row_label(rv)}\n{ylabel}")
     for j in range(ncols):
         axes[-1, j].set_xlabel("outer step")
-    for i in range(nrows):
-        axes[i, 0].set_ylabel(ylabel)
 
-    fig.suptitle(f"{dataset} — Learned schedule training curves ({axis})", fontsize=10)
+    if held_val is None:
+        held_str = ""
+    elif held_col == "T":
+        held_str = f", T={int(held_val)}"
+    else:
+        held_str = f", arch={held_val}"
+    fig.suptitle(f"{dataset} — Learned schedule training curves ({axis}{held_str})", fontsize=10)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     _save(fig, out_path_stem)
 
@@ -660,6 +829,27 @@ def main(conf: PlotConfig) -> None:
 
         plot_shape(sch, "sigma", out / "sigma_shape")
         plot_shape(sch, "clip", out / "clip_shape")
+
+        variants_dir = out / "shape_variants"
+        for var in ("sigma", "clip"):
+            for axis_tag, axis_prefix, struct_col, struct_tag in (
+                ("T-sweep", "T_sweep", "T", "by_T"),
+                ("arch-sweep", "arch_sweep", "arch_label", "by_arch"),
+            ):
+                plot_shape_variant(
+                    sch,
+                    var,
+                    axis_tag,
+                    struct_col,
+                    variants_dir / f"{var}_shape__{axis_prefix}__{struct_tag}",
+                )
+                plot_shape_variant(
+                    sch,
+                    var,
+                    axis_tag,
+                    "seed",
+                    variants_dir / f"{var}_shape__{axis_prefix}__by_seed",
+                )
 
         if not histories.empty:
             h = histories[histories["optimizer"] == opt]
