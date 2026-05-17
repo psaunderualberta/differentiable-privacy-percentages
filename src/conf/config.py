@@ -76,6 +76,23 @@ NetworkConfig = Union[
 
 
 @dataclass
+class ESConfig:
+    """Evolutionary-Strategies gradient estimator settings.
+
+    When ``enabled`` is True, the outer loop replaces analytic
+    ``value_and_grad`` with an antithetic OpenAI-ES estimator over the leaves
+    selected by each schedule's ``es_filter()``.
+    """
+
+    enabled: bool = False
+    population_size: DistributionConfig = dist_config_helper(value=32, distribution="constant")
+    """Number of perturbation samples per outer step. Must be even (antithetic
+    pairs) and divisible by the GPU count; asserted at startup."""
+    perturbation_sigma: DistributionConfig = dist_config_helper(value=0.01, distribution="constant")
+    """Std-dev of Gaussian perturbations on ES-opted-in leaves."""
+
+
+@dataclass
 class ScheduleOptimizerConfig:
     schedule: ScheduleConfig = dataclasses.field(
         default_factory=ParallelSigmaAndClipScheduleConfig,
@@ -87,6 +104,7 @@ class ScheduleOptimizerConfig:
         distribution="values",
     )
     max_sigma: float = 10.0
+    es: ESConfig = dataclasses.field(default_factory=ESConfig)
     # When non-empty, sweep over these schedule type names rather than fixing
     # _type to the current schedule's class.  Set programmatically before
     # calling to_wandb_sweep(); not exposed as a CLI flag.

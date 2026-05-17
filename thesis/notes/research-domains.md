@@ -73,7 +73,23 @@ Conceptually adjacent: learning some component of an optimization process rather
 - **Metz, Maheswaranathan, Nixon, Freeman, Sohl-Dickstein (2019).** *Understanding and correcting pathologies in the training of learned optimizers.* ICML 2019. — Documents pitfalls (chaotic gradients, exploding meta-loss) that this thesis must contend with when unrolling DP-SGD.
 - **Metz et al. (2022).** *VeLO: Training Versatile Learned Optimizers by Scaling Up.* arXiv:2211.09760. — Modern large-scale learned optimizers.
 
-### 2.4 Constrained optimization / projection
+### 2.4 Evolutionary Strategies (black-box gradient estimation)
+The `es` branch adds an **antithetic OpenAI-ES** estimator as a drop-in replacement for the analytic hypergradient on ES-opted-in leaves (selected per-schedule via `es_filter()`). It is motivated by the well-documented pathologies of long unrolled gradients (Section 2.3) and by the need to differentiate through schedule parameters that may not have a tractable analytic gradient path (e.g. discrete or non-smooth reparameterizations).
+
+- **Rechenberg (1973).** *Evolutionsstrategie: Optimierung technischer Systeme nach Prinzipien der biologischen Evolution.* Frommann-Holzboog. — Original Evolution Strategies; cite for historical lineage. *(verify citation form)*
+- **Schwefel (1977).** *Numerische Optimierung von Computermodellen mittels der Evolutionsstrategie.* Birkhäuser. — Co-founding ES reference. *(verify citation form)*
+- **Hansen & Ostermeier (2001).** *Completely Derandomized Self-Adaptation in Evolution Strategies.* Evolutionary Computation, 9(2). — CMA-ES; the dominant ES variant in classical black-box optimization. Cite as background for why the simpler OpenAI-ES form was preferred here (covariance adaptation is unnecessary when perturbations target a low-dimensional schedule).
+- **Wierstra, Schaul, Glasmachers, Sun, Peters, Schmidhuber (2014).** *Natural Evolution Strategies.* JMLR 15(27). — **NES; the source of the log-utility rank shaping used in `_nes_log_utilities` in `src/environments/outer_loop.py`.** Defines fitness shaping as ranks → log-utility weights summing to zero, which is what stabilizes the ES gradient estimate against loss scale and outliers.
+- **Salimans, Ho, Chen, Sidor, Sutskever (2017).** *Evolution Strategies as a Scalable Alternative to Reinforcement Learning.* arXiv:1703.03864. — **The canonical "OpenAI-ES" reference; introduces antithetic sampling and the population-parallel formulation that the implementation mirrors.** Cite for both the estimator form and the antithetic CRN variance-reduction trick.
+- **Mania, Guy, Recht (2018).** *Simple Random Search of Static Linear Policies is Competitive for Reinforcement Learning.* NeurIPS 2018. — ARS; demonstrates that very small ES populations suffice for low-dimensional parameterizations — directly relevant to learning short B-spline control-point vectors.
+- **Nesterov & Spokoiny (2017).** *Random Gradient-Free Minimization of Convex Functions.* Foundations of Computational Mathematics, 17(2). — Theoretical analysis of Gaussian-smoothed finite-difference gradient estimators; provides convergence guarantees and variance bounds for the family of estimators OpenAI-ES belongs to.
+- **Vicol, Metz, Sohl-Dickstein (2021).** *Unbiased Gradient Estimation in Unrolled Computation Graphs with Persistent Evolution Strategies.* ICML 2021. — **The most directly comparable methodological reference: PES uses ES specifically to estimate hypergradients through long unrolled training trajectories, exactly the bilevel setting of this thesis.** The current implementation is non-persistent (vanilla ES per outer step), but PES is the natural extension if variance becomes the binding constraint.
+- **Metz, Freeman, Schoenholz, Kachman (2021).** *Gradients are Not All You Need.* arXiv:2111.05803. — **Catalogues the failure modes of analytic hypergradients on long unrolled computations (chaotic loss landscapes, exploding gradients) and motivates ES as a robust alternative.** This is the primary methodological justification for offering ES as an option in this codebase.
+- **Choromanski, Rowland, Sindhwani, Turner, Weller (2018).** *Structured Evolution with Compact Architectures for Scalable Policy Optimization.* ICML 2018. — Structured perturbation directions for ES; relevant if perturbation dimensionality grows. *(verify citation)*
+- **Lehman, Chen, Clune, Stanley (2018).** *ES Is More Than Just a Traditional Finite-Difference Approximator.* GECCO 2018. — Clarifies the relationship between ES and finite differences; useful background for explaining what the estimator actually computes.
+- **Glasserman & Yao (1992).** *Some Guidelines and Guarantees for Common Random Numbers.* Management Science, 38(6). — Theoretical foundation for **Common Random Numbers (CRN)** variance reduction. The implementation shares the spherical-noise key across each antithetic pair, and (by necessity — `train_with_noise` contains a `jax.pure_callback` for the batch fetcher that cannot be vmapped) shares the minibatch and init keys across the entire population. Both choices are CRN: paired samples see correlated inner-loop noise so the finite-difference signal isolates the schedule perturbation.
+
+### 2.5 Constrained optimization / projection
 The `project_weights` algorithm is a projection onto a non-convex constraint set defined by ∑e^(wᵢ²) = (μ/p)² + T.
 
 - **Boyd & Vandenberghe (2004).** *Convex Optimization.* Cambridge University Press. — Reference for projected-gradient methods (background only — the constraint here is not convex).
@@ -145,6 +161,11 @@ This is the most important section for positioning the thesis's contribution: it
 - **Sections 1.1–1.3** define the privacy guarantee being respected.
 - **Section 1.3 (GDP specifically)** is the accounting framework that makes the per-step μ schedule a natural learnable object — without GDP's clean per-step composition, the projection onto the constraint set would not have a tractable JIT-compatible form.
 - **Sections 2.1–2.2** are the methodological core: this work is bilevel optimization with hypergradients.
-- **Section 2.4** justifies the projection algorithm in `project_weights`.
+- **Section 2.4** justifies the alternative ES-based gradient estimator on the `es` branch — used when analytic hypergradients are unreliable (Metz 2021) or when schedule leaves are not amenable to backprop. The implementation specifically borrows the antithetic estimator from Salimans (2017) and NES rank shaping from Wierstra (2014); PES (Vicol 2021) is the unbiased extension if outer-step variance becomes the bottleneck.
+- **Section 2.5** justifies the projection algorithm in `project_weights`.
 - **Sections 3.1–3.3** justify the implementation: AD theory + JAX/Equinox + differentiable programming.
 - **Section 4** is the comparison surface — every paper there should be situated against the thesis's claim that schedules can be **learned end-to-end via the privacy-aware hypergradient**, not approximated by heuristics or estimated online from private statistics.
+
+---
+
+_Appended 2026-05-17: Added Section 2.4 on Evolutionary Strategies (Rechenberg, Schwefel, Hansen, Wierstra/NES, Salimans/OpenAI-ES, Mania/ARS, Nesterov-Spokoiny, Vicol/PES, Metz "Gradients are Not All You Need", Choromanski, Lehman, Glasserman/CRN) to cover the ES estimator landed on the `es` branch. Renumbered the previous 2.4 "Constrained optimization" to 2.5; updated the connecting summary to reflect both changes._

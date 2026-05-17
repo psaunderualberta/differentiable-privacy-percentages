@@ -1,10 +1,13 @@
+import dataclasses
 from abc import abstractmethod
 from typing import Self
 
 import equinox as eqx
-from jaxtyping import Array
+import jax
+from jaxtyping import Array, PyTree
 
 from conf.singleton_conf import SingletonConfig
+from policy.base_schedules.abstract import AbstractSchedule
 from util.logger import Loggable, LoggableArray, LoggingSchema
 
 
@@ -47,6 +50,26 @@ class AbstractNoiseAndClipSchedule(eqx.Module):
         return [
             LoggingSchema(table_name=name, cols=col_names, freq=plot_interval) for name in arrays
         ]
+
+    def es_filter(self) -> PyTree:
+        """Return a filter spec (same PyTree structure as ``self``) marking
+        leaves to be optimised by Evolutionary Strategies.
+
+        Default composition: every leaf is False except for fields that are
+        themselves ``AbstractSchedule`` instances, whose own ``es_filter``
+        is spliced in (base-first composition).
+        """
+        spec = jax.tree.map(lambda _: False, self)
+        for f in dataclasses.fields(self):
+            val = getattr(self, f.name)
+            if isinstance(val, AbstractSchedule):
+                sub_spec = val.es_filter()
+                spec = eqx.tree_at(
+                    lambda s, name=f.name: getattr(s, name),
+                    spec,
+                    sub_spec,
+                )
+        return spec
 
     def get_loggables(self, force=False) -> list[Loggable | LoggableArray]:
         return [

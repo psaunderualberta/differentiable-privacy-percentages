@@ -57,7 +57,26 @@ def main():
     schedule = schedule.project()
     if getattr(schedule, "use_fista", False):
         schedule = schedule.fista_extrapolate()
-    schedule_batch_size = sweep_config.schedule_optimizer.batch_size
+    # Determine the sharded outer-loop axis size:
+    #   * Analytic mode → schedule_batch_size (independent vmapped DP-SGD runs)
+    #   * ES mode       → population_size // 2 (one CRN key per antithetic pair)
+    es_conf = sweep_config.schedule_optimizer.es
+    if es_conf.enabled:
+        population_size = int(es_conf.population_size.sample())
+        if population_size % 2 != 0:
+            raise ValueError(
+                f"ES population_size must be even (antithetic pairs); got {population_size}.",
+            )
+        num_gpus = len(devices("gpu"))
+        if population_size % (2 * num_gpus) != 0:
+            raise ValueError(
+                f"ES population_size ({population_size}) must be divisible by "
+                f"2 * num_gpus ({2 * num_gpus}) so antithetic pairs split evenly.",
+            )
+        parallel_axis_size = population_size // 2
+        print(f"ES enabled: population_size={population_size}, half_pop={parallel_axis_size}")
+    else:
+        parallel_axis_size = sweep_config.schedule_optimizer.batch_size
 
     # Initialize private environment
     env_params = DPTrainingParams.create_direct_from_config()
@@ -68,7 +87,7 @@ def main():
         logger.add_schema(schema)
 
     # Build mesh (for sharding noise_keys) and the JIT-compiled training loss function
-    mesh = get_optimal_mesh(devices("gpu"), schedule_batch_size)
+    mesh = get_optimal_mesh(devices("gpu"), parallel_axis_size)
     get_training_loss = make_training_loss_fn(env_params)
 
     # Initialise optimizer and PRNG keys (may be overwritten by checkpoint restore)
@@ -179,7 +198,7 @@ def main():
 
         # mb_key = device_put(mb_key, sharding)
         # init_key = device_put(init_key, sharding)
-        noise_keys = device_put(jr.split(noise_key, schedule_batch_size), sharding)
+        noise_keys = device_put(jr.split(noise_key, parallel_axis_size), sharding)
         (loss, (losses, accuracies, val_accs)), grads = get_training_loss(
             schedule,
             mb_key,

@@ -172,15 +172,11 @@ def train_with_noise(
     clip_segs = clip_schedule.reshape(K, seg_len)
     idx_segs = all_indices.reshape(K, seg_len, batch_size)
 
-    @partial(
-        jax_checkpoint,
-        policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable,
-    )
     def inner_step(
         carry: tuple[PyTree, PyTree, PRNGKeyArray],
         xs: tuple[Array, Array, Array, Array],
     ) -> tuple[tuple[PyTree, PyTree, PRNGKeyArray], tuple[Array, Array]]:
-        """Single checkpointed DP-SGD step; batch data arrives as scan input."""
+        """Single DP-SGD step; batch data arrives as scan input."""
         net_params, opt_state_params, noise_key = carry
         noise_t, clip_t, batch_x, batch_y = xs
 

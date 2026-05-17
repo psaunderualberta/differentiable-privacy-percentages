@@ -1,7 +1,8 @@
 import abc
 
 import equinox as eqx
-from jaxtyping import Array
+import jax
+from jaxtyping import Array, PyTree
 
 
 class AbstractSchedule(eqx.Module):
@@ -25,3 +26,12 @@ class AbstractSchedule(eqx.Module):
         raise NotImplementedError(
             "Subclasses must implement 'from_projection' class method.",
         )
+
+    def es_filter(self) -> PyTree:
+        """Return a filter spec (same PyTree structure as ``self``) marking
+        which leaves should be optimised by Evolutionary Strategies.
+
+        The default implementation opts every leaf out (all-False). Subclasses
+        with ES-supported parameters override this to mark them True.
+        """
+        return jax.tree.map(lambda _: False, self)

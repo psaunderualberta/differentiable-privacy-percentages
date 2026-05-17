@@ -1,8 +1,9 @@
+import equinox as eqx
 import jax
 import jax.lax as jlax
 import jax.numpy as jnp
 import numpy as np
-from jaxtyping import Array
+from jaxtyping import Array, PyTree
 from scipy.interpolate import BSpline
 
 from policy.base_schedules._registry import register
@@ -85,6 +86,10 @@ class BSplineSchedule(AbstractSchedule):
 
     def get_raw_schedule(self) -> Array:
         return jlax.stop_gradient(self.basis) @ self.control_points
+
+    def es_filter(self) -> PyTree:
+        spec = jax.tree.map(lambda _: False, self)
+        return eqx.tree_at(lambda s: s.control_points, spec, True)
 
     @classmethod
     def from_projection(
