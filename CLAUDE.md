@@ -71,17 +71,22 @@ When `wandb_conf.restart_run_id` is set, `singleton_conf.py` downloads and merge
 ```
 for t in total_timesteps:
     1. Log current schedule (sigmas, clips, weights) to W&B
-    2. Compute policy loss:
-       - shard_map over GPUs × policy_batch_size networks
-       - vmap over noise_keys within each shard
-       - Each network: train_with_noise() → runs T DP-SGD steps via jax.lax.scan
-       - Loss = mean val_loss across all networks
-    3. Backprop through the loss into the schedule's learnable parameters
-    4. SGD update on schedule
-    5. schedule.project() → enforce privacy constraints
+    2. Compute policy loss + gradients via get_training_loss(schedule, mb_key, init_key, noise_keys):
+       - Analytic mode (default): filter_value_and_grad + vmap over schedule_batch_size DP-SGD runs
+       - ES mode (schedule_optimizer.es.enabled): antithetic OpenAI-ES with NES log-utility
+         rank shaping; vmap over population_size // 2 antithetic pairs (CRN per pair)
+    3. SGD update on schedule using the returned grads
+    4. schedule.project() → enforce privacy constraints
 ```
 
-The `get_policy_loss` function is decorated with `@eqx.filter_jit`, `@eqx.filter_value_and_grad`, and `@shard_map` — the gradient flows back through the JAX scan and into the schedule weights.
+The factory is `make_training_loss_fn` in `src/environments/outer_loop.py` and returns a single signature regardless of mode: `((loss, (losses, accs, val_accs)), grads)`. `main.py` is mode-agnostic past sizing the sharded leading axis (`schedule_batch_size` analytic, `population_size // 2` ES).
+
+**ES mode (`ESConfig` in `conf/config.py`):**
+- `population_size` must be even and divisible by `2 * num_gpus` (asserted at startup so antithetic pairs split evenly across devices).
+- `perturbation_sigma` is the Gaussian perturbation std.
+- Per-pair CRN: `mb_key`, `init_key`, and the spherical-noise key are shared across the `+ε` / `-ε` evaluations within a pair to cut variance.
+- Loss-minimisation sign convention: gradient is `(u_neg - u_pos) / (N·σ) · ε` so optax's `params -= lr·grad` minimises val loss.
+- Frozen leaves get a zero gradient so the pytree shape matches `schedule`.
 
 ### Privacy Accounting (`privacy/gdp_privacy.py`)
 
@@ -101,6 +106,7 @@ All schedules implement `AbstractNoiseAndClipSchedule` (an `eqx.Module`):
 - `get_private_sigmas()` / `get_private_clips()` — return length-T arrays used directly in DP-SGD.
 - `apply_updates(updates)` — apply optax gradient updates; handles `stop_gradient` logic for alternating optimization.
 - `project()` — project back to valid privacy space after each gradient step.
+- `es_filter()` — return a same-shape filter spec marking which leaves Evolutionary Strategies should perturb. Default on `AbstractNoiseAndClipSchedule` is all-False except that nested `AbstractSchedule` fields' own `es_filter()` is spliced in (base-first composition). Override on base schedules to opt specific learnable arrays in (e.g. `BSplineSchedule` opts in `control_points` only).
 - `get_loggables()` / `get_logging_schemas()` — W&B logging hooks.
 
 **Schedule types** (selected by `--sweep.policy.schedule_type`):
@@ -116,6 +122,13 @@ All schedules implement `AbstractNoiseAndClipSchedule` (an `eqx.Module`):
 - `ConstantSchedule` — single learnable scalar broadcast to T steps.
 - `InterpolatedExponentialSchedule` — exponential curve between learned min/max.
 - `ClippedSchedule` — polynomial/linear interpolation with bounds.
+- `BSplineSchedule` — B-spline interpolation over learnable `control_points` (the only leaf opted in to ES by default).
+
+## Thesis Notes
+
+Research/writing notes live in `thesis/notes/`:
+- `research-domains.md` — related-work survey across DP-SGD, hyperparameter scheduling, ES/black-box optimisation.
+- `privacy-accountant-and-projection.md` — derivations behind `GDPPrivacyParameters` and `project_weights`.
 
 ### DP-SGD Training (`environments/dp.py`)
 
