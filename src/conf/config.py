@@ -89,7 +89,22 @@ class ESConfig:
     """Number of perturbation samples per outer step. Must be even (antithetic
     pairs) and divisible by the GPU count; asserted at startup."""
     perturbation_sigma: DistributionConfig = dist_config_helper(value=0.01, distribution="constant")
-    """Std-dev of Gaussian perturbations on ES-opted-in leaves."""
+    """Initial std-dev of Gaussian perturbations on ES-opted-in leaves.
+    Treated as the *initial* σ when ``eta_sigma > 0`` (natural-gradient σ
+    update enabled, Wierstra et al. 2014)."""  # noqa: RUF001
+    eta_sigma: DistributionConfig = dist_config_helper(value=0.0, distribution="constant")
+    """Learning rate for the natural-gradient log-σ update (sNES, Wierstra et
+    al. 2014). 0 disables the σ update (σ stays at ``perturbation_sigma``)."""  # noqa: RUF001
+    adaptation_enabled: bool = False
+    """Enable Wierstra et al. (2014) §6.2 adaptation sampling for ``η_σ``."""  # noqa: RUF001
+    adaptation_c: float = 1.5
+    """Hypothetical-σ multiplier used by adaptation sampling."""  # noqa: RUF001
+    adaptation_rho: float = 0.5
+    """U-statistic threshold above which adaptation sampling grows ``η_σ``."""  # noqa: RUF001
+    adaptation_step: float = 0.1
+    """Multiplicative step size for the ``η_σ`` update."""  # noqa: RUF001
+    eta_sigma_max: float = 1.0
+    """Upper clamp on ``η_σ`` under adaptation sampling."""  # noqa: RUF001
 
 
 @dataclass

@@ -10,7 +10,7 @@ from conf.scope import RunContext, current, using
 from conf.singleton_conf import SingletonConfig
 from environments.dp import get_private_model_training_schemas
 from environments.dp_params import DPTrainingParams
-from environments.outer_loop import make_training_loss_fn
+from environments.outer_loop import make_initial_es_state, make_training_loss_fn
 from policy.factory import make_schedule
 from privacy.gdp_privacy import get_privacy_params
 from util.baselines import Baseline
@@ -89,6 +89,7 @@ def main():
     # Build mesh (for sharding noise_keys) and the JIT-compiled training loss function
     mesh = get_optimal_mesh(devices("gpu"), parallel_axis_size)
     get_training_loss = make_training_loss_fn(env_params)
+    es_state = make_initial_es_state()  # None unless ES enabled
 
     # Initialise optimizer and PRNG keys (may be overwritten by checkpoint restore)
     optimizer = optax.sgd(
@@ -199,11 +200,12 @@ def main():
         # mb_key = device_put(mb_key, sharding)
         # init_key = device_put(init_key, sharding)
         noise_keys = device_put(jr.split(noise_key, parallel_axis_size), sharding)
-        (loss, (losses, accuracies, val_accs)), grads = get_training_loss(
+        (loss, (losses, accuracies, val_accs)), grads, es_state = get_training_loss(
             schedule,
             mb_key,
             init_key,
             noise_keys,
+            es_state,
         )
 
         logger.log(Loggable(table_name="train_losses", data={"losses": losses}))
