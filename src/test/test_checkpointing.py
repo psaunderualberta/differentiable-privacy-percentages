@@ -25,6 +25,7 @@ import optax
 import pytest
 
 import util.checkpointing as ckpt
+from environments.nes import ESState
 from util.checkpointing import load_checkpoint, make_state, save_checkpoint
 
 # ---------------------------------------------------------------------------
@@ -87,7 +88,7 @@ def full_state(schedule) -> dict[str, Any]:
     opt_state = _make_opt_state(schedule)
     key = jr.PRNGKey(0)
     init_key = jr.PRNGKey(1)
-    return make_state(schedule, opt_state, key, init_key, step=42)
+    return make_state(schedule, opt_state, key, init_key, step=42, es_state=None)
 
 
 @pytest.fixture(autouse=True)
@@ -103,7 +104,22 @@ def _patch_project_root(tmp_path, monkeypatch):
 
 class TestMakeState:
     def test_has_all_required_keys(self, full_state):
-        assert set(full_state.keys()) == {"schedule", "opt_state", "key", "init_key", "step"}
+        assert set(full_state.keys()) == {
+            "schedule",
+            "opt_state",
+            "key",
+            "init_key",
+            "step",
+            "es_state",
+        }
+
+    def test_es_state_stored(self, schedule):
+        opt_state = _make_opt_state(schedule)
+        es_state = ESState(log_sigma=jnp.float32(jnp.log(0.1)), eta_sigma=jnp.float32(0.05))
+        state = make_state(
+            schedule, opt_state, jr.PRNGKey(0), jr.PRNGKey(1), step=0, es_state=es_state
+        )
+        assert state["es_state"] is es_state
 
     def test_step_is_int32_array(self, full_state):
         assert full_state["step"].dtype == jnp.int32
@@ -180,6 +196,26 @@ class TestLoadCheckpointRoundTrip:
         restored_state, _ = result
         assert jnp.array_equal(restored_state["init_key"], full_state["init_key"])
 
+    def test_es_state_preserved(self, schedule, mock_run):
+        opt_state = _make_opt_state(schedule)
+        es_state = ESState(log_sigma=jnp.float32(jnp.log(0.1)), eta_sigma=jnp.float32(0.05))
+        state = make_state(
+            schedule, opt_state, jr.PRNGKey(0), jr.PRNGKey(1), step=7, es_state=es_state
+        )
+        save_checkpoint(state, 7, mock_run)
+        result = load_checkpoint(mock_run.id, 7, state, None, None)
+        assert result is not None
+        restored, _ = result
+        assert jnp.allclose(restored["es_state"].log_sigma, es_state.log_sigma)
+        assert jnp.allclose(restored["es_state"].eta_sigma, es_state.eta_sigma)
+
+    def test_es_state_none_preserved(self, full_state, mock_run):
+        save_checkpoint(full_state, 10, mock_run)
+        result = load_checkpoint(mock_run.id, 10, full_state, None, None)
+        assert result is not None
+        restored, _ = result
+        assert restored["es_state"] is None
+
 
 # ---------------------------------------------------------------------------
 # load_checkpoint — step selection
@@ -200,8 +236,8 @@ class TestLoadCheckpointStepSelection:
         key = jr.PRNGKey(0)
         init_key = jr.PRNGKey(1)
 
-        state_5 = make_state(schedule, opt_state, key, init_key, step=5)
-        state_10 = make_state(schedule, opt_state, key, init_key, step=10)
+        state_5 = make_state(schedule, opt_state, key, init_key, step=5, es_state=None)
+        state_10 = make_state(schedule, opt_state, key, init_key, step=10, es_state=None)
 
         save_checkpoint(state_5, 5, mock_run)
         save_checkpoint(state_10, 10, mock_run)
@@ -217,8 +253,8 @@ class TestLoadCheckpointStepSelection:
         key = jr.PRNGKey(0)
         init_key = jr.PRNGKey(1)
 
-        state_5 = make_state(schedule, opt_state, key, init_key, step=5)
-        state_10 = make_state(schedule, opt_state, key, init_key, step=10)
+        state_5 = make_state(schedule, opt_state, key, init_key, step=5, es_state=None)
+        state_10 = make_state(schedule, opt_state, key, init_key, step=10, es_state=None)
 
         save_checkpoint(state_5, 5, mock_run)
         save_checkpoint(state_10, 10, mock_run)
@@ -236,8 +272,12 @@ class TestLoadCheckpointStepSelection:
 
         weights_a = jnp.array([1.0, 1.0, 1.0])
         weights_b = jnp.array([9.0, 9.0, 9.0])
-        state_a = make_state(_SimpleSchedule(weights=weights_a), opt_state, key, init_key, step=5)
-        state_b = make_state(_SimpleSchedule(weights=weights_b), opt_state, key, init_key, step=10)
+        state_a = make_state(
+            _SimpleSchedule(weights=weights_a), opt_state, key, init_key, step=5, es_state=None
+        )
+        state_b = make_state(
+            _SimpleSchedule(weights=weights_b), opt_state, key, init_key, step=10, es_state=None
+        )
 
         save_checkpoint(state_a, 5, mock_run)
         save_checkpoint(state_b, 10, mock_run)

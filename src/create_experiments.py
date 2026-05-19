@@ -34,7 +34,7 @@ _CC_ROOT = os.environ["PROJECT_ROOT"] = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "cc"),
 )
 
-from conf.config import EnvConfig, ScheduleOptimizerConfig, SweepConfig
+from conf.config import EnvConfig, ESConfig, ScheduleOptimizerConfig, SweepConfig
 from conf.config_util import (
     DistributionConfig,
     _is_fixed_field,
@@ -158,14 +158,6 @@ CNN_ARCHS: list[CNNConfig] = [
         pool_kernel_size=2,
         mlp=MLPConfig(hidden_sizes=(128,)),
     ),
-    CNNConfig(  # ~141K
-        channels=(128, 256),
-        kernel_sizes=(8, 4),
-        paddings=(2, 0),
-        strides=(2, 2),
-        pool_kernel_size=2,
-        mlp=MLPConfig(hidden_sizes=(256,)),
-    ),
 ]
 
 
@@ -202,13 +194,16 @@ def _make_sweep_config(
             delta=DELTA,
             batch_size=BATCH_SIZE,
             num_training_steps=T,
-            scan_segments=T // 100,  # Loading data as-needed
+            scan_segments=int(T**0.5),  # Loading data as-needed
             optimizer=optimizer,
         ),
         schedule_optimizer=ScheduleOptimizerConfig(
-            schedule=ParallelSigmaAndClipScheduleConfig(use_fista=True),
-            lr=dist_config_helper(value=0.01, distribution="constant"),
-            batch_size=4,
+            schedule=ParallelSigmaAndClipScheduleConfig(use_fista=False),
+            lr=dist_config_helper(value=1.0, distribution="constant"),
+            es=ESConfig(
+                enabled=True,
+                adaptation_enabled=True,
+            ),
         ),
     )
 

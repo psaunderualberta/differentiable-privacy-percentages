@@ -80,7 +80,7 @@ def _find_local_checkpoint(run_id: str, step: int | None) -> pathlib.Path | None
     return target if target.exists() else None
 
 
-def make_state(schedule, opt_state, key, init_key, step: int) -> dict[str, Any]:
+def make_state(schedule, opt_state, key, init_key, step: int, es_state) -> dict[str, Any]:
     """Bundle all outer-loop training state into a checkpointable dict."""
     return {
         "schedule": schedule,
@@ -88,6 +88,7 @@ def make_state(schedule, opt_state, key, init_key, step: int) -> dict[str, Any]:
         "key": key,
         "init_key": init_key,
         "step": jnp.array(step, dtype=jnp.int32),
+        "es_state": es_state,
     }
 
 

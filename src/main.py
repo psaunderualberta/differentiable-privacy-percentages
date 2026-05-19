@@ -106,7 +106,7 @@ def main():
     # ---
     start_step = 0
     if wandb_config.checkpoint_run_id is not None:
-        state_template = make_state(schedule, opt_state, key, init_key, 0)
+        state_template = make_state(schedule, opt_state, key, init_key, 0, es_state)
         result = load_checkpoint(
             wandb_config.checkpoint_run_id,
             wandb_config.checkpoint_step,
@@ -120,6 +120,7 @@ def main():
             opt_state = restored_state["opt_state"]
             key = restored_state["key"]
             init_key = restored_state["init_key"]
+            es_state = restored_state["es_state"]
             # Orbax restores arrays as device-committed (bound to device 0).
             # This conflicts with sharded noise_keys inside the JIT call.
             # Round-trip through numpy to produce uncommitted arrays, matching
@@ -238,14 +239,14 @@ def main():
         iterator.set_description(f"Training Progress - Loss: {loss:.4f}")
 
         if (t + 1) % wandb_config.checkpoint_every == 0:
-            save_checkpoint(make_state(schedule, opt_state, key, init_key, t), t, run)
+            save_checkpoint(make_state(schedule, opt_state, key, init_key, t, es_state), t, run)
 
         if log_baselines_during_training and (t + 1) % sweep_config.baseline_log_interval == 0:
             baseline.log_comparison(schedule, eval_key, logger=logger)
 
         if shutdown_requested() or time_limit_approaching():
             print(f"Graceful shutdown at step {t}; checkpointing for job-chain resubmit")
-            save_checkpoint(make_state(schedule, opt_state, key, init_key, t), t, run)
+            save_checkpoint(make_state(schedule, opt_state, key, init_key, t, es_state), t, run)
             break
 
     # Resubmit job (dependency ensures won't start until current ends)
