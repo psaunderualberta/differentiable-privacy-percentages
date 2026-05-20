@@ -112,7 +112,7 @@ def train_with_noise(
     noise_key: PRNGKeyArray,
 ) -> tuple[eqx.Module, Array, Array, Array, Array]:
     # Get noise and clip schedules
-    noise_schedule = schedule.get_private_sigmas()
+    noise_schedule = schedule.get_private_noise_scales()
     clip_schedule = schedule.get_private_clips()
 
     T = params.num_training_steps

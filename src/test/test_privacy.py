@@ -652,8 +652,8 @@ def psac_infeasible_schedule(psac_params):
 
 
 class TestParallelSigmaAndClipSchedule:
-    def test_get_private_sigmas_shape(self, psac_schedule):
-        assert psac_schedule.get_private_sigmas().shape == (_T_PSAC,)
+    def test_get_private_noise_scales_shape(self, psac_schedule):
+        assert psac_schedule.get_private_noise_scales().shape == (_T_PSAC,)
 
     def test_get_private_clips_shape(self, psac_schedule):
         assert psac_schedule.get_private_clips().shape == (_T_PSAC,)
@@ -662,7 +662,7 @@ class TestParallelSigmaAndClipSchedule:
         assert psac_schedule.get_private_weights().shape == (_T_PSAC,)
 
     def test_sigmas_positive(self, psac_schedule):
-        assert jnp.all(psac_schedule.get_private_sigmas() > 0)
+        assert jnp.all(psac_schedule.get_private_noise_scales() > 0)
 
     def test_clips_positive(self, psac_schedule):
         assert jnp.all(psac_schedule.get_private_clips() > 0)
@@ -673,26 +673,28 @@ class TestParallelSigmaAndClipSchedule:
 
     def test_project_satisfies_privacy_constraint(self, psac_infeasible_schedule, psac_params):
         projected = psac_infeasible_schedule.project()
-        sigmas = projected.get_private_sigmas()
+        sigmas = projected.get_private_noise_scales()
         clips = projected.get_private_clips()
         B = _sc_budget(psac_params)
         assert _sc_constraint(sigmas, clips) <= B + 1e-2
 
     def test_project_feasible_unchanged(self, psac_schedule, psac_params):
         # Default schedule is feasible — project() must be a no-op.
-        sigmas_before = psac_schedule.get_private_sigmas()
+        sigmas_before = psac_schedule.get_private_noise_scales()
         clips_before = psac_schedule.get_private_clips()
         projected = psac_schedule.project()
-        assert jnp.allclose(projected.get_private_sigmas(), sigmas_before, atol=1e-4)
+        assert jnp.allclose(projected.get_private_noise_scales(), sigmas_before, atol=1e-4)
         assert jnp.allclose(projected.get_private_clips(), clips_before, atol=1e-4)
 
     def test_project_idempotent(self, psac_infeasible_schedule):
         once = psac_infeasible_schedule.project()
         twice = once.project()
-        assert jnp.allclose(once.get_private_sigmas(), twice.get_private_sigmas(), atol=1e-4)
+        assert jnp.allclose(
+            once.get_private_noise_scales(), twice.get_private_noise_scales(), atol=1e-4
+        )
         assert jnp.allclose(once.get_private_clips(), twice.get_private_clips(), atol=1e-4)
 
     def test_projected_sigmas_clips_positive(self, psac_infeasible_schedule):
         projected = psac_infeasible_schedule.project()
-        assert jnp.all(projected.get_private_sigmas() > 0)
+        assert jnp.all(projected.get_private_noise_scales() > 0)
         assert jnp.all(projected.get_private_clips() > 0)

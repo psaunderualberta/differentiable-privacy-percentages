@@ -38,7 +38,7 @@ class _SimpleSchedule(eqx.Module):
 
     weights: jnp.ndarray
 
-    def get_private_sigmas(self):
+    def get_private_noise_scales(self):
         return self.weights
 
     def get_private_clips(self):

@@ -41,7 +41,7 @@ _PSAC_BASE = ParallelSigmaAndClipSchedule.from_config(
 
 def _make_psac_with_ratio(ratio: float) -> ParallelSigmaAndClipSchedule:
     """Build a schedule where clip_i / sigma_i == ratio for all i."""
-    sigmas = _PSAC_BASE.get_private_sigmas()
+    sigmas = _PSAC_BASE.get_private_noise_scales()
     clips = sigmas * ratio
     new_clip = _PSAC_BASE.clip_schedule.__class__.from_projection(_PSAC_BASE.clip_schedule, clips)
     return eqx.tree_at(lambda s: s.clip_schedule, _PSAC_BASE, new_clip)
@@ -64,7 +64,7 @@ class TestParallelSigmaAndClipScheduleProperties:
         """After project(), the privacy constraint is satisfied (on the boundary)."""
         schedule = _make_psac_with_ratio(ratio)
         projected = schedule.project()
-        sigmas = projected.get_private_sigmas()
+        sigmas = projected.get_private_noise_scales()
         clips = projected.get_private_clips()
         assert _sc_eval(sigmas, clips) == pytest.approx(_PSAC_BUDGET, rel=1e-2)
 
@@ -73,10 +73,10 @@ class TestParallelSigmaAndClipScheduleProperties:
     def test_project_feasible_unchanged(self, ratio):
         """A feasible schedule is unchanged by project()."""
         schedule = _make_psac_with_ratio(ratio)
-        sigmas_before = schedule.get_private_sigmas()
+        sigmas_before = schedule.get_private_noise_scales()
         clips_before = schedule.get_private_clips()
         projected = schedule.project()
-        assert jnp.allclose(projected.get_private_sigmas(), sigmas_before, atol=1e-4)
+        assert jnp.allclose(projected.get_private_noise_scales(), sigmas_before, atol=1e-4)
         assert jnp.allclose(projected.get_private_clips(), clips_before, atol=1e-4)
 
     @given(ratio=_psac_infeasible_ratio_st)
@@ -85,15 +85,15 @@ class TestParallelSigmaAndClipScheduleProperties:
         """Projected sigmas and clips are always strictly positive."""
         schedule = _make_psac_with_ratio(ratio)
         projected = schedule.project()
-        assert jnp.all(projected.get_private_sigmas() > 0)
+        assert jnp.all(projected.get_private_noise_scales() > 0)
         assert jnp.all(projected.get_private_clips() > 0)
 
     @given(ratio=st.floats(min_value=0.5, max_value=1.5, allow_nan=False, allow_infinity=False))
     @_jax_settings
     def test_output_shapes_independent_of_ratio(self, ratio):
-        """get_private_sigmas/clips always return length-T arrays for any clip/sigma ratio."""
+        """get_private_noise_scales/clips always return length-T arrays for any clip/sigma ratio."""
         schedule = _make_psac_with_ratio(ratio)
-        assert schedule.get_private_sigmas().shape == (_T_FIXED,)
+        assert schedule.get_private_noise_scales().shape == (_T_FIXED,)
         assert schedule.get_private_clips().shape == (_T_FIXED,)
 
 
@@ -136,27 +136,27 @@ class TestDynamicDPSGDScheduleProperties:
         """Sigma and clip schedules reconstruct the total GDP mu to within 0.1%."""
         s = _make_dynamic(rho_mu, rho_C, c_0)
         mu_reconstructed = _DYN_PARAMS.compute_expenditure(
-            s.get_private_sigmas(), s.get_private_clips()
+            s.get_private_noise_scales(), s.get_private_clips()
         )
         assert jnp.isclose(mu_reconstructed, _DYN_PARAMS.mu, rtol=1e-3)
 
     @given(rho_mu=_rho_st, rho_C=_rho_st, c_0=_c0_st)
     @_jax_settings
     def test_sigmas_always_positive(self, rho_mu, rho_C, c_0):
-        """get_private_sigmas() > 0 for any valid parameters."""
-        assert jnp.all(_make_dynamic(rho_mu, rho_C, c_0).get_private_sigmas() > 0)
+        """get_private_noise_scales() > 0 for any valid parameters."""
+        assert jnp.all(_make_dynamic(rho_mu, rho_C, c_0).get_private_noise_scales() > 0)
 
     @given(rho_mu=_rho_st, rho_C=_rho_st, c_0=_c0_st)
     @_jax_settings
     def test_sigmas_correct_shape(self, rho_mu, rho_C, c_0):
-        """get_private_sigmas() returns shape (T,) for any parameters."""
-        assert _make_dynamic(rho_mu, rho_C, c_0).get_private_sigmas().shape == (_T_FIXED,)
+        """get_private_noise_scales() returns shape (T,) for any parameters."""
+        assert _make_dynamic(rho_mu, rho_C, c_0).get_private_noise_scales().shape == (_T_FIXED,)
 
     @given(rho_mu=_rho_st, rho_C=_rho_st, c_0=_c0_st)
     @_jax_settings
     def test_sigmas_finite(self, rho_mu, rho_C, c_0):
         """All sigma values are finite."""
-        assert jnp.all(jnp.isfinite(_make_dynamic(rho_mu, rho_C, c_0).get_private_sigmas()))
+        assert jnp.all(jnp.isfinite(_make_dynamic(rho_mu, rho_C, c_0).get_private_noise_scales()))
 
     @given(rho_mu=_rho_st, rho_C=_rho_st, c_0=_c0_st)
     @_jax_settings
@@ -181,7 +181,7 @@ class TestDynamicDPSGDScheduleProperties:
     def test_clip_sigma_ratio_formula(self, rho_mu, rho_C, c_0):
         """clip_i / sigma_i = mu_0 * rho_mu^(i/T) for all i."""
         s = _make_dynamic(rho_mu, rho_C, c_0)
-        ratio = s.get_private_clips() / s.get_private_sigmas()
+        ratio = s.get_private_clips() / s.get_private_noise_scales()
         expected = s.mu_0 * s.rho_mu ** (s.iters / _T_FIXED)
         assert jnp.allclose(ratio, expected, rtol=1e-4)
 
@@ -194,7 +194,7 @@ class TestDynamicDPSGDScheduleProperties:
     def test_clip_sigma_ratio_increases_when_rho_mu_gt_1(self, rho_mu, rho_C, c_0):
         """rho_mu > 1 → clip/sigma ratio increases with step index."""
         s = _make_dynamic(rho_mu, rho_C, c_0)
-        ratio = s.get_private_clips() / s.get_private_sigmas()
+        ratio = s.get_private_clips() / s.get_private_noise_scales()
         assert jnp.all(jnp.diff(ratio) > -1e-7)
 
     @given(
@@ -206,7 +206,7 @@ class TestDynamicDPSGDScheduleProperties:
     def test_clip_sigma_ratio_decreases_when_rho_mu_lt_1(self, rho_mu, rho_C, c_0):
         """rho_mu < 1 → clip/sigma ratio decreases with step index."""
         s = _make_dynamic(rho_mu, rho_C, c_0)
-        ratio = s.get_private_clips() / s.get_private_sigmas()
+        ratio = s.get_private_clips() / s.get_private_noise_scales()
         assert jnp.all(jnp.diff(ratio) < 1e-7)
 
     @given(
@@ -218,7 +218,7 @@ class TestDynamicDPSGDScheduleProperties:
     def test_sigmas_increasing_when_rho_product_lt_1(self, rho_mu, rho_C, c_0):
         """rho_mu * rho_C < 1 → sigmas strictly increase over steps."""
         s = _make_dynamic(rho_mu, rho_C, c_0)
-        assert jnp.all(jnp.diff(s.get_private_sigmas()) > -1e-7)
+        assert jnp.all(jnp.diff(s.get_private_noise_scales()) > -1e-7)
 
     @given(
         rho_mu=st.floats(min_value=1.01, max_value=3.0, allow_nan=False, allow_infinity=False),
@@ -229,7 +229,7 @@ class TestDynamicDPSGDScheduleProperties:
     def test_sigmas_decreasing_when_rho_product_gt_1(self, rho_mu, rho_C, c_0):
         """rho_mu * rho_C > 1 → sigmas strictly decrease over steps."""
         s = _make_dynamic(rho_mu, rho_C, c_0)
-        assert jnp.all(jnp.diff(s.get_private_sigmas()) < 1e-7)
+        assert jnp.all(jnp.diff(s.get_private_noise_scales()) < 1e-7)
 
     @given(
         rho_mu=_rho_st,
@@ -294,7 +294,7 @@ class TestDynamicDPSGDScheduleProperties:
     @_jax_settings
     def test_project_sigmas_positive(self, rho_mu, rho_C, c_0):
         """Projected schedule always has positive sigmas."""
-        assert jnp.all(_make_dynamic(rho_mu, rho_C, c_0).project().get_private_sigmas() > 0)
+        assert jnp.all(_make_dynamic(rho_mu, rho_C, c_0).project().get_private_noise_scales() > 0)
 
     @given(rho_mu=_rho_st, rho_C=_rho_st, c_0=_c0_st)
     @_jax_settings

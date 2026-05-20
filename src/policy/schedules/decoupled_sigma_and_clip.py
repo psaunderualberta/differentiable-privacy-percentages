@@ -7,12 +7,20 @@ from policy.base_schedules.abstract import AbstractSchedule
 from policy.base_schedules.factory import base_schedule_factory
 from policy.schedules._registry import register
 from policy.schedules.abstract import AbstractNoiseAndClipSchedule
-from policy.schedules.config import SigmaAndClipScheduleConfig
+from policy.schedules.config import DecoupledSigmaAndClipScheduleConfig
 from privacy.gdp_privacy import GDPPrivacyParameters
 
 
-@register(SigmaAndClipScheduleConfig)
-class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
+@register(DecoupledSigmaAndClipScheduleConfig)
+class DecoupledSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
+    """Noise std σ_noise = C · (1/w), with C fully decoupled from the privacy budget.
+
+    The noise-side base schedule's ``get_valid_schedule()`` returns w directly
+    (the privacy-constraint variable); ``get_private_noise_scales()`` returns
+    C · σ_mult = C · (1/w) at the dp.py boundary. ``project()`` projects only
+    the w-side onto the GDP constraint Σ exp(w²) ≤ (μ/p)² + T; C is untouched.
+    """
+
     noise_schedule: AbstractSchedule
     clip_schedule: AbstractSchedule
     privacy_params: GDPPrivacyParameters
@@ -23,13 +31,6 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         clip_schedule: AbstractSchedule,
         privacy_params: GDPPrivacyParameters,
     ):
-        """Initialise the schedule with jointly-optimised noise and clip sub-schedules.
-
-        Args:
-            noise_schedule: Parametric schedule that produces per-step σ values.
-            clip_schedule: Parametric schedule that produces per-step clip thresholds.
-            privacy_params: GDP privacy budget and subsampling parameters.
-        """
         self.noise_schedule = noise_schedule
         self.clip_schedule = clip_schedule
         self.privacy_params = privacy_params
@@ -37,47 +38,36 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
     @classmethod
     def from_config(
         cls,
-        conf: SigmaAndClipScheduleConfig,
+        conf: DecoupledSigmaAndClipScheduleConfig,
         privacy_params: GDPPrivacyParameters,
-    ) -> "SigmaAndClipSchedule":
+    ) -> "DecoupledSigmaAndClipSchedule":
         T = privacy_params.T
         noise_schedule = base_schedule_factory(conf.noise, T)
         clip_schedule = base_schedule_factory(conf.clip, T)
         return cls(noise_schedule, clip_schedule, privacy_params)
 
     def get_private_noise_scales(self) -> Array:
-        return self.noise_schedule.get_valid_schedule().squeeze()
+        return self.get_private_clips() / self.get_private_weights()
 
     def get_private_clips(self) -> Array:
         return self.clip_schedule.get_valid_schedule().squeeze()
 
     def get_private_weights(self) -> Array:
-        private_sigmas = self.get_private_noise_scales()
-        clips = self.get_private_clips()
-        return self.privacy_params.project_weights(clips / private_sigmas).squeeze()
+        return self.noise_schedule.get_valid_schedule().squeeze()
 
     def apply_updates(self, updates) -> Self:
         return eqx.apply_updates(self, updates)
 
     @eqx.filter_jit
     def project(self) -> Self:
-        sigma_proj, clip_proj = self.privacy_params.project_sigma_and_clip(
-            self.get_private_noise_scales(), self.get_private_clips()
-        )
-
+        w_proj = self.privacy_params.project_weights(self.get_private_weights())
         new_noise_schedule = self.noise_schedule.__class__.from_projection(
             self.noise_schedule,
-            sigma_proj,
+            w_proj,
         )
-
-        new_clip_schedule = self.clip_schedule.__class__.from_projection(
-            self.clip_schedule,
-            clip_proj,
-        )
-
         return self.__class__(
             noise_schedule=new_noise_schedule,
-            clip_schedule=new_clip_schedule,
+            clip_schedule=self.clip_schedule,
             privacy_params=self.privacy_params,
         )
 

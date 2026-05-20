@@ -33,7 +33,7 @@ class ParallelSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
     ``_x_curr_sigmas/_clips`` carry the projected x_k through ``apply_updates``
     so that ``fista_advance`` can promote it to x_prev without needing to call
-    ``get_private_sigmas`` on the already-gradient-updated schedule.
+    ``get_private_noise_scales`` on the already-gradient-updated schedule.
     """
 
     noise_schedule: AbstractSchedule
@@ -91,14 +91,14 @@ class ParallelSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
             _fista_t=jnp.ones(()),  # t_1 = 1 => zero momentum on first extrapolation
         )
 
-    def get_private_sigmas(self) -> Array:
+    def get_private_noise_scales(self) -> Array:
         return self.noise_schedule.get_valid_schedule().squeeze()
 
     def get_private_clips(self) -> Array:
         return self.clip_schedule.get_valid_schedule().squeeze()
 
     def get_private_weights(self) -> Array:
-        private_sigmas = self.get_private_sigmas()
+        private_sigmas = self.get_private_noise_scales()
         clips = self.get_private_clips()
         return self.privacy_params.project_weights(clips / private_sigmas).squeeze()
 
@@ -121,7 +121,7 @@ class ParallelSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
     @eqx.filter_jit
     def project(self) -> Self:
-        sigmas = self.get_private_sigmas()
+        sigmas = self.get_private_noise_scales()
         clips = self.get_private_clips()
 
         proj_sigmas, proj_clips = self.privacy_params.project_sigma_and_clip(sigmas, clips)
@@ -156,7 +156,7 @@ class ParallelSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         t_next = (1 + jnp.sqrt(1 + 4 * self._fista_t**2)) / 2
         mom = (self._fista_t - 1) / t_next
 
-        x_sig = self.get_private_sigmas()
+        x_sig = self.get_private_noise_scales()
         x_clip = self.get_private_clips()
 
         # When _fista_t == 1 (first call), treat x_prev == x_curr so mom * 0 == 0.
@@ -194,7 +194,7 @@ class ParallelSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
             clip_schedule=x_new.clip_schedule,
             privacy_params=x_new.privacy_params,
             use_fista=self.use_fista,
-            _x_curr_sigmas=x_new.get_private_sigmas(),
+            _x_curr_sigmas=x_new.get_private_noise_scales(),
             _x_curr_clips=x_new.get_private_clips(),
             _x_prev_sigmas=self._x_curr_sigmas,  # x_k carried from fista_extrapolate
             _x_prev_clips=self._x_curr_clips,
@@ -257,7 +257,7 @@ class ParallelSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
     def _get_log_arrays(self) -> dict[str, Array]:
         return {
-            "sigmas": self.get_private_sigmas(),
+            "sigmas": self.get_private_noise_scales(),
             "clips": self.get_private_clips(),
             "mus": self.get_private_weights(),
         }

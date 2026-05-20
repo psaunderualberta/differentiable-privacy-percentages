@@ -9,7 +9,7 @@ class AbstractSchedule(eqx.Module):
     @abc.abstractmethod
     def get_valid_schedule(self) -> Array:
         raise NotImplementedError(
-            "Subclasses must implement get_private_sigmas method.",
+            "Subclasses must implement get_private_noise_scales method.",
         )
 
     @abc.abstractmethod

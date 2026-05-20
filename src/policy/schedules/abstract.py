@@ -13,9 +13,9 @@ from util.logger import Loggable, LoggableArray, LoggingSchema
 
 class AbstractNoiseAndClipSchedule(eqx.Module):
     @abstractmethod
-    def get_private_sigmas(self) -> Array:
+    def get_private_noise_scales(self) -> Array:
         raise NotImplementedError(
-            "Subclasses must implement get_private_sigmas method.",
+            "Subclasses must implement get_private_noise_scales method.",
         )
 
     @abstractmethod

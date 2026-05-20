@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import multiprocessing as mp
 import os
 import time
 from dataclasses import dataclass
@@ -45,6 +46,7 @@ from conf.optimizer_config import (
     AdamConfig,
     AdamWConfig,
     OptimizerConfig,
+    SGDConfig,
 )
 from networks.cnn.config import CNNConfig
 from networks.mlp.config import MLPConfig
@@ -105,11 +107,11 @@ EPSILONS: list[float] = [1, 3, 5, 8]
 DELTA: float = 1e-6
 BATCH_SIZE: int = 250  # T=250 ≈ 1 MNIST epoch (N=60 000)
 DATASETS: list[str] = ["mnist", "fashion-mnist"]
-NUM_OUTER_STEPS: int = 2000
+NUM_OUTER_STEPS: int = 1000
 SEEDS: tuple[int, ...] = (447831761, 159020393, 435372193)
 
 # --- Axis 1: vary T, architecture fixed at medium MLP ---
-T_VALUES: list[int] = [1000, 1500, 2000, 3000, 5000, 7000]
+T_VALUES: list[int] = [1500, 2000, 3000, 5000, 7000]
 
 # --- Axis 2: vary architecture, T fixed at ~20 epochs ---
 T_FOR_ARCH_SWEEP: int = 5000
@@ -123,7 +125,7 @@ MLP_ARCHS: list[MLPConfig] = [
 
 # CNN+MLP architectures
 OPTIMIZERS: list[OptimizerConfig] = [
-    # SGDConfig(learning_rate=dist_config_helper(value=0.1, distribution="constant")),
+    SGDConfig(learning_rate=dist_config_helper(value=0.05, distribution="constant")),
     AdamConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
     AdamWConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
 ]
@@ -285,6 +287,26 @@ class LauncherConfig:
     entity: str
     dry_run: bool = False
     """Print serialised configs without creating any W&B runs."""
+    num_workers: int = 8
+    """Number of parallel workers to use when creating W&B runs."""
+
+
+def _init_run(args: tuple[str, str, str, str, str, dict, str]) -> tuple[str, str, str]:
+    """Worker: create a single W&B run and return (opt_tag, run_id, name)."""
+    project, entity, name, group, axis, config, opt_tag = args
+    run = wandb.init(
+        project=project,
+        entity=entity,
+        name=name,
+        group=group,
+        config=config,
+        job_type="config-seed",
+        tags=["config-seed", axis, opt_tag],
+    )
+    assert run is not None
+    run_id = run.id
+    run.finish()
+    return opt_tag, run_id, name
 
 
 if __name__ == "__main__":
@@ -317,24 +339,32 @@ if __name__ == "__main__":
         for count, path in zip(run_counts, paths):
             print(f"\t{count} run IDs to:\n  {path}")
     else:
+        tasks = []
         for opt_tag, bucket in experiments.items():
+            for axis, group, name, sweep_conf in bucket:
+                tasks.append(
+                    (
+                        conf.project,
+                        conf.entity,
+                        name,
+                        group,
+                        axis,
+                        _to_run_config(sweep_conf),
+                        opt_tag,
+                    )
+                )
+
+        results_by_opt = {k: [] for k in experiments}
+        with mp.get_context("spawn").Pool(processes=conf.num_workers) as pool:
+            for opt_tag, run_id, name in pool.imap_unordered(_init_run, tasks):
+                results_by_opt[opt_tag].append((run_id, name))
+                print(f"  [{opt_tag}] {run_id}  {name}")
+
+        for opt_tag, results in results_by_opt.items():
             output_path = output_paths[opt_tag]
             with open(output_path, "w") as f:
-                for axis, group, name, sweep_conf in bucket:
-                    run = wandb.init(
-                        project=conf.project,
-                        entity=conf.entity,
-                        name=name,
-                        group=group,
-                        config=_to_run_config(sweep_conf),
-                        job_type="config-seed",
-                        tags=["config-seed", axis, opt_tag],
-                    )
-                    assert run is not None
-                    f.write(run.id + "\n")
-                    f.flush()
-                    run.finish()
-                    print(f"  [{opt_tag}] {run.id}  {name}")
+                for run_id, _name in results:
+                    f.write(run_id + "\n")
             print(f"\nRun IDs ({opt_tag}) → {output_path}")
 
         print("\nSubmit to SLURM:")

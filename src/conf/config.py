@@ -18,6 +18,7 @@ from networks.cnn.config import CNNConfig
 from networks.mlp.config import MLPConfig
 from policy.schedules.config import (
     AlternatingSigmaAndClipScheduleConfig,
+    DecoupledSigmaAndClipScheduleConfig,
     DynamicDPSGDScheduleConfig,
     ParallelSigmaAndClipScheduleConfig,
     PolicyAndClipScheduleConfig,
@@ -40,6 +41,10 @@ ScheduleConfig = Union[
         tyro.conf.subcommand("alternating-sigma-and-clip"),
     ],
     Annotated[SigmaAndClipScheduleConfig, tyro.conf.subcommand("sigma-and-clip")],
+    Annotated[
+        DecoupledSigmaAndClipScheduleConfig,
+        tyro.conf.subcommand("decoupled-sigma-and-clip"),
+    ],
     Annotated[PolicyAndClipScheduleConfig, tyro.conf.subcommand("policy-and-clip")],
     Annotated[DynamicDPSGDScheduleConfig, tyro.conf.subcommand("dynamic-dp-sgd")],
     Annotated[
@@ -92,7 +97,7 @@ class ESConfig:
     """Initial std-dev of Gaussian perturbations on ES-opted-in leaves.
     Treated as the *initial* σ when ``eta_sigma > 0`` (natural-gradient σ
     update enabled, Wierstra et al. 2014)."""  # noqa: RUF001
-    eta_sigma: DistributionConfig = dist_config_helper(value=0.0, distribution="constant")
+    eta_sigma: DistributionConfig = dist_config_helper(value=0.1, distribution="constant")
     """Learning rate for the natural-gradient log-σ update (sNES, Wierstra et
     al. 2014). 0 disables the σ update (σ stays at ``perturbation_sigma``)."""  # noqa: RUF001
     adaptation_enabled: bool = False

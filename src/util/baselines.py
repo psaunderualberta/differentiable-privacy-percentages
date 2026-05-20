@@ -100,7 +100,7 @@ class Baseline:
             sigmas_path = dynamic_dir / "sigmas.npy"
             clips_path = dynamic_dir / "clips.npy"
             sigmas_path.parent.mkdir(parents=True, exist_ok=True)
-            np.save(sigmas_path, np.asarray(self.best_dynamic_schedule.get_private_sigmas()))
+            np.save(sigmas_path, np.asarray(self.best_dynamic_schedule.get_private_noise_scales()))
             np.save(clips_path, np.asarray(self.best_dynamic_schedule.get_private_clips()))
             artifact.add_file(str(sigmas_path))
             artifact.add_file(str(clips_path))
@@ -360,7 +360,7 @@ class Baseline:
         T = int(schedule.privacy_params.T)
         name = "Dynamic-DPSGD"
 
-        sigmas = [float(v) for v in schedule.get_private_sigmas()]
+        sigmas = [float(v) for v in schedule.get_private_noise_scales()]
         sigma_df = pd.DataFrame([{"type": name, **{i: sigmas[i] for i in range(T)}}])
 
         clips = [float(v) for v in schedule.get_private_clips()]
@@ -401,7 +401,7 @@ class Baseline:
             ).project()
 
             # Update to values post-projection
-            sigma_val = schedule.get_private_sigmas().mean()
+            sigma_val = schedule.get_private_noise_scales().mean()
             clip_val = schedule.get_private_clips().mean()
 
             df = self.generate_schedule_data(schedule, name, with_progress_bar=False, iterations=10)

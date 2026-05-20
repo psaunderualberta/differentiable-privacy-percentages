@@ -121,7 +121,7 @@ def save_checkpoint(
     # Save human-readable schedules alongside the Orbax checkpoint so that
     # dp_psac_ref/run.py can consume them without importing src/.
     schedule = state["schedule"]
-    np.save(step_dir / "sigmas.npy", np.asarray(schedule.get_private_sigmas()))
+    np.save(step_dir / "sigmas.npy", np.asarray(schedule.get_private_noise_scales()))
     np.save(step_dir / "clips.npy", np.asarray(schedule.get_private_clips()))
 
     artifact = wandb.Artifact(
