@@ -12,11 +12,13 @@ from conf.config_util import (
     to_wandb_conf,
     to_wandb_sweep_params,
 )
+from conf.optimizer_config import OptimizerConfig, SGDConfig
 from networks.auto.config import AutoNetworkConfig
 from networks.cnn.config import CNNConfig
 from networks.mlp.config import MLPConfig
 from policy.schedules.config import (
     AlternatingSigmaAndClipScheduleConfig,
+    DecoupledSigmaAndClipScheduleConfig,
     DynamicDPSGDScheduleConfig,
     ParallelSigmaAndClipScheduleConfig,
     PolicyAndClipScheduleConfig,
@@ -39,6 +41,10 @@ ScheduleConfig = Union[
         tyro.conf.subcommand("alternating-sigma-and-clip"),
     ],
     Annotated[SigmaAndClipScheduleConfig, tyro.conf.subcommand("sigma-and-clip")],
+    Annotated[
+        DecoupledSigmaAndClipScheduleConfig,
+        tyro.conf.subcommand("decoupled-sigma-and-clip"),
+    ],
     Annotated[PolicyAndClipScheduleConfig, tyro.conf.subcommand("policy-and-clip")],
     Annotated[DynamicDPSGDScheduleConfig, tyro.conf.subcommand("dynamic-dp-sgd")],
     Annotated[
@@ -75,17 +81,50 @@ NetworkConfig = Union[
 
 
 @dataclass
+class ESConfig:
+    """Evolutionary-Strategies gradient estimator settings.
+
+    When ``enabled`` is True, the outer loop replaces analytic
+    ``value_and_grad`` with an antithetic OpenAI-ES estimator over the leaves
+    selected by each schedule's ``es_filter()``.
+    """
+
+    enabled: bool = False
+    population_size: DistributionConfig = dist_config_helper(value=32, distribution="constant")
+    """Number of perturbation samples per outer step. Must be even (antithetic
+    pairs) and divisible by the GPU count; asserted at startup."""
+    perturbation_sigma: DistributionConfig = dist_config_helper(value=0.01, distribution="constant")
+    """Initial std-dev of Gaussian perturbations on ES-opted-in leaves.
+    Treated as the *initial* σ when ``eta_sigma > 0`` (natural-gradient σ
+    update enabled, Wierstra et al. 2014)."""  # noqa: RUF001
+    eta_sigma: DistributionConfig = dist_config_helper(value=0.1, distribution="constant")
+    """Learning rate for the natural-gradient log-σ update (sNES, Wierstra et
+    al. 2014). 0 disables the σ update (σ stays at ``perturbation_sigma``)."""  # noqa: RUF001
+    adaptation_enabled: bool = False
+    """Enable Wierstra et al. (2014) §6.2 adaptation sampling for ``η_σ``."""  # noqa: RUF001
+    adaptation_c: float = 1.5
+    """Hypothetical-σ multiplier used by adaptation sampling."""  # noqa: RUF001
+    adaptation_rho: float = 0.5
+    """U-statistic threshold above which adaptation sampling grows ``η_σ``."""  # noqa: RUF001
+    adaptation_step: float = 0.1
+    """Multiplicative step size for the ``η_σ`` update."""  # noqa: RUF001
+    eta_sigma_max: float = 1.0
+    """Upper clamp on ``η_σ`` under adaptation sampling."""  # noqa: RUF001
+
+
+@dataclass
 class ScheduleOptimizerConfig:
     schedule: ScheduleConfig = dataclasses.field(
-        default_factory=WarmupParallelSigmaAndClipScheduleConfig,
+        default_factory=ParallelSigmaAndClipScheduleConfig,
     )
     batch_size: int = 1
-    lr: DistributionConfig = dist_config_helper(value=0.1, distribution="constant")
+    lr: DistributionConfig = dist_config_helper(value=0.05, distribution="constant")
     momentum: DistributionConfig = dist_config_helper(
         values=(0.0, 0.1, 0.3),
         distribution="values",
     )
     max_sigma: float = 10.0
+    es: ESConfig = dataclasses.field(default_factory=ESConfig)
     # When non-empty, sweep over these schedule type names rather than fixing
     # _type to the current schedule's class.  Set programmatically before
     # calling to_wandb_sweep(); not exposed as a CLI flag.
@@ -127,13 +166,12 @@ class EnvConfig:
 
     network: NetworkConfig = dataclasses.field(default_factory=AutoNetworkConfig)
 
-    lr: DistributionConfig = dist_config_helper(value=0.1, distribution="constant")
-    optimizer: Literal["sgd", "adam", "adamw"] = "sgd"
+    optimizer: OptimizerConfig = dataclasses.field(default_factory=SGDConfig)
     loss_type: Literal["mse", "cce"] = "cce"
 
     # Privacy Parameters
     eps: float = 0.5
-    delta: float = 1e-7
+    delta: float = 1e-6
     batch_size: int = 250
     num_training_steps: int = 100
     scan_segments: int = -1

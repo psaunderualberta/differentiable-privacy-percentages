@@ -400,6 +400,96 @@ class GDPPrivacyParameters(eqx.Module):
         return get_c_i_tildes(mu)
 
     @eqx.filter_jit
+    def project_inverse_sigmas(self, sigmas: Array, tol: float | Array = 1e-6) -> Array:
+        """
+        post-GD weights (i.e. after updating sigma, clip, policy, or any three)
+        returns: projected weights W s.t. 1^T @ W = self.T && W in [self.w_min, self.w_max]
+        """
+
+        # Ensure jnp array
+        tol = jnp.asarray(tol)
+
+        bound = (self.mu / self.p) ** 2 + self.T  # == sum_{i=1}^{T} e^(1 / sigmas_{i}^{2})
+
+        def g(y, lam):
+            return y - sigmas - lam * jnp.exp(1 / y) / y**2
+
+        def g_prime(y, lam):
+            return 1 + lam * (jnp.exp(1 / y) * (2 * y + 1)) / y**4
+
+        def safe_avg(lo_hi: tuple[Array, Array]) -> Array:
+            lo, hi = lo_hi
+            return lo + (hi - lo) / 2
+
+        def sigmas_tilde_cond(sigmas_tilde_lam: tuple[Array, Array]) -> Array:
+            sigmas_tilde, lam = sigmas_tilde_lam
+            return jnp.any(jnp.abs(g(sigmas_tilde, lam)) > tol)
+
+        y_floor = jnp.asarray(1e-6)
+
+        def sigmas_tilde_body(
+            sigmas_tilde_lam: tuple[Array, Array],
+        ) -> tuple[Array, Array]:
+            """
+            The goal is to find c_i_tilde s.t.
+            """
+            sigmas_tilde, lam = sigmas_tilde_lam
+
+            step = g(sigmas_tilde, lam) / g_prime(sigmas_tilde, lam)
+            new_sigmas_tilde = jnp.maximum(sigmas_tilde - step, y_floor)
+            return (new_sigmas_tilde, lam)
+
+        def get_sigmas_tilde(lam: Array) -> Array:
+            sigmas_tilde, _ = jlax.while_loop(
+                sigmas_tilde_cond,
+                sigmas_tilde_body,
+                (sigmas, lam),
+            )
+
+            return sigmas_tilde
+
+        def h(lam: Array) -> Array:
+            sigmas_tilde = get_sigmas_tilde(lam)
+
+            return jnp.sum(jnp.exp(1 / sigmas_tilde)) - bound
+
+        def cond(lo_hi: tuple[Array, Array]) -> Array:
+            lo, hi = lo_hi
+            return jnp.any(hi - lo > tol)
+
+        def body(lo_hi: tuple[Array, Array]) -> tuple[Array, Array]:
+            mid = safe_avg(lo_hi)
+            obj_derivative = h(mid)
+
+            lo, hi = lo_hi
+            _cond = jnp.all(obj_derivative < 0)
+            new_lo = jlax.select(_cond, lo, mid)
+            new_hi = jlax.select(_cond, mid, hi)
+
+            return (new_lo, new_hi)
+
+        lam_min = jnp.asarray(1e-6)  # lam is constrained to be >= 0
+
+        def _find_lam_max_cond(lam):
+            return h(lam) > 0
+
+        def _find_lam_max_body(lam):
+            return lam * 1.05
+
+        lam_max = jlax.while_loop(_find_lam_max_cond, _find_lam_max_body, lam_min)
+
+        # run bisection
+        lo_hi = jlax.while_loop(cond, body, (lam_min, lam_max))
+
+        # final result
+        mu = safe_avg(lo_hi)
+
+        # If already feasible, return originals unchanged.
+        cur = jnp.sum(jnp.exp(1 / sigmas))
+        feasible = jnp.logical_and(jnp.isfinite(cur), cur <= bound)
+        return jnp.where(feasible, sigmas, get_sigmas_tilde(mu))
+
+    @eqx.filter_jit
     def project_sigma_and_clip(
         self,
         sigmas: Array,

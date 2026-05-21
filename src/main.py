@@ -1,5 +1,3 @@
-import jax
-import numpy as np
 import optax
 import tqdm
 from jax import device_put, devices
@@ -8,21 +6,21 @@ from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 
 import wandb
+from conf.scope import RunContext, current, using
 from conf.singleton_conf import SingletonConfig
 from environments.dp import get_private_model_training_schemas
 from environments.dp_params import DPTrainingParams
-from environments.outer_loop import make_training_loss_fn
+from environments.outer_loop import make_initial_es_state, make_training_loss_fn
 from policy.factory import make_schedule
 from privacy.gdp_privacy import get_privacy_params
 from util.baselines import Baseline
 from util.checkpointing import (
-    load_baseline_data,
     load_checkpoint,
     make_state,
-    save_baseline_data,
     save_checkpoint,
 )
 from util.dataloaders import get_dataset_shapes
+from util.eval import make_dp_psac_ref_cmd
 from util.job_chain import (
     register_signal_handler,
     resubmit_if_requested,
@@ -30,14 +28,14 @@ from util.job_chain import (
     time_limit_approaching,
 )
 from util.logger import Loggable, WandbTableLogger
-from util.util import ensure_valid_pytree, get_optimal_mesh
+from util.util import ensure_valid_pytree, get_optimal_mesh, jnp2np2jnp
 from util.wandb_init import init_wandb_run
 
 
 def main():
     """Run the outer gradient-based loop that learns the DP-SGD noise/clip schedule."""
-    sweep_config = SingletonConfig.get_sweep_config_instance()
-    wandb_config = SingletonConfig.get_wandb_config_instance()
+    sweep_config = current().config.sweep
+    wandb_config = current().config.wandb_conf
 
     num_outer_steps = sweep_config.num_outer_steps
     env_prng_seed = sweep_config.prng_seed.sample()
@@ -54,12 +52,31 @@ def main():
     print(f"\tmu-GDP: {gdp_params.mu}")
 
     # Initialize schedule
-    schedule_conf = SingletonConfig.get_schedule_optimizer_config().schedule
+    schedule_conf = current().config.sweep.schedule_optimizer.schedule
     schedule = make_schedule(schedule_conf, gdp_params)
     schedule = schedule.project()
     if getattr(schedule, "use_fista", False):
         schedule = schedule.fista_extrapolate()
-    schedule_batch_size = sweep_config.schedule_optimizer.batch_size
+    # Determine the sharded outer-loop axis size:
+    #   * Analytic mode → schedule_batch_size (independent vmapped DP-SGD runs)
+    #   * ES mode       → population_size // 2 (one CRN key per antithetic pair)
+    es_conf = sweep_config.schedule_optimizer.es
+    if es_conf.enabled:
+        population_size = int(es_conf.population_size.sample())
+        if population_size % 2 != 0:
+            raise ValueError(
+                f"ES population_size must be even (antithetic pairs); got {population_size}.",
+            )
+        num_gpus = len(devices("gpu"))
+        if population_size % (2 * num_gpus) != 0:
+            raise ValueError(
+                f"ES population_size ({population_size}) must be divisible by "
+                f"2 * num_gpus ({2 * num_gpus}) so antithetic pairs split evenly.",
+            )
+        parallel_axis_size = population_size // 2
+        print(f"ES enabled: population_size={population_size}, half_pop={parallel_axis_size}")
+    else:
+        parallel_axis_size = sweep_config.schedule_optimizer.batch_size
 
     # Initialize private environment
     env_params = DPTrainingParams.create_direct_from_config()
@@ -70,8 +87,9 @@ def main():
         logger.add_schema(schema)
 
     # Build mesh (for sharding noise_keys) and the JIT-compiled training loss function
-    mesh = get_optimal_mesh(devices("gpu"), schedule_batch_size)
+    mesh = get_optimal_mesh(devices("gpu"), parallel_axis_size)
     get_training_loss = make_training_loss_fn(env_params)
+    es_state = make_initial_es_state()  # None unless ES enabled
 
     # Initialise optimizer and PRNG keys (may be overwritten by checkpoint restore)
     optimizer = optax.sgd(
@@ -83,10 +101,12 @@ def main():
     key = jr.PRNGKey(env_prng_seed)
     key, init_key, _ = jr.split(key, 3)
 
-    # --- Checkpoint restore (happens before wandb.init so we know start_step) ---
+    # ---
+    # Checkpoint restore (happens before wandb.init so we know start_step)
+    # ---
     start_step = 0
     if wandb_config.checkpoint_run_id is not None:
-        state_template = make_state(schedule, opt_state, key, init_key, 0)
+        state_template = make_state(schedule, opt_state, key, init_key, 0, es_state)
         result = load_checkpoint(
             wandb_config.checkpoint_run_id,
             wandb_config.checkpoint_step,
@@ -100,54 +120,66 @@ def main():
             opt_state = restored_state["opt_state"]
             key = restored_state["key"]
             init_key = restored_state["init_key"]
+            es_state = restored_state["es_state"]
             # Orbax restores arrays as device-committed (bound to device 0).
             # This conflicts with sharded noise_keys inside the JIT call.
             # Round-trip through numpy to produce uncommitted arrays, matching
             # what a fresh (non-checkpoint) run provides.
-            schedule = jax.tree_util.tree_map(
-                lambda x: jax.numpy.array(np.asarray(x)) if isinstance(x, jax.Array) else x,
-                schedule,
-            )
-            opt_state = jax.tree_util.tree_map(
-                lambda x: jax.numpy.array(np.asarray(x)) if isinstance(x, jax.Array) else x,
-                opt_state,
-            )
-            key = jax.numpy.array(np.asarray(key))
-            init_key = jax.numpy.array(np.asarray(init_key))
+            schedule = jnp2np2jnp(schedule)
+            opt_state = jnp2np2jnp(opt_state)
+            key = jnp2np2jnp(key)
+            init_key = jnp2np2jnp(init_key)
 
-    # --- W&B init ---
+    # ---
+    # W&B init
+    # ---
     print("Starting...")
     run = init_wandb_run(wandb_config, sweep_config)
     register_signal_handler()
 
-    # --- Baseline setup ---
+    _dp_psac_ref_cmd = make_dp_psac_ref_cmd(
+        run_id=run.id,
+        entity=wandb_config.entity,
+        project=wandb_config.project,
+        dataset=sweep_config.dataset,
+        batch_size=sweep_config.env.batch_size,
+        lr=env_params.lr,
+        delta=gdp_params.delta,
+        arch=type(env_params.network).__name__.lower(),
+    )
+    print(f"dp_psac_ref eval command:\n  {_dp_psac_ref_cmd}")
+
+    # ---
+    # Baseline setup
+    # ---
     eval_key = jr.PRNGKey(0)
-    baseline = Baseline(env_params, gdp_params, num_reps=32)
+    baseline = Baseline(env_params, gdp_params, eval_key)
     log_baselines_during_training = (
         sweep_config.with_baselines and sweep_config.baseline_log_interval > 0
     )
     baseline_data_saved = False
     if sweep_config.with_baselines:
         # On checkpoint restarts, reuse the baseline data from the source run
-        cached_df = None
-        if wandb_config.checkpoint_run_id is not None:
-            cached_df = load_baseline_data(
-                wandb_config.checkpoint_run_id,
-                wandb_config.entity,
-                wandb_config.project,
-            )
-        if cached_df is not None:
-            baseline.original_df = cached_df
-            baseline.df = cached_df.copy()
+        if wandb_config.checkpoint_run_id is not None and baseline.restore_from_cache(
+            wandb_config.checkpoint_run_id,
+            wandb_config.entity,
+            wandb_config.project,
+        ):
             print("Reusing cached baseline data from checkpoint run.")
             baseline_data_saved = True  # already persisted under source run_id
         elif log_baselines_during_training:
             # Pre-generate now so periodic log_comparison calls work immediately.
             # End-only case (baseline_log_interval == 0) is deferred to log_comparison().
             baseline.generate_baseline_data(eval_key)
-            save_baseline_data(baseline.original_df, run.id, run)
+            baseline.save(run.id, run)
             baseline_data_saved = True
 
+    if log_baselines_during_training:
+        baseline.log_comparison(schedule, eval_key, logger=logger)
+
+    # ---
+    # Main Training Loop
+    # ---
     iterator = tqdm.tqdm(
         range(start_step, num_outer_steps),
         desc="Training Progress",
@@ -168,12 +200,13 @@ def main():
 
         # mb_key = device_put(mb_key, sharding)
         # init_key = device_put(init_key, sharding)
-        noise_keys = device_put(jr.split(noise_key, schedule_batch_size), sharding)
-        (loss, (losses, accuracies, val_accs)), grads = get_training_loss(
+        noise_keys = device_put(jr.split(noise_key, parallel_axis_size), sharding)
+        (loss, (losses, accuracies, val_accs)), grads, es_state = get_training_loss(
             schedule,
             mb_key,
             init_key,
             noise_keys,
+            es_state,
         )
 
         logger.log(Loggable(table_name="train_losses", data={"losses": losses}))
@@ -206,38 +239,43 @@ def main():
         iterator.set_description(f"Training Progress - Loss: {loss:.4f}")
 
         if (t + 1) % wandb_config.checkpoint_every == 0:
-            save_checkpoint(make_state(schedule, opt_state, key, init_key, t), t, run)
+            save_checkpoint(make_state(schedule, opt_state, key, init_key, t, es_state), t, run)
 
         if log_baselines_during_training and (t + 1) % sweep_config.baseline_log_interval == 0:
-            baseline.log_comparison(schedule, eval_key)
+            baseline.log_comparison(schedule, eval_key, logger=logger)
 
         if shutdown_requested() or time_limit_approaching():
             print(f"Graceful shutdown at step {t}; checkpointing for job-chain resubmit")
-            save_checkpoint(make_state(schedule, opt_state, key, init_key, t), t, run)
+            save_checkpoint(make_state(schedule, opt_state, key, init_key, t, es_state), t, run)
             break
 
-    # Final logging
-    for loggable_item in schedule.get_loggables(force=True):
-        logger.log(loggable_item)
+    # Resubmit job (dependency ensures won't start until current ends)
+    if not shutdown_requested() and not time_limit_approaching():
+        # Final logging
+        for loggable_item in schedule.get_loggables(force=True):
+            logger.log(loggable_item)
 
-    if sweep_config.with_baselines:
-        baseline.log_comparison(schedule, eval_key)
-        if not baseline_data_saved:
-            # End-only case: log_comparison() lazily generated baseline data above;
-            # save it now so future restarts can skip the sweep.
-            save_baseline_data(baseline.original_df, run.id, run)
+        if sweep_config.with_baselines:
+            baseline.log_comparison(schedule, eval_key, logger=logger)
 
-    for multi_line_table in schedule.get_logging_schemas():
-        logger.line_plot(multi_line_table.table_name)
-    for bulk_line_table in get_private_model_training_schemas():
-        logger.bulk_line_plots(bulk_line_table.table_name)
+        for multi_line_table in schedule.get_logging_schemas():
+            logger.line_plot(multi_line_table.table_name)
+        for bulk_line_table in get_private_model_training_schemas():
+            logger.bulk_line_plots(bulk_line_table.table_name)
 
+    # End-only case: log_comparison() lazily generated baseline data above;
+    # save it now so future restarts can skip the sweep.
+    if sweep_config.with_baselines and not baseline_data_saved:
+        baseline.save(run.id, run)
+
+    run_id = run.id
     logger.finish()
+    print(f"dp_psac_ref eval command:\n  {_dp_psac_ref_cmd}")
     run.finish()
 
-    # Resubmit if finished
-    resubmit_if_requested(run.id)
+    resubmit_if_requested(run_id)
 
 
 if __name__ == "__main__":
-    main()
+    with using(RunContext(SingletonConfig.get_instance())):
+        main()

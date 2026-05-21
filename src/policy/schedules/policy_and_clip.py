@@ -45,7 +45,7 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
         clip_schedule = base_schedule_factory(conf.clip, T)
         return cls(policy_schedule, clip_schedule, privacy_params)
 
-    def get_private_sigmas(self) -> Array:
+    def get_private_noise_scales(self) -> Array:
         clips = self.clip_schedule.get_valid_schedule()
         policies = self.policy_schedule.get_valid_schedule()
         return self.privacy_params.weights_to_sigma_schedule(clips, policies).squeeze()
@@ -76,7 +76,7 @@ class PolicyAndClipSchedule(AbstractNoiseAndClipSchedule):
     def _get_log_arrays(self) -> dict[str, Array]:
         weights = self.get_private_weights()
         return {
-            "sigmas": self.get_private_sigmas(),
+            "sigmas": self.get_private_noise_scales(),
             "clips": self.get_private_clips(),
             "weights": weights,
             "mus": self.privacy_params.weights_to_mu_schedule(weights),

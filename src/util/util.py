@@ -5,6 +5,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
+import numpy as np
 from jax import tree as jt
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -376,3 +377,10 @@ def get_optimal_mesh(devices_, num_training_runs, printing=True):
         printing=printing,
     )
     return Mesh(devices_[:num_gpus], "x")
+
+
+def jnp2np2jnp(pytree: PyTree) -> PyTree:
+    return jt.map(
+        lambda x: jnp.array(np.asarray(x)) if isinstance(x, jax.Array) else x,
+        pytree,
+    )

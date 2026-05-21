@@ -152,7 +152,7 @@ class TestParallelSigmaAndClipFISTA:
         # t=1 => mom=0 => y = x; project first so sigmas/clips are on-constraint.
         s = _make_parallel(params).project()
         y = s.fista_extrapolate()
-        assert jnp.allclose(y.get_private_sigmas(), s.get_private_sigmas(), atol=1e-5)
+        assert jnp.allclose(y.get_private_noise_scales(), s.get_private_noise_scales(), atol=1e-5)
 
     def test_first_extrapolate_is_noop_on_clips(self, params):
         s = _make_parallel(params).project()
@@ -162,7 +162,7 @@ class TestParallelSigmaAndClipFISTA:
     def test_first_extrapolate_seeds_x_curr_from_schedule(self, params):
         s = _make_parallel(params).project()
         y = s.fista_extrapolate()
-        assert jnp.allclose(y._x_curr_sigmas, s.get_private_sigmas(), atol=1e-5)
+        assert jnp.allclose(y._x_curr_sigmas, s.get_private_noise_scales(), atol=1e-5)
         assert jnp.allclose(y._x_curr_clips, s.get_private_clips(), atol=1e-5)
 
     def test_first_extrapolate_seeds_x_prev_equal_to_x_curr(self, params):
@@ -177,10 +177,10 @@ class TestParallelSigmaAndClipFISTA:
         assert float(s.fista_extrapolate()._fista_t) == pytest.approx(2.5)
 
     def test_extrapolate_carries_x_curr(self, params):
-        # _x_curr after extrapolate == get_private_sigmas() at the time of the call.
+        # _x_curr after extrapolate == get_private_noise_scales() at the time of the call.
         s = _make_parallel(params, noise_val=2.0)
         y = s.fista_extrapolate()
-        assert jnp.allclose(y._x_curr_sigmas, s.get_private_sigmas(), atol=1e-5)
+        assert jnp.allclose(y._x_curr_sigmas, s.get_private_noise_scales(), atol=1e-5)
 
     def test_extrapolation_matches_formula(self, params):
         # y = x + mom*(x - x_prev) for a non-trivial t.
@@ -195,7 +195,7 @@ class TestParallelSigmaAndClipFISTA:
             fista_t=t,
         )
         y = s.fista_extrapolate()
-        assert jnp.allclose(y.get_private_sigmas(), expected_y * jnp.ones(T), atol=1e-5)
+        assert jnp.allclose(y.get_private_noise_scales(), expected_y * jnp.ones(T), atol=1e-5)
 
     def test_extrapolation_overshoots_x_when_moving_forward(self, params):
         # If x > x_prev, y should be > x (extrapolation continues the trend).
@@ -206,7 +206,7 @@ class TestParallelSigmaAndClipFISTA:
             fista_t=3.0,
         )
         y = s.fista_extrapolate()
-        assert jnp.all(y.get_private_sigmas() > s.get_private_sigmas())
+        assert jnp.all(y.get_private_noise_scales() > s.get_private_noise_scales())
 
     # ── fista_advance ────────────────────────────────────────────────────────
 
@@ -225,7 +225,7 @@ class TestParallelSigmaAndClipFISTA:
     def test_advance_sets_x_curr_to_x_new_sigmas(self, params):
         x_new = _make_parallel(params, noise_val=0.8, clip_val=0.3)
         advanced = _make_parallel(params).fista_advance(x_new)
-        assert jnp.allclose(advanced._x_curr_sigmas, x_new.get_private_sigmas(), atol=1e-5)
+        assert jnp.allclose(advanced._x_curr_sigmas, x_new.get_private_noise_scales(), atol=1e-5)
         assert jnp.allclose(advanced._x_curr_clips, x_new.get_private_clips(), atol=1e-5)
 
     # ── state preservation ───────────────────────────────────────────────────
@@ -260,7 +260,9 @@ class TestParallelSigmaAndClipFISTA:
 
     def test_project_satisfies_privacy_constraint(self, params):
         s = _make_parallel(params, noise_val=2.0, clip_val=1.0).project()
-        expenditure = params.compute_expenditure(s.get_private_sigmas(), s.get_private_clips())
+        expenditure = params.compute_expenditure(
+            s.get_private_noise_scales(), s.get_private_clips()
+        )
         assert float(expenditure) <= float(params.mu) + 1e-5
 
 
@@ -299,7 +301,7 @@ class TestWarmupParallelSigmaAndClipFISTA:
     def test_first_extrapolate_is_noop(self, params):
         s = _make_warmup(params).project()
         y = s.fista_extrapolate()
-        assert jnp.allclose(y.get_private_sigmas(), s.get_private_sigmas(), atol=1e-5)
+        assert jnp.allclose(y.get_private_noise_scales(), s.get_private_noise_scales(), atol=1e-5)
         assert jnp.allclose(y.get_private_clips(), s.get_private_clips(), atol=1e-5)
 
     def test_extrapolate_does_not_advance_t(self, params):
@@ -328,7 +330,7 @@ class TestWarmupParallelSigmaAndClipFISTA:
         y = s.fista_extrapolate()
         x_new = y.project()
         advanced = y.fista_advance(x_new)
-        assert jnp.allclose(advanced._x_prev_sigmas, x_new.get_private_sigmas(), atol=1e-5)
+        assert jnp.allclose(advanced._x_prev_sigmas, x_new.get_private_noise_scales(), atol=1e-5)
         assert jnp.allclose(advanced._x_prev_clips, x_new.get_private_clips(), atol=1e-5)
 
     # ── fista_advance: normal operation (no reset) ───────────────────────────
@@ -355,7 +357,7 @@ class TestWarmupParallelSigmaAndClipFISTA:
         y = s.fista_extrapolate()
         x_new = y.project()
         advanced = y.fista_advance(x_new)
-        assert jnp.allclose(advanced._x_curr_sigmas, x_new.get_private_sigmas(), atol=1e-5)
+        assert jnp.allclose(advanced._x_curr_sigmas, x_new.get_private_noise_scales(), atol=1e-5)
 
     def test_advance_sets_x_prev_to_old_x_curr_outside_transition(self, params):
         # Directly construct y with a known _x_curr to verify the promotion.
@@ -403,7 +405,9 @@ class TestWarmupParallelSigmaAndClipFISTA:
 
     def test_project_satisfies_privacy_constraint_in_warmup(self, params):
         s = _make_warmup(params, step_count=1, warmup_noise=2.0, warmup_clip=1.0).project()
-        expenditure = params.compute_expenditure(s.get_private_sigmas(), s.get_private_clips())
+        expenditure = params.compute_expenditure(
+            s.get_private_noise_scales(), s.get_private_clips()
+        )
         assert float(expenditure) <= float(params.mu) + 1e-5
 
     def test_project_satisfies_privacy_constraint_in_tail(self, params):
@@ -413,7 +417,9 @@ class TestWarmupParallelSigmaAndClipFISTA:
         for _ in range(WARMUP_STEPS):
             s = s.project()
         s = s.project()  # one tail-phase projection
-        expenditure = params.compute_expenditure(s.get_private_sigmas(), s.get_private_clips())
+        expenditure = params.compute_expenditure(
+            s.get_private_noise_scales(), s.get_private_clips()
+        )
         assert float(expenditure) <= float(params.mu) + 1e-5
 
 
@@ -475,7 +481,7 @@ class TestFISTAMomentumProperties:
             fista_t=t,
         )
         y = s.fista_extrapolate()
-        assert jnp.allclose(y.get_private_sigmas(), expected_y * jnp.ones(T), atol=1e-4)
+        assert jnp.allclose(y.get_private_noise_scales(), expected_y * jnp.ones(T), atol=1e-4)
 
     @given(t0=_t_st)
     @_fista_settings

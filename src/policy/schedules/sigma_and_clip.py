@@ -45,14 +45,14 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         clip_schedule = base_schedule_factory(conf.clip, T)
         return cls(noise_schedule, clip_schedule, privacy_params)
 
-    def get_private_sigmas(self) -> Array:
+    def get_private_noise_scales(self) -> Array:
         return self.noise_schedule.get_valid_schedule().squeeze()
 
     def get_private_clips(self) -> Array:
         return self.clip_schedule.get_valid_schedule().squeeze()
 
     def get_private_weights(self) -> Array:
-        private_sigmas = self.get_private_sigmas()
+        private_sigmas = self.get_private_noise_scales()
         clips = self.get_private_clips()
         return self.privacy_params.project_weights(clips / private_sigmas).squeeze()
 
@@ -61,24 +61,29 @@ class SigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
     @eqx.filter_jit
     def project(self) -> Self:
-        private_weights = self.get_private_weights()
-        private_clips = self.get_private_clips()
+        sigma_proj, clip_proj = self.privacy_params.project_sigma_and_clip(
+            self.get_private_noise_scales(), self.get_private_clips()
+        )
 
-        new_noises = private_clips / private_weights
         new_noise_schedule = self.noise_schedule.__class__.from_projection(
             self.noise_schedule,
-            new_noises,
+            sigma_proj,
+        )
+
+        new_clip_schedule = self.clip_schedule.__class__.from_projection(
+            self.clip_schedule,
+            clip_proj,
         )
 
         return self.__class__(
             noise_schedule=new_noise_schedule,
-            clip_schedule=self.clip_schedule,
+            clip_schedule=new_clip_schedule,
             privacy_params=self.privacy_params,
         )
 
     def _get_log_arrays(self) -> dict[str, Array]:
         return {
-            "sigmas": self.get_private_sigmas(),
+            "sigmas": self.get_private_noise_scales(),
             "clips": self.get_private_clips(),
             "mus": self.get_private_weights(),
         }

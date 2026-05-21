@@ -117,7 +117,7 @@ class WarmupParallelSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
     def _is_warmup(self) -> Array:
         return jnp.all(self.step_count < self.warmup_steps)
 
-    def get_private_sigmas(self) -> Array:
+    def get_private_noise_scales(self) -> Array:
         is_warmup = self._is_warmup()
         return jlax.cond(
             is_warmup,
@@ -134,7 +134,7 @@ class WarmupParallelSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         )
 
     def get_private_weights(self) -> Array:
-        private_sigmas = self.get_private_sigmas()
+        private_sigmas = self.get_private_noise_scales()
         clips = self.get_private_clips()
         return self.privacy_params.project_weights(clips / private_sigmas).squeeze()
 
@@ -167,7 +167,7 @@ class WarmupParallelSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         is_last_warmup = self.step_count == self.warmup_steps - 1
 
         proj_sigmas, proj_clips = self.privacy_params.project_sigma_and_clip(
-            self.get_private_sigmas(),
+            self.get_private_noise_scales(),
             self.get_private_clips(),
         )
 
@@ -239,7 +239,7 @@ class WarmupParallelSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         t_next = (1 + jnp.sqrt(1 + 4 * self._fista_t**2)) / 2
         mom = (self._fista_t - 1) / t_next
 
-        x_sig = self.get_private_sigmas()
+        x_sig = self.get_private_noise_scales()
         x_clip = self.get_private_clips()
 
         # When _fista_t == 1 (first call), treat x_prev == x_curr so mom * 0 == 0.
@@ -288,7 +288,7 @@ class WarmupParallelSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         # Reset at the warmup-to-tail transition: zero momentum for the first tail step.
         at_transition = int(x_new.step_count) == x_new.warmup_steps
         fista_t_new = jnp.ones(()) if at_transition else t_next
-        x_prev_sig = x_new.get_private_sigmas() if at_transition else self._x_curr_sigmas
+        x_prev_sig = x_new.get_private_noise_scales() if at_transition else self._x_curr_sigmas
         x_prev_clip = x_new.get_private_clips() if at_transition else self._x_curr_clips
 
         return self.__class__(
@@ -300,7 +300,7 @@ class WarmupParallelSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
             step_count=x_new.step_count,
             warmup_steps=x_new.warmup_steps,
             use_fista=self.use_fista,
-            _x_curr_sigmas=x_new.get_private_sigmas(),
+            _x_curr_sigmas=x_new.get_private_noise_scales(),
             _x_curr_clips=x_new.get_private_clips(),
             _x_prev_sigmas=x_prev_sig,
             _x_prev_clips=x_prev_clip,
@@ -373,7 +373,7 @@ class WarmupParallelSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
     def _get_log_arrays(self) -> dict[str, Array]:
         return {
-            "sigmas": self.get_private_sigmas(),
+            "sigmas": self.get_private_noise_scales(),
             "clips": self.get_private_clips(),
             "mus": self.get_private_weights(),
         }

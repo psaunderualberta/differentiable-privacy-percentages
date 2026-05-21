@@ -151,52 +151,56 @@ class TestProperties:
 
 
 # ---------------------------------------------------------------------------
-# get_private_sigmas
+# get_private_noise_scales
 # ---------------------------------------------------------------------------
 
 
 class TestGetPrivateSigmas:
     def test_shape(self, schedule):
-        assert schedule.get_private_sigmas().shape == (T,)
+        assert schedule.get_private_noise_scales().shape == (T,)
 
     def test_all_positive(self, schedule):
-        assert jnp.all(schedule.get_private_sigmas() > 0)
+        assert jnp.all(schedule.get_private_noise_scales() > 0)
 
     def test_formula(self, schedule):
         """sigma_i = (C_0 / mu_0) * (rho_mu * rho_C)^(-i/T)"""
         expected = (schedule.C_0 / schedule.mu_0) * (schedule.rho_mu * schedule.rho_C) ** (
             -schedule.iters / T
         )
-        assert jnp.allclose(schedule.get_private_sigmas(), expected, atol=1e-6)
+        assert jnp.allclose(schedule.get_private_noise_scales(), expected, atol=1e-6)
 
     def test_monotone_increasing_when_rho_product_lt_1(self, privacy_params):
         """rho_mu * rho_C = 0.25 < 1 → (product)^(-i/T) = 4^(i/T) increases → sigmas increase."""
         s = DynamicDPSGDSchedule(0.5, 0.5, C_0, privacy_params)
-        sigmas = s.get_private_sigmas()
+        sigmas = s.get_private_noise_scales()
         assert jnp.all(jnp.diff(sigmas) > 0)
 
     def test_monotone_decreasing_when_rho_product_gt_1(self, privacy_params):
         """rho_mu * rho_C = 4 > 1 → (product)^(-i/T) decreases → sigmas decrease."""
         s = DynamicDPSGDSchedule(2.0, 2.0, C_0, privacy_params)
-        sigmas = s.get_private_sigmas()
+        sigmas = s.get_private_noise_scales()
         assert jnp.all(jnp.diff(sigmas) < 0)
 
     def test_constant_when_rho_product_eq_1(self, privacy_params):
         """rho_mu * rho_C = 1 → (product)^(-i/T) = 1 everywhere → constant sigmas."""
         s = DynamicDPSGDSchedule(2.0, 0.5, C_0, privacy_params)
-        sigmas = s.get_private_sigmas()
+        sigmas = s.get_private_noise_scales()
         assert jnp.allclose(sigmas, sigmas[0], atol=1e-5)
 
     def test_finite_values(self, schedule):
-        assert jnp.all(jnp.isfinite(schedule.get_private_sigmas()))
+        assert jnp.all(jnp.isfinite(schedule.get_private_noise_scales()))
 
     def test_first_element_formula(self, schedule):
         expected_first = (C_0 / float(schedule.mu_0)) * (RHO_MU * RHO_C) ** (-1.0 / T)
-        assert float(schedule.get_private_sigmas()[0]) == pytest.approx(expected_first, rel=1e-5)
+        assert float(schedule.get_private_noise_scales()[0]) == pytest.approx(
+            expected_first, rel=1e-5
+        )
 
     def test_last_element_formula(self, schedule):
         expected_last = (C_0 / float(schedule.mu_0)) * (RHO_MU * RHO_C) ** (-1.0)
-        assert float(schedule.get_private_sigmas()[-1]) == pytest.approx(expected_last, rel=1e-5)
+        assert float(schedule.get_private_noise_scales()[-1]) == pytest.approx(
+            expected_last, rel=1e-5
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +264,7 @@ class TestGetPrivateClips:
 class TestClipSigmaRatio:
     def test_ratio_equals_mu_0_times_rho_mu_power(self, schedule):
         """clip_i / sigma_i = mu_0 * rho_mu^(i/T) (derived from the two formulas)."""
-        sigmas = schedule.get_private_sigmas()
+        sigmas = schedule.get_private_noise_scales()
         clips = schedule.get_private_clips()
         expected_ratio = schedule.mu_0 * schedule.rho_mu ** (schedule.iters / T)
         assert jnp.allclose(clips / sigmas, expected_ratio, atol=1e-5)
@@ -268,19 +272,19 @@ class TestClipSigmaRatio:
     def test_ratio_increases_with_step_when_rho_mu_gt_1(self, privacy_params):
         """rho_mu > 1 → mu_0 * rho_mu^(i/T) increases with i → ratio increases."""
         s = DynamicDPSGDSchedule(2.0, RHO_C, C_0, privacy_params)
-        ratio = s.get_private_clips() / s.get_private_sigmas()
+        ratio = s.get_private_clips() / s.get_private_noise_scales()
         assert jnp.all(jnp.diff(ratio) > 0)
 
     def test_ratio_decreases_with_step_when_rho_mu_lt_1(self, privacy_params):
         """rho_mu < 1 → mu_0 * rho_mu^(i/T) decreases with i → ratio decreases."""
         s = DynamicDPSGDSchedule(0.5, RHO_C, C_0, privacy_params)
-        ratio = s.get_private_clips() / s.get_private_sigmas()
+        ratio = s.get_private_clips() / s.get_private_noise_scales()
         assert jnp.all(jnp.diff(ratio) < 0)
 
     def test_constant_ratio_when_rho_mu_eq_1(self, privacy_params):
         """rho_mu = 1 → ratio = mu_0 everywhere (constant)."""
         s = DynamicDPSGDSchedule(1.0, RHO_C, C_0, privacy_params)
-        ratio = s.get_private_clips() / s.get_private_sigmas()
+        ratio = s.get_private_clips() / s.get_private_noise_scales()
         assert jnp.allclose(ratio, s.mu_0, atol=1e-5)
 
 
@@ -348,7 +352,7 @@ class TestProject:
         assert float(twice.C_0) == pytest.approx(float(once.C_0))
 
     def test_projected_sigmas_positive(self, schedule):
-        assert jnp.all(schedule.project().get_private_sigmas() > 0)
+        assert jnp.all(schedule.project().get_private_noise_scales() > 0)
 
     def test_projected_clips_positive(self, schedule):
         assert jnp.all(schedule.project().get_private_clips() > 0)
@@ -439,9 +443,9 @@ class TestGetLogArrays:
         for key, arr in schedule_with_singleton._get_log_arrays().items():
             assert arr.shape == (T,), f"'{key}' has shape {arr.shape}"
 
-    def test_sigmas_match_get_private_sigmas(self, schedule_with_singleton):
+    def test_sigmas_match_get_private_noise_scales(self, schedule_with_singleton):
         arrays = schedule_with_singleton._get_log_arrays()
-        assert jnp.allclose(arrays["sigmas"], schedule_with_singleton.get_private_sigmas())
+        assert jnp.allclose(arrays["sigmas"], schedule_with_singleton.get_private_noise_scales())
 
     def test_clips_match_get_private_clips(self, schedule_with_singleton):
         arrays = schedule_with_singleton._get_log_arrays()

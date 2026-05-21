@@ -62,7 +62,7 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
         return jtree.map(tree_select, a, b)
 
-    def get_private_sigmas(self) -> Array:
+    def get_private_noise_scales(self) -> Array:
         sigmas = self.noise_schedule.get_valid_schedule().squeeze()
         return jlax.select(self.diff_clips, jlax.stop_gradient(sigmas), sigmas)
 
@@ -71,7 +71,7 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         return jlax.select(self.diff_clips, clips, jlax.stop_gradient(clips))
 
     def get_private_weights(self) -> Array:
-        private_sigmas = self.get_private_sigmas()
+        private_sigmas = self.get_private_noise_scales()
         clips = self.get_private_clips()
         return self.privacy_params.project_weights(clips / private_sigmas).squeeze()
 
@@ -93,7 +93,7 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
     def project(self) -> Self:
         private_weights = self.get_private_weights()
         private_clips = self.get_private_clips()
-        private_sigmas = self.get_private_sigmas()
+        private_sigmas = self.get_private_noise_scales()
 
         new_noises = private_clips / private_weights
         new_clips = private_weights * private_sigmas
@@ -123,7 +123,7 @@ class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
     def _get_log_arrays(self) -> dict[str, Array]:
         return {
-            "sigmas": self.get_private_sigmas(),
+            "sigmas": self.get_private_noise_scales(),
             "clips": self.get_private_clips(),
             "mus": self.get_private_weights(),
         }

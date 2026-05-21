@@ -44,6 +44,25 @@ class SigmaAndClipScheduleConfig(AbstractNoiseAndClipScheduleConfig):
 
 
 @dataclass
+class DecoupledSigmaAndClipScheduleConfig(AbstractNoiseAndClipScheduleConfig):
+    """Noise σ = C · (1/w) with C fully decoupled from the privacy budget.
+
+    The w-side base schedule's ``get_valid_schedule()`` returns w directly
+    (length T); the C-side base schedule provides the per-step clip threshold.
+    """
+
+    noise: BaseScheduleConfig = dataclasses.field(
+        default_factory=BSplineScheduleConfig,
+    )
+    clip: BaseScheduleConfig = dataclasses.field(
+        default_factory=BSplineScheduleConfig,
+    )
+
+    def to_wandb_sweep(self) -> dict[str, object]:
+        return to_wandb_sweep_params(self)
+
+
+@dataclass
 class PolicyAndClipScheduleConfig(AbstractNoiseAndClipScheduleConfig):
     policy: BaseScheduleConfig = dataclasses.field(
         default_factory=InterpolatedExponentialScheduleConfig,
@@ -86,10 +105,10 @@ class WarmupAlternatingSigmaAndClipScheduleConfig(AbstractNoiseAndClipScheduleCo
 @dataclass
 class ParallelSigmaAndClipScheduleConfig(AbstractNoiseAndClipScheduleConfig):
     noise: BaseScheduleConfig = dataclasses.field(
-        default_factory=InterpolatedExponentialScheduleConfig,
+        default_factory=BSplineScheduleConfig,
     )
     clip: BaseScheduleConfig = dataclasses.field(
-        default_factory=InterpolatedExponentialScheduleConfig,
+        default_factory=BSplineScheduleConfig,
     )
     use_fista: bool = False
 

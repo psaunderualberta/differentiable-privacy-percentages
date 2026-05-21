@@ -7,6 +7,7 @@ via their @register decorators.
 # Imports trigger @register side-effects — order does not matter.
 from policy.schedules import (  # noqa: F401
     alternating,
+    decoupled_sigma_and_clip,
     dynamic_dpsgd,
     parallel_sigma_and_clip,
     policy_and_clip,

@@ -5,6 +5,7 @@ from collections.abc import Mapping
 import equinox as eqx
 import jax.numpy as jnp
 import pandas as pd
+import plotly.graph_objects as go
 from jaxtyping import Array
 
 import wandb
@@ -203,6 +204,9 @@ class WandbTableLogger(eqx.Module):
         # multi-line, but only plotting one line
         fig = multi_line_plotter(df, table_name)
         wandb.log({f"{table_name}-plot": fig})
+
+    def log_figure(self, name: str, fig: go.Figure) -> None:
+        wandb.log({name: fig})
 
     def bulk_line_plots(self, table_name: str):
         """Parse the last CSV row as a 2-D array and log one line per inner row to W&B."""

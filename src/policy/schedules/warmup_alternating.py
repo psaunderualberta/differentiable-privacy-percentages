@@ -97,7 +97,7 @@ class WarmupAlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
         return jtree.map(tree_select, a, b)
 
-    def get_private_sigmas(self) -> Array:
+    def get_private_noise_scales(self) -> Array:
         is_warmup = self._is_warmup()
         sigmas = jlax.cond(
             is_warmup,
@@ -116,7 +116,7 @@ class WarmupAlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         return jlax.select(self.diff_clips, clips, jlax.stop_gradient(clips))
 
     def get_private_weights(self) -> Array:
-        private_sigmas = self.get_private_sigmas()
+        private_sigmas = self.get_private_noise_scales()
         clips = self.get_private_clips()
         return self.privacy_params.project_weights(clips / private_sigmas).squeeze()
 
@@ -167,7 +167,7 @@ class WarmupAlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         is_warmup = self._is_warmup()
         is_last_warmup = self.step_count == self.warmup_steps - 1
 
-        private_sigmas = self.get_private_sigmas()
+        private_sigmas = self.get_private_noise_scales()
         private_clips = self.get_private_clips()
         private_weights = self.privacy_params.project_weights(
             private_clips / private_sigmas,
@@ -267,7 +267,7 @@ class WarmupAlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
 
     def _get_log_arrays(self) -> dict[str, Array]:
         return {
-            "sigmas": self.get_private_sigmas(),
+            "sigmas": self.get_private_noise_scales(),
             "clips": self.get_private_clips(),
             "mus": self.get_private_weights(),
         }

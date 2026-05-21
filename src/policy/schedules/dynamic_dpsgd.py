@@ -92,7 +92,7 @@ class DynamicDPSGDSchedule(AbstractNoiseAndClipSchedule):
         """Solved initial per-step GDP μ, detached from the gradient graph."""
         return jlax.stop_gradient(self.__mu_0)
 
-    def get_private_sigmas(self) -> Array:
+    def get_private_noise_scales(self) -> Array:
         return (self.C_0 / self.mu_0) * (self.rho_mu * self.rho_C) ** (
             -self.iters / self.privacy_params.T
         )
@@ -101,7 +101,7 @@ class DynamicDPSGDSchedule(AbstractNoiseAndClipSchedule):
         return self.C_0 * self.rho_C ** (-self.iters / self.privacy_params.T)
 
     def get_private_weights(self) -> Array:
-        private_sigmas = self.get_private_sigmas()
+        private_sigmas = self.get_private_noise_scales()
         clips = self.get_private_clips()
 
         weights = self.privacy_params.sigma_schedule_to_weights(clips, private_sigmas)
@@ -122,7 +122,7 @@ class DynamicDPSGDSchedule(AbstractNoiseAndClipSchedule):
     def _get_log_arrays(self) -> dict[str, Array]:
         weights = self.get_private_weights()
         return {
-            "sigmas": self.get_private_sigmas(),
+            "sigmas": self.get_private_noise_scales(),
             "clips": self.get_private_clips(),
             "weights": weights,
             "mus": self.privacy_params.weights_to_mu_schedule(weights),

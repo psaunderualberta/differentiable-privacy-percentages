@@ -92,6 +92,10 @@ def resubmit_if_requested(run_id: str) -> None:
         print("WARNING: CHAIN_RESUBMIT_SCRIPT not set — job chain ends here.")
         return
 
+    prereqs = []
+    if "SLURM_JOB_ID" in os.environ:
+        prereqs = ["--prerequisites", os.environ.get("SLURM_JOB_ID", "")]
+
     cmd = [
         "uv",
         "run",
@@ -105,9 +109,13 @@ def resubmit_if_requested(run_id: str) -> None:
         "--account",
         os.environ.get("CHAIN_ACCOUNT", ""),
         "--runtime.short",
+        *prereqs,
     ]
+
+    # Resubmit without WANDB SOCKET environment variable
     print(f"Resubmitting: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    env_vars = {k: v for k, v in os.environ.items() if k != "WANDB_SERVICE"}
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env_vars)
     if result.returncode != 0:
         print(f"ERROR: resubmit failed:\n{result.stderr}")
     else:

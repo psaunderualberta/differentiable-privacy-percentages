@@ -1,4 +1,5 @@
 import equinox as eqx
+import optax
 
 from conf.config import EnvConfig
 from conf.singleton_conf import SingletonConfig
@@ -9,7 +10,7 @@ from util.dataloaders import DatasetLoader, get_dataset_loader
 
 class DPTrainingParams(eqx.Module):
     loader: DatasetLoader  # static non-JAX-array field; equinox treats as aux structure
-    optimizer: str = "sgd"
+    optimizer: optax.GradientTransformation
     lr: float = 0.01
     network: Network = Network()
     num_training_steps: int = 500
@@ -26,10 +27,14 @@ class DPTrainingParams(eqx.Module):
         assert conf.num_training_steps % conf.scan_segments_derived == 0, (
             "Scan Segments does not cleanly divide training steps"
         )
+        # Sample all DistributionConfigs once, then build the optax transform
+        # from the now-constant config so the logged LR matches the one used.
+        resolved_opt = conf.optimizer.resolve()
+        optimizer = resolved_opt.build()
         return DPTrainingParams(
             loader=loader,
-            lr=conf.lr.sample(),
-            optimizer=conf.optimizer,
+            optimizer=optimizer,
+            lr=resolved_opt.learning_rate.value,
             network=network_arch,
             num_training_steps=conf.num_training_steps,
             scan_segments=conf.scan_segments_derived,

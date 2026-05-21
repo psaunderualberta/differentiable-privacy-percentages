@@ -112,7 +112,7 @@ def train_with_noise(
     noise_key: PRNGKeyArray,
 ) -> tuple[eqx.Module, Array, Array, Array, Array]:
     # Get noise and clip schedules
-    noise_schedule = schedule.get_private_sigmas()
+    noise_schedule = schedule.get_private_noise_scales()
     clip_schedule = schedule.get_private_clips()
 
     T = params.num_training_steps
@@ -161,7 +161,7 @@ def train_with_noise(
     network = reinit_model(cast(eqx.Module, params.network), init_key)
     net_params, net_static = eqx.partition(network, eqx.is_array)
 
-    optimizer = getattr(optax, params.optimizer)(params.lr)
+    optimizer = params.optimizer
     opt_state = optimizer.init(net_params)
     opt_state_params, opt_state_static = eqx.partition(opt_state, eqx.is_array)
 
@@ -172,15 +172,11 @@ def train_with_noise(
     clip_segs = clip_schedule.reshape(K, seg_len)
     idx_segs = all_indices.reshape(K, seg_len, batch_size)
 
-    @partial(
-        jax_checkpoint,
-        policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable,
-    )
     def inner_step(
         carry: tuple[PyTree, PyTree, PRNGKeyArray],
         xs: tuple[Array, Array, Array, Array],
     ) -> tuple[tuple[PyTree, PyTree, PRNGKeyArray], tuple[Array, Array]]:
-        """Single checkpointed DP-SGD step; batch data arrives as scan input."""
+        """Single DP-SGD step; batch data arrives as scan input."""
         net_params, opt_state_params, noise_key = carry
         noise_t, clip_t, batch_x, batch_y = xs
 
@@ -307,7 +303,7 @@ def train_with_stateful_noise(
     network = reinit_model(cast(eqx.Module, params.network), init_key)
     net_params, net_static = eqx.partition(network, eqx.is_array)
 
-    optimizer = getattr(optax, params.optimizer)(params.lr)
+    optimizer = params.optimizer
     opt_state = optimizer.init(net_params)
     opt_state_params, opt_state_static = eqx.partition(opt_state, eqx.is_array)
 

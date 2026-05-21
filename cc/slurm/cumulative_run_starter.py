@@ -3,7 +3,6 @@ from pathlib import Path
 
 import tqdm
 import tyro
-
 import wandb
 
 
@@ -92,7 +91,7 @@ def main(
                 "cat",
                 f"cc/sweeps/{sweep_id}.txt",
                 "|",
-                "parallel -j10 -q uv run cc/slurm/run-starter.py --runtime.short",
+                "parallel --tmpdir /scratch/$USER -j 5 -q uv run cc/slurm/run-starter.py --runtime.short",
                 f"--run_id={{}} --wandb-proj {project} --jobname='\"{sweep}\"'",
             ]
         )

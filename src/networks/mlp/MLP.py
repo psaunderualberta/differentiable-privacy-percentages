@@ -68,8 +68,7 @@ class MLP(eqx.Module, Network):
         layers = [
             [
                 Linear(din, layer_out, key=_key, initialization=conf.initialization),
-                eqx.nn.LayerNorm(layer_out),
-            ],
+            ]
         ]
 
         layer_in = layer_out
@@ -85,7 +84,6 @@ class MLP(eqx.Module, Network):
                             key=_key,
                             initialization=conf.initialization,
                         ),
-                        eqx.nn.LayerNorm(layer_out),
                     ],
                 )
                 layer_in = layer_out
