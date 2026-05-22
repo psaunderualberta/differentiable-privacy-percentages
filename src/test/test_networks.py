@@ -313,17 +313,17 @@ class TestMLPGetNumHiddenUnits:
 
     def test_known_single_hidden_count(self):
         # hidden_sizes=(32,), nclasses=10, din=28:
-        # Block 0: Linear.bias(32) + LN.weight(32) + LN.bias(32) = 96
-        # Block 1: Linear.bias(10)                                = 10
-        # Total = 106
+        # Block 0: Linear.bias(32) = 32
+        # Block 1: Linear.bias(10) = 10
+        # Total = 42
         mlp = MLP.from_config(MLPConfig(hidden_sizes=(32,)), din=28, nclasses=10)
-        assert mlp.get_num_hidden_units() == 106
+        assert mlp.get_num_hidden_units() == 42
 
     def test_known_no_hidden_count(self):
         # hidden_sizes=(), nclasses=10, din=28:
-        # Block 0: Linear.bias(10) + LN.weight(10) + LN.bias(10) = 30
+        # Block 0: Linear.bias(10) = 30
         mlp = MLP.from_config(MLPConfig(hidden_sizes=()), din=28, nclasses=10)
-        assert mlp.get_num_hidden_units() == 30
+        assert mlp.get_num_hidden_units() == 10
 
 
 # ---------------------------------------------------------------------------

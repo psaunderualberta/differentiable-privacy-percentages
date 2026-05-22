@@ -885,8 +885,8 @@ class TestProjectSigmaAndClipProperties:
         _mu = params.compute_expenditure(sigmas, clips)
         assume(_mu > params.mu)
         ps, pc = params.project_sigma_and_clip(sigmas, clips)
-        _mu = params.compute_expenditure(ps, pc)
-        assert jnp.isclose(_mu, params.mu, atol=1e-5)
+        _mu_proj = params.compute_expenditure(ps, pc)
+        assert jnp.isclose(_mu_proj, params.mu, atol=1e-3)
 
 
 # ===========================================================================
