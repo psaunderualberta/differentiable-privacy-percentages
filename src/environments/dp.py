@@ -172,6 +172,10 @@ def train_with_noise(
     clip_segs = clip_schedule.reshape(K, seg_len)
     idx_segs = all_indices.reshape(K, seg_len, batch_size)
 
+    @partial(
+        jax_checkpoint,
+        policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable,
+    )
     def inner_step(
         carry: tuple[PyTree, PyTree, PRNGKeyArray],
         xs: tuple[Array, Array, Array, Array],

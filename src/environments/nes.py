@@ -101,7 +101,9 @@ def nes_es_step(
 
     # Mean-parameter gradient: matches the existing _make_es_training_loss_fn
     # convention so the analytic / ES interchange remains a drop-in.
-    w_mean = (u_neg - u_pos) / (n * sigma)
+    w_mean = (
+        sigma * (u_neg - u_pos) / n
+    )  # using optax.sgd, multiplying by sigma^2 to find correct update
     grad_mean = jax.tree.map(lambda e: jnp.tensordot(w_mean, e, axes=1), eps)
 
     g_log_sigma = nes_log_sigma_gradient(eps, u_pos, u_neg)

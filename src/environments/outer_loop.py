@@ -182,14 +182,10 @@ def _make_es_training_loss_fn(
                 )
                 return val_loss, losses, accs, val_acc
 
-            vl_pos, l_pos, a_pos, va_pos = _one_side(+1.0)
-            vl_neg, l_neg, a_neg, va_neg = _one_side(-1.0)
-            return (
-                jnp.stack([vl_pos, vl_neg]),
-                jnp.stack([l_pos, l_neg]),
-                jnp.stack([a_pos, a_neg]),
-                jnp.stack([va_pos, va_neg]),
-            )
+            # vl_pos, l_pos, a_pos, va_pos = _one_side(+1.0)
+            # vl_neg, l_neg, a_neg, va_neg = _one_side(-1.0)
+            signs = jnp.asarray([1.0, -1.0])
+            return eqx.filter_vmap(_one_side)(signs)
 
         # Vmap over the half_pop pairs; mb_key/init_key are closure-shared.
         val_losses, losses, accuracies, val_accs = eqx.filter_vmap(

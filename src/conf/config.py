@@ -93,7 +93,7 @@ class ESConfig:
     population_size: DistributionConfig = dist_config_helper(value=32, distribution="constant")
     """Number of perturbation samples per outer step. Must be even (antithetic
     pairs) and divisible by the GPU count; asserted at startup."""
-    perturbation_sigma: DistributionConfig = dist_config_helper(value=0.01, distribution="constant")
+    perturbation_sigma: DistributionConfig = dist_config_helper(value=0.1, distribution="constant")
     """Initial std-dev of Gaussian perturbations on ES-opted-in leaves.
     Treated as the *initial* σ when ``eta_sigma > 0`` (natural-gradient σ
     update enabled, Wierstra et al. 2014)."""  # noqa: RUF001
