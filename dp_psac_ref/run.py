@@ -192,10 +192,12 @@ def main(args: Args) -> None:
     print(fig.show())
 
     eps = accountant.epsilon_spent(sigmas / clips, sample_rate=q, delta=args.delta)
+    mu = float(q * jnp.sqrt(jnp.sum(jnp.exp((clips / sigmas) ** 2) - 1)))
 
     result = {
         "test_accuracy": float(metrics["test_accuracy"]),
         "final_train_loss": metrics["final_train_loss"],
+        "mu": mu,
         "epsilon_spent": eps,
         "delta": args.delta,
         "T": T,

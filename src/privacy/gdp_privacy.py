@@ -401,15 +401,17 @@ class GDPPrivacyParameters(eqx.Module):
 
     @eqx.filter_jit
     def project_inverse_sigmas(self, sigmas: Array, tol: float | Array = 1e-6) -> Array:
-        """
-        post-GD weights (i.e. after updating sigma, clip, policy, or any three)
-        returns: projected weights W s.t. 1^T @ W = self.T && W in [self.w_min, self.w_max]
+        """Project sigmas onto the constraint sum_i exp(1 / sigma_i) <= (mu/p)^2 + T.
+
+        Uses outer bisection on the dual variable lambda and an inner Newton
+        solve for the proximal subproblem, fully JIT-compatible. Feasible
+        inputs are returned unchanged.
         """
 
         # Ensure jnp array
         tol = jnp.asarray(tol)
 
-        bound = (self.mu / self.p) ** 2 + self.T  # == sum_{i=1}^{T} e^(1 / sigmas_{i}^{2})
+        bound = (self.mu / self.p) ** 2 + self.T  # == sum_{i=1}^{T} e^(1 / sigmas_i)
 
         def g(y, lam):
             return y - sigmas - lam * jnp.exp(1 / y) / y**2
@@ -425,8 +427,6 @@ class GDPPrivacyParameters(eqx.Module):
             sigmas_tilde, lam = sigmas_tilde_lam
             return jnp.any(jnp.abs(g(sigmas_tilde, lam)) > tol)
 
-        y_floor = jnp.asarray(1e-6)
-
         def sigmas_tilde_body(
             sigmas_tilde_lam: tuple[Array, Array],
         ) -> tuple[Array, Array]:
@@ -435,8 +435,7 @@ class GDPPrivacyParameters(eqx.Module):
             """
             sigmas_tilde, lam = sigmas_tilde_lam
 
-            step = g(sigmas_tilde, lam) / g_prime(sigmas_tilde, lam)
-            new_sigmas_tilde = jnp.maximum(sigmas_tilde - step, y_floor)
+            new_sigmas_tilde = sigmas_tilde - g(sigmas_tilde, lam) / g_prime(sigmas_tilde, lam)
             return (new_sigmas_tilde, lam)
 
         def get_sigmas_tilde(lam: Array) -> Array:

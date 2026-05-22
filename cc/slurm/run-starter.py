@@ -99,7 +99,7 @@ echo "CUDA devices: $CUDA_VISIBLE_DEVICES"
 echo "starting training..."
 echo tmpdir: $SLURM_TMPDIR
 echo main_args: {self.main_args}
-time uv run main.py {self.main_args}
+srun time uv run main.py {self.main_args}
 
 # End printing
 echo "Job finished with exit code $? at: `date`"

@@ -612,6 +612,97 @@ class TestProjectSigmaAndClip:
 
 
 # ---------------------------------------------------------------------------
+# project_inverse_sigmas
+#
+# The constraint is sum_i exp(1 / sigma_i) <= B where B = (mu/p)^2 + T.
+# For EPS=1, DELTA≈0.127, P=0.1, T=10 → mu≈1.0, B≈110.
+#
+# Feasible baseline:   sigmas = 1.0 → sum = T·exp(1) ≈ 27.18 (< 110)
+# Infeasible baseline: sigmas = 0.3 → sum = T·exp(1/0.3) ≈ 280  (> 110)
+# ---------------------------------------------------------------------------
+
+
+def _is_budget(params: GDPPrivacyParameters) -> float:
+    """The RHS of the project_inverse_sigmas constraint: (mu/p)^2 + T."""
+    return float((params.mu / params.p) ** 2 + params.T)
+
+
+def _is_constraint(sigmas: jnp.ndarray) -> float:
+    """Evaluate sum_i exp(1 / sigma_i)."""
+    return float(jnp.sum(jnp.exp(1.0 / sigmas)))
+
+
+class TestProjectInverseSigmas:
+    def test_output_shape(self, params):
+        sigmas = jnp.ones(T) * 0.3
+        projected = params.project_inverse_sigmas(sigmas)
+        assert projected.shape == (T,)
+
+    def test_feasible_input_unchanged(self, params):
+        # sum ≈ 27 << B ≈ 110 — already feasible.
+        sigmas = jnp.ones(T) * 1.0
+        projected = params.project_inverse_sigmas(sigmas)
+        assert jnp.allclose(projected, sigmas, atol=1e-4)
+
+    def test_constraint_satisfied_for_infeasible_input(self, params):
+        # sum ≈ 280 > 110 — infeasible; projected point must satisfy the constraint.
+        sigmas = jnp.ones(T) * 0.3
+        projected = params.project_inverse_sigmas(sigmas)
+        assert _is_constraint(projected) <= _is_budget(params) + 1e-2
+
+    def test_constraint_tight_for_uniform_infeasible(self, params):
+        # Uniform infeasible → projection lands on (or very near) the boundary.
+        sigmas = jnp.ones(T) * 0.3
+        projected = params.project_inverse_sigmas(sigmas)
+        B = _is_budget(params)
+        assert jnp.isclose(jnp.array(_is_constraint(projected)), jnp.array(B), rtol=1e-2)
+
+    def test_projected_values_positive(self, params):
+        sigmas = jnp.ones(T) * 0.3
+        projected = params.project_inverse_sigmas(sigmas)
+        assert jnp.all(projected > 0)
+
+    def test_idempotent(self, params):
+        sigmas = jnp.ones(T) * 0.3
+        once = params.project_inverse_sigmas(sigmas)
+        twice = params.project_inverse_sigmas(once)
+        assert jnp.allclose(once, twice, atol=1e-3)
+
+    def test_uniform_infeasible_projects_to_uniform(self, params):
+        # By symmetry, uniform infeasible sigmas project to uniform sigmas.
+        sigmas = jnp.ones(T) * 0.3
+        projected = params.project_inverse_sigmas(sigmas)
+        assert jnp.allclose(projected, projected[0], atol=1e-3)
+
+    def test_projection_increases_sigmas(self, params):
+        # Infeasibility comes from sigmas being too small (sum of exp(1/σ) too
+        # large), so the projection must push sigmas upward.
+        sigmas = jnp.ones(T) * 0.3
+        projected = params.project_inverse_sigmas(sigmas)
+        assert jnp.all(projected >= sigmas - 1e-6)
+        assert jnp.any(projected > sigmas + 1e-3)
+
+    def test_nonuniform_infeasible_satisfies_constraint(self, params):
+        # Non-uniform infeasible input also satisfies constraint after projection.
+        sigmas = jnp.linspace(0.25, 0.4, T)
+        projected = params.project_inverse_sigmas(sigmas)
+        assert _is_constraint(projected) <= _is_budget(params) + 1e-2
+
+    def test_tighter_budget_projects_to_larger_sigmas(self):
+        # Tighter budget (smaller mu → smaller B) forces larger sigmas to keep
+        # exp(1/σ) terms smaller. Use the same infeasible input for both.
+        p_tight = GDPPrivacyParameters(0.5, 0.0524403232877, P, T)  # mu≈0.5, B≈35
+        p_loose = GDPPrivacyParameters(3.0, 0.566737999092, P, T)  # mu≈3.0, B≈910
+        sigmas = jnp.ones(T) * 0.3  # sum ≈ 280 — infeasible for tight, feasible for loose
+        proj_tight = p_tight.project_inverse_sigmas(sigmas)
+        proj_loose = p_loose.project_inverse_sigmas(sigmas)
+        # p_loose is feasible — projection is identity.
+        assert jnp.allclose(proj_loose, sigmas, atol=1e-4)
+        # p_tight must project upward (larger sigmas).
+        assert jnp.all(proj_tight > proj_loose)
+
+
+# ---------------------------------------------------------------------------
 # ParallelSigmaAndClipSchedule
 # ---------------------------------------------------------------------------
 

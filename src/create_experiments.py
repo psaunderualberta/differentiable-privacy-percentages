@@ -43,8 +43,6 @@ from conf.config_util import (
     dist_config_helper,
 )
 from conf.optimizer_config import (
-    AdamConfig,
-    AdamWConfig,
     OptimizerConfig,
     SGDConfig,
 )
@@ -126,8 +124,8 @@ MLP_ARCHS: list[MLPConfig] = [
 # CNN+MLP architectures
 OPTIMIZERS: list[OptimizerConfig] = [
     SGDConfig(learning_rate=dist_config_helper(value=0.05, distribution="constant")),
-    AdamConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
-    AdamWConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
+    # AdamConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
+    # AdamWConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
 ]
 
 

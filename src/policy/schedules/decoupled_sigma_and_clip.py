@@ -1,7 +1,6 @@
 from typing import Self
 
 import equinox as eqx
-from jax import lax as jlax
 from jaxtyping import Array
 
 from policy.base_schedules.abstract import AbstractSchedule
@@ -48,7 +47,7 @@ class DecoupledSigmaAndClipSchedule(AbstractNoiseAndClipSchedule):
         return cls(noise_schedule, clip_schedule, privacy_params)
 
     def get_private_noise_scales(self) -> Array:
-        return self.get_private_clips() / self.get_private_weights()
+        return self.get_private_clips() * self._get_private_sigmas()
 
     def get_private_clips(self) -> Array:
         return self.clip_schedule.get_valid_schedule().squeeze()

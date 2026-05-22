@@ -25,11 +25,21 @@ def params() -> GDPPrivacyParameters:
     return GDPPrivacyParameters(EPS, DELTA, P, T)
 
 
+def _is_budget(params: GDPPrivacyParameters) -> float:
+    """The RHS of the project_inverse_sigmas constraint: (mu/p)^2 + T."""
+    return float((params.mu / params.p) ** 2 + params.T)
+
+
+def _is_constraint(sigmas: jnp.ndarray) -> float:
+    """Evaluate sum_i exp(1 / sigma_i)."""
+    return float(jnp.sum(jnp.exp(1.0 / sigmas)))
+
+
 @pytest.fixture
 def schedule(params) -> DecoupledSigmaAndClipSchedule:
     # Initial w deliberately *above* the privacy budget so project() fires.
-    # Σ exp(w²) = T·exp(4) ≈ 546 >> bound ≈ 110.
-    noise = ConstantSchedule(value=2.0, T=T)
+    # Σ exp(1/s²) = T·exp(4) ≈ 546 >> bound ≈ 110.
+    noise = ConstantSchedule(value=0.1, T=T)
     clip = ConstantSchedule(value=1.0, T=T)
     return DecoupledSigmaAndClipSchedule(
         noise_schedule=noise,
@@ -42,10 +52,11 @@ class TestInitProjectsToMu0:
     def test_uniform_w_projects_to_mu_0(self, schedule, params):
         """After one project() call from a uniform-but-off-surface init,
         the w-side schedule is uniform at μ₀."""
+
         projected = schedule.project()
         w = projected.get_private_weights()
         assert w.shape == (T,)
-        assert jnp.allclose(w, params.mu_0, atol=1e-5)
+        assert jnp.allclose(w, params.mu_0**2, atol=1e-5)
 
 
 class TestGetPrivateNoiseScales:
@@ -104,7 +115,7 @@ class TestDPEquivalenceSmoke:
             privacy_params=params,
         )
         decoupled = DecoupledSigmaAndClipSchedule(
-            noise_schedule=ConstantSchedule(value=clip_val / sigma_val, T=T),
+            noise_schedule=ConstantSchedule(value=sigma_val / clip_val, T=T),
             clip_schedule=ConstantSchedule(value=clip_val, T=T),
             privacy_params=params,
         )
