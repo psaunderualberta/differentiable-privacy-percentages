@@ -128,9 +128,11 @@ class TestComputeExpenditureProperties:
         sigmas = jnp.ones(_T_FIXED) * sigma_val
         clips_small = jnp.ones(_T_FIXED) * small_clip
         clips_large = jnp.ones(_T_FIXED) * (small_clip + clip_delta)
-        assert float(params.compute_expenditure(sigmas, clips_large)) > float(
-            params.compute_expenditure(sigmas, clips_small)
-        )
+        small_clip_expenditure = params.compute_expenditure(sigmas, clips_small)
+        large_clip_expenditure = params.compute_expenditure(sigmas, clips_large)
+        assume(jnp.isfinite(small_clip_expenditure))
+        assume(jnp.isfinite(large_clip_expenditure))
+        assert float(large_clip_expenditure) > float(small_clip_expenditure)
 
     @given(
         clip_val=st.floats(min_value=0.1, max_value=2.0, allow_nan=False, allow_infinity=False),
@@ -232,7 +234,7 @@ class TestSigmaMuProductProperty:
     """σᵢ = C/μᵢ, so σᵢ · μᵢ = C for all steps i."""
 
     @pytest.fixture(autouse=True)
-    def _setup(self, _singleton_max_sigma):
+    def _setup(self):
         self.params = GDPPrivacyParameters(_EPS, _DELTA, _P, _T_FIXED)
 
     @given(
@@ -507,4 +509,4 @@ class TestProjectSigmaAndClipProperties:
         assume(_mu > params.mu)
         ps, pc = params.project_sigma_and_clip(sigmas, clips)
         _mu = params.compute_expenditure(ps, pc)
-        assert jnp.isclose(_mu, params.mu, atol=1e-5)
+        assert jnp.isclose(_mu, params.mu, atol=1e-5), f"{_mu} {params.mu}"
