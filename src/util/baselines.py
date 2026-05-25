@@ -290,7 +290,7 @@ class Baseline:
         name: str,
         schedule_class: type[AbstractNoiseAndClipSchedule]
         | type[AbstractStatefulNoiseAndClipSchedule],
-        num_runs_in_sweep: int = 30,
+        num_runs_in_sweep: int = 20,
         with_progress_bar: bool = True,
     ) -> tuple[pd.DataFrame, AbstractNoiseAndClipSchedule | AbstractStatefulNoiseAndClipSchedule]:
         num_params = len(params)
@@ -375,7 +375,7 @@ class Baseline:
         self,
         key: PRNGKeyArray,
         name: str = "Constant σ/clip",  # noqa: RUF001
-        num_runs_in_sweep: int = 30,
+        num_runs_in_sweep: int = 20,
         with_progress_bar: bool = True,
     ) -> pd.DataFrame:
         """Sweep over constant σ/clip values and return data for the best setting.

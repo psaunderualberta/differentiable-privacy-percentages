@@ -35,7 +35,7 @@ _CC_ROOT = os.environ["PROJECT_ROOT"] = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "cc"),
 )
 
-from conf.config import EnvConfig, ESConfig, ScheduleOptimizerConfig, SweepConfig
+from conf.config import EnvConfig, ScheduleOptimizerConfig, SweepConfig
 from conf.config_util import (
     DistributionConfig,
     _is_fixed_field,
@@ -49,7 +49,7 @@ from conf.optimizer_config import (
 from networks.cnn.config import CNNConfig
 from networks.mlp.config import MLPConfig
 from policy.schedules.config import (
-    ParallelSigmaAndClipScheduleConfig,
+    DecoupledSigmaAndClipScheduleConfig,
 )
 
 # ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ DELTA: float = 1e-6
 BATCH_SIZE: int = 250  # T=250 ≈ 1 MNIST epoch (N=60 000)
 DATASETS: list[str] = ["mnist", "fashion-mnist"]
 NUM_OUTER_STEPS: int = 1000
-SEEDS: tuple[int, ...] = (447831761, 159020393, 435372193)
+SEEDS: tuple[int, ...] = (0, 1, 2)
 
 # --- Axis 1: vary T, architecture fixed at medium MLP ---
 T_VALUES: list[int] = [1500, 2000, 3000, 5000, 7000]
@@ -186,7 +186,7 @@ def _make_sweep_config(
         num_outer_steps=NUM_OUTER_STEPS,
         with_baselines=True,
         baseline_log_interval=200,
-        plotting_interval=30,
+        plotting_interval=50,
         prng_seed=dist_config_helper(value=float(seed), distribution="constant"),
         env=EnvConfig(
             network=network_conf,
@@ -194,16 +194,12 @@ def _make_sweep_config(
             delta=DELTA,
             batch_size=BATCH_SIZE,
             num_training_steps=T,
-            scan_segments=int(T**0.5),  # Loading data as-needed
+            scan_segments=T,  # Loading data as-needed
             optimizer=optimizer,
         ),
         schedule_optimizer=ScheduleOptimizerConfig(
-            schedule=ParallelSigmaAndClipScheduleConfig(use_fista=False),
-            lr=dist_config_helper(value=1.0, distribution="constant"),
-            es=ESConfig(
-                enabled=True,
-                adaptation_enabled=True,
-            ),
+            schedule=DecoupledSigmaAndClipScheduleConfig(),
+            lr=dist_config_helper(value=10.0, distribution="constant"),
         ),
     )
 
