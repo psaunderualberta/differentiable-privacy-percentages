@@ -12,6 +12,7 @@ Idea from https://github.com/mattpocock/skills/
 | **μ₀ (mu-zero)** | The per-step GDP μ value when all T inner steps spend the privacy budget uniformly (the "flat" baseline) | uniform mu |
 | **Poisson subsampling probability p** | The probability that any single training example is included in a given minibatch; equals batch_size / dataset_size | subsampling rate |
 | **Privacy expenditure** | The actual GDP μ consumed by a given (σ, C) schedule; must not exceed the target μ | privacy cost, privacy usage |
+| **Budget fidelity** | How well a **predicted schedule** stays within the privacy budget: the gap between its **privacy expenditure** and the target GDP μ, plus the **projection** distance needed to make it budget-valid. A pointwise-accurate equation can still have poor budget fidelity | privacy fidelity, constraint fidelity |
 
 ## DP-SGD Inner Loop
 
@@ -36,6 +37,7 @@ Idea from https://github.com/mattpocock/skills/
 | **C-schedule (clip-schedule)** | The length-T array of clipping thresholds derived from the schedule weights; returned by `get_private_clips()` | clip array |
 | **Project** | The operation that maps raw gradient-updated schedule weights back onto the valid privacy constraint set (privacy expenditure ≤ target μ) | normalize, clip schedule |
 | **Warmup** | A variant of a schedule that holds σ and C fixed for the first K outer steps before beginning gradient-based optimization | burn-in |
+| **Predicted schedule** | The σ-, C-, or μ-schedule obtained by evaluating a symbolic-regression equation across a run's inner steps. Compared against that run's *actual* learned schedule to assess how well the equation matches it | fitted schedule, equation schedule |
 
 ## Outer Loop (Meta-optimization)
 
