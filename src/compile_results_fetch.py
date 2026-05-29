@@ -17,6 +17,9 @@ Usage (from src/):
 
 from __future__ import annotations
 
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -28,6 +31,40 @@ import tyro
 import wandb
 
 CACHE_ROOT = Path(__file__).parent / "cache" / "results"
+ARTIFACT_ROOT = Path(__file__).parent / "cache" / "artifacts"
+
+
+# ---------------------------------------------------------------------------
+# Concurrent-download safety
+# ---------------------------------------------------------------------------
+
+# Runtime check for the assumption that no two artifact downloads ever target
+# the same scratch directory at once. We expect every artifact to resolve to a
+# unique dir (names embed the run id), so under threading this guard should
+# never fire — but if it does, two threads were interleaving writes into one
+# directory and the downloaded files may be corrupt. Single-threaded callers
+# claim and release serially, so the guard is a no-op for them.
+_dir_claims: dict[str, str] = {}
+_dir_claims_lock = threading.Lock()
+
+
+@contextmanager
+def _claim_download_dir(path: str, owner: str) -> Iterator[None]:
+    with _dir_claims_lock:
+        holder = _dir_claims.get(path)
+        if holder is not None and holder != owner:
+            raise RuntimeError(
+                f"scratch-dir collision: {path!r} is being downloaded by {holder!r} "
+                f"while {owner!r} tried to write into it concurrently"
+            )
+        _dir_claims[path] = owner
+    try:
+        yield
+    finally:
+        with _dir_claims_lock:
+            if _dir_claims.get(path) == owner:
+                del _dir_claims[path]
+
 
 # Mirrors symbolic_regression.DATASET_SHAPES / _AUTO_CNN / _AUTO_MLP. Kept local
 # so this script is independent of the training code.
@@ -234,8 +271,13 @@ def _history(run: Any) -> list[dict]:
 
 
 def _baseline_means(api: wandb.Api, entity: str, project: str, run_id: str) -> pd.DataFrame:
-    artifact = api.artifact(f"{entity}/{project}/baseline-{run_id}:latest")
-    local = Path(artifact.download())
+    name = f"baseline-{run_id}:latest"
+    artifact = api.artifact(f"{entity}/{project}/{name}")
+    # Explicit per-artifact root: known before the download starts so the claim
+    # guard covers the actual write window (see _claim_download_dir).
+    root = str(ARTIFACT_ROOT / name.replace(":", "-").replace("/", "-"))
+    with _claim_download_dir(root, owner=name):
+        local = Path(artifact.download(root=root))
     pkls = list(local.glob("*.pkl"))
     if not pkls:
         raise RuntimeError("baseline artifact has no .pkl file")

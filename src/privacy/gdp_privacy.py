@@ -509,60 +509,78 @@ class GDPPrivacyParameters(eqx.Module):
         Returns:
             Tuple of (projected_sigmas, projected_clips), each shape (T,).
         """
-        # Constraint: sum_i (exp(X_i^2/Y_i^2) - 1) <= B  with X=clips, Y=sigmas
-        X, Y = clips, sigmas
-        B = (self.mu / self.p) ** 2 + self.T
-        S = jnp.sum(jnp.exp(vmap(_mu_two)(X, Y)))
-        feasible = jnp.logical_and(jnp.isfinite(S), S <= B)
+        # B chosen so that sum_i exp((clip/sigma)^2) <= B is equivalent to
+        # sum_i (exp((clip/sigma)^2) - 1) <= (mu/p)^2.
+        B = jnp.asarray((self.mu / self.p) ** 2 + self.T)
+        return project_sigma_and_clip_given_bound(sigmas, clips, B)
 
-        def _solve_for_lam(lam):
-            X_p, Y_p = _sc_inner_solve_all(X, Y, X, Y, lam)
-            h = jnp.sum(jnp.exp((X_p / Y_p) ** 2)) - B
-            return h, X_p, Y_p
 
-        # Find lambda_max by repeated doubling until h(lambda_max) <= 0.
-        lam_lo = jnp.asarray(1e-6)
-        init_h, _, _ = _solve_for_lam(lam_lo)
+@eqx.filter_jit
+def project_sigma_and_clip_given_bound(
+    sigmas: Array,
+    clips: Array,
+    B: Array,
+) -> tuple[Array, Array]:
+    """L2-project (sigmas, clips) onto ``sum_i exp((clip_i/sigma_i)^2) <= B``.
 
-        def _find_lam_max_cond(state):
-            _, h = state
-            h = ensure_valid_pytree(h, "h")
-            return h > 0
+    The schedule-bound form ``B = (mu/p)^2 + T``; an on-budget schedule sits at
+    ``B = sum_i exp((clip_i/sigma_i)^2)``. Split out from
+    ``GDPPrivacyParameters.project_sigma_and_clip`` so callers that only know the
+    bound (e.g. one recovered from an already-projected schedule) can reuse the
+    same numerically-stabilised Newton/bisection solver. Feasible inputs are
+    returned unchanged.
+    """
+    # Constraint: sum_i (exp(X_i^2/Y_i^2) - 1) <= B  with X=clips, Y=sigmas
+    X, Y = clips, sigmas
 
-        def _find_lam_max_body(state):
-            lam_max, _ = state
-            lam_max = lam_max * 1.15
-            h, _, _ = _solve_for_lam(lam_max)
-            return (lam_max, h)
+    def _solve_for_lam(lam):
+        X_p, Y_p = _sc_inner_solve_all(X, Y, X, Y, lam)
+        h = jnp.sum(jnp.exp((X_p / Y_p) ** 2)) - B
+        return h, X_p, Y_p
 
-        lam_max, _ = jlax.while_loop(_find_lam_max_cond, _find_lam_max_body, (lam_lo, init_h))
+    # Find lambda_max by repeated doubling until h(lambda_max) <= 0.
+    lam_lo = jnp.asarray(1e-6)
+    init_h, _, _ = _solve_for_lam(lam_lo)
 
-        # Bisect over [0, lam_max] for 60 iterations (~1e-18 relative precision).
-        def bisect_body(_, state):
-            lam_lo, lam_hi = state
-            lam_mid = (lam_lo + lam_hi) / 2.0
-            h, _, _ = _solve_for_lam(lam_mid)
-            lam_lo = jnp.where(h > 0, lam_mid, lam_lo)
-            lam_hi = jnp.where(h > 0, lam_hi, lam_mid)
-            return (lam_lo, lam_hi)
+    def _find_lam_max_cond(state):
+        _, h = state
+        h = ensure_valid_pytree(h, "h")
+        return h > 0
 
-        lam_lo, lam_hi = jlax.fori_loop(0, 60, bisect_body, (lam_lo, lam_max))
+    def _find_lam_max_body(state):
+        lam_max, _ = state
+        lam_max = lam_max * 1.15
+        h, _, _ = _solve_for_lam(lam_max)
+        return (lam_max, h)
 
-        lam_final = (lam_lo + lam_hi) / 2.0
-        _, X_proj, Y_proj = _solve_for_lam(lam_final)
+    lam_max, _ = jlax.while_loop(_find_lam_max_cond, _find_lam_max_body, (lam_lo, init_h))
 
-        # If already feasible, return originals unchanged.
-        S = jnp.sum(jnp.exp(vmap(_mu_two)(X, Y)))
-        feasible = jnp.logical_and(jnp.isfinite(S), S <= B)
-        X_out = jnp.where(feasible, X, X_proj)
-        Y_out = jnp.where(feasible, Y, Y_proj)
+    # Bisect over [0, lam_max] for 60 iterations (~1e-18 relative precision).
+    def bisect_body(_, state):
+        lam_lo, lam_hi = state
+        lam_mid = (lam_lo + lam_hi) / 2.0
+        h, _, _ = _solve_for_lam(lam_mid)
+        lam_lo = jnp.where(h > 0, lam_mid, lam_lo)
+        lam_hi = jnp.where(h > 0, lam_hi, lam_mid)
+        return (lam_lo, lam_hi)
 
-        # convert to abs, as negative values also satisfy the constraint
-        X_out = jnp.abs(X_out)
-        Y_out = jnp.abs(Y_out)
+    lam_lo, lam_hi = jlax.fori_loop(0, 60, bisect_body, (lam_lo, lam_max))
 
-        # X=clips, Y=sigmas — return (sigmas, clips)
-        return Y_out, X_out
+    lam_final = (lam_lo + lam_hi) / 2.0
+    _, X_proj, Y_proj = _solve_for_lam(lam_final)
+
+    # If already feasible, return originals unchanged.
+    S = jnp.sum(jnp.exp(vmap(_mu_two)(X, Y)))
+    feasible = jnp.logical_and(jnp.isfinite(S), S <= B)
+    X_out = jnp.where(feasible, X, X_proj)
+    Y_out = jnp.where(feasible, Y, Y_proj)
+
+    # convert to abs, as negative values also satisfy the constraint
+    X_out = jnp.abs(X_out)
+    Y_out = jnp.abs(Y_out)
+
+    # X=clips, Y=sigmas — return (sigmas, clips)
+    return Y_out, X_out
 
 
 def get_privacy_params(dataset_length: int) -> GDPPrivacyParameters:
