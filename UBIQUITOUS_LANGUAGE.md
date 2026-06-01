@@ -58,6 +58,18 @@ Idea from https://github.com/mattpocock/skills/
 | **Network** | A single `eqx.Module` instance (MLP or CNN) trained in one inner loop run | model |
 | **Reinit** | The operation that randomizes model weights while preserving network architecture, used to sample a fresh network for each inner loop | reset |
 
+## Symbolic Regression & Job Orchestration
+
+| Term | Definition | Aliases to avoid |
+| --- | --- | --- |
+| **Synthesis** | One PySR symbolic-regression search fitting an equation for a *single* target (σ, clip, or μ). Each target is an independent synthesis with its own output directory and its own SLURM job chain | PySR run (ambiguous with W&B run), regression job |
+| **Target** | The schedule quantity a synthesis fits: one of `sigma`, `clip`, `mu`. The three targets never share an output directory | — |
+| **Run directory** | The PySR output location for one synthesis, `<output_directory>/<run_id>/`, holding the live checkpoint (`julia_state_stream_`) and `hall_of_fame`. Pinned via a fixed `run_id` so chained jobs reuse it; lives on `/scratch` during a job | output dir (unqualified) |
+| **Persistent mirror** | The copy of a synthesis's **run directory** kept on durable shared storage (`cache_dir/pysr_eval/<target>/pysr_run/`), refreshed by a background rsync every 15 min and on `fit()` return. The fallback a resuming job restores from if `/scratch` was purged | backup, checkpoint copy |
+| **Job chain** | The sequence of SLURM jobs that together complete one synthesis: each job runs PySR for ~2h45m, then resubmits its successor (`-d` on its own job id) to continue from the checkpoint, until termination | job chaining, resubmission chain |
+| **Chain depth** | How many jobs into a chain the current job is, carried in the `CHAIN_DEPTH` env var and incremented on each resubmit. The chain stops resubmitting at `--max-chain-jobs` (default 16) | — |
+| **Natural completion** | A synthesis finishing its `niterations` *before* the per-job `timeout_in_seconds` elapses — detected by timing `fit()`. The non-cap termination condition: a naturally completed job does not resubmit | convergence (distinct: no stagnation test is used) |
+
 ## Flagged ambiguities
 
 - **"weights"** appears for two unrelated concepts: **model weights** (neural network parameters, updated by DP-SGD inside the inner loop) and **schedule weights** (the learnable T-vector parameterizing the σ/C schedule, updated by the outer loop). Always qualify: say "schedule weights" or "model weights". The code uses `get_private_weights()` for schedule weights and `eqx.partition` to separate model arrays.
@@ -67,6 +79,10 @@ Idea from https://github.com/mattpocock/skills/
 - **"batch_size"** appears in two configs: `EnvConfig.batch_size` is the DP-SGD minibatch size (inner loop) and `ScheduleOptimizerConfig.batch_size` is the number of networks sampled per outer step. Use **minibatch size** for the former and **schedule batch size** for the latter.
 
 - **"noise"** can refer to either the **noise scale σ** (a scalar per step, part of the schedule) or the **noise vector** (the actual Gaussian sample added to gradients at runtime). Prefer "noise scale" and "noise vector" rather than bare "noise".
+
+- **"run"** is overloaded across subsystems: a **W&B run** (one outer-loop training run, keyed by a W&B run_id) versus a PySR **synthesis** (keyed by a fixed PySR `run_id` naming its **run directory**). The job-chaining for the two is also separate: `main.py` resumes a W&B run from a **W&B artifact checkpoint** keyed by `checkpoint_run_id`; a symbolic-regression **synthesis** resumes from its **run directory** / **persistent mirror** via PySR `warm_start`. Say "W&B run" or "synthesis", never bare "run".
+
+- **"checkpoint"** likewise differs: in the outer loop it is a W&B artifact (schedule weights, optimizer state, PRNG keys) saved every `checkpoint_every` steps; in a synthesis it is PySR's `julia_state_stream_` + `hall_of_fame` in the **run directory**. They share no code path.
 
 - **"policy"** is used loosely to mean the schedule (inherited from RL framing). The code has `PolicyAndClipScheduleConfig` (a specific schedule type where a neural network generates weights) and `ScheduleOptimizerConfig` (the outer-loop optimizer). Use **schedule** for the (σ, C) sequence object; reserve **policy** only for the `policy-and-clip` schedule variant where a network generates weights.
 

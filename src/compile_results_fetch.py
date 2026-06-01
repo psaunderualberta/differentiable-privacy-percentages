@@ -18,7 +18,8 @@ Usage (from src/):
 from __future__ import annotations
 
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,9 +48,22 @@ ARTIFACT_ROOT = Path(__file__).parent / "cache" / "artifacts"
 _dir_claims: dict[str, str] = {}
 _dir_claims_lock = threading.Lock()
 
+# wandb.Api wraps a requests session, which is not guaranteed thread-safe. Give
+# each worker thread its own Api (and thus its own run objects) so no client
+# state is shared across threads.
+_thread_local = threading.local()
+
+
+def _get_api() -> wandb.Api:
+    api = getattr(_thread_local, "api", None)
+    if api is None:
+        api = wandb.Api()
+        _thread_local.api = api
+    return api
+
 
 @contextmanager
-def _claim_download_dir(path: str, owner: str) -> Iterator[None]:
+def _claim_download_dir(path: str, owner: str) -> Generator[None]:
     with _dir_claims_lock:
         holder = _dir_claims.get(path)
         if holder is not None and holder != owner:
@@ -312,8 +326,12 @@ def _final_schedule_arrays(run: Any) -> tuple[list[float], list[float]]:
 
 
 def _fetch_one_run(
-    api: wandb.Api, run: Any, entity: str, project: str
+    entity: str, project: str, run_id: str
 ) -> tuple[list[dict], list[dict], list[dict]]:
+    # Use a per-thread Api so the run object and its client are never shared
+    # across threads (see _get_api). Re-fetching by id is one cheap GraphQL call.
+    api = _get_api()
+    run = api.run(f"{entity}/{project}/{run_id}")
     cfg = run.config
     env = cfg.get("env", {}) or {}
     dataset = cfg.get("dataset")
@@ -407,6 +425,8 @@ class FetchConfig:
     """Cache directory. Defaults to src/cache/results/<entity>__<project>/."""
     limit: int = 0
     """If >0, fetch only this many runs (debugging)."""
+    num_workers: int = 8
+    """Number of parallel threads used to fetch runs. 1 = sequential."""
 
 
 def main(conf: FetchConfig) -> None:
@@ -421,22 +441,32 @@ def main(conf: FetchConfig) -> None:
     )
     if conf.limit > 0:
         runs = runs[: conf.limit]
-    print(f"{len(runs)} finished runs in {conf.entity}/{conf.project}")
+    # Capture (id, name) up front: workers re-fetch by id on their own Api, and
+    # the name is needed for the missing.csv fallback when a fetch fails.
+    run_meta = [(run.id, run.name) for run in runs]
+    print(f"{len(run_meta)} finished runs in {conf.entity}/{conf.project}")
 
     scalars: list[dict] = []
     schedules: list[dict] = []
     histories: list[dict] = []
     missing: list[dict] = []
 
-    for run in tqdm.tqdm(runs, desc="runs"):
-        try:
-            s, sch, hist = _fetch_one_run(api, run, conf.entity, conf.project)
-            scalars.extend(s)
-            schedules.extend(sch)
-            histories.extend(hist)
-        except Exception as exc:
-            missing.append({"run_id": run.id, "run_name": run.name, "reason": str(exc)})
-            tqdm.tqdm.write(f"  skipping {run.id} ({run.name}): {exc}")
+    workers = max(1, conf.num_workers)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(_fetch_one_run, conf.entity, conf.project, run_id): (run_id, name)
+            for run_id, name in run_meta
+        }
+        for fut in tqdm.tqdm(as_completed(futures), total=len(futures), desc="runs"):
+            run_id, name = futures[fut]
+            try:
+                s, sch, hist = fut.result()
+                scalars.extend(s)
+                schedules.extend(sch)
+                histories.extend(hist)
+            except Exception as exc:
+                missing.append({"run_id": run_id, "run_name": name, "reason": str(exc)})
+                tqdm.tqdm.write(f"  skipping {run_id} ({name}): {exc}")
 
     scalars_df = pd.DataFrame(scalars)
     schedules_df = pd.DataFrame(schedules)

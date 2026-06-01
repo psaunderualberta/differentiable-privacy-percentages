@@ -1,4 +1,5 @@
 import json
+import multiprocessing  # used to get cpu count
 import pickle
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -37,9 +38,9 @@ class PySRConfig:
     include_diverged_training: bool = False
     out_dir: str = ""
     """Where to persist fitted models + eval inputs. Defaults to <cache_dir>/pysr_eval/."""
-    niterations: int = 2000
+    niterations: int = 100_000
     """PySR search iterations. Lower (e.g. 5) for quick smoke tests."""
-    maxsize: int = 20
+    maxsize: int = 25
     """Max equation complexity PySR will consider."""
 
 
@@ -54,7 +55,10 @@ def _apply_row_filters(df: pd.DataFrame, conf: PySRConfig) -> pd.DataFrame:
     if conf.datasets:
         df = df[df["dataset"].isin(conf.datasets)]
     if conf.arch_labels:
-        df = df[df["arch_label"].isin(conf.arch_labels)]
+        dfs = []
+        for label in conf.arch_labels:
+            dfs.append(df[df["arch_label"].apply(lambda lbl, label=label: label in lbl)])
+        df = pd.concat(dfs, axis=0)
     if conf.optimizers:
         df = df[df["optimizer"].isin(conf.optimizers)]
     if conf.run_ids:
@@ -96,19 +100,19 @@ def run_regression(
 
     model = PySRRegressor(
         batching=True,
+        turbo=True,
+        populations=3 * multiprocessing.cpu_count(),
+        parsimony=1e-4,
         maxsize=maxsize,
         niterations=niterations,
-        binary_operators=["+", "-", "*", "/"],
+        timeout_in_seconds=60 * 60,
+        binary_operators=["*", "/"],
         unary_operators=[
             "sqrt",
             "exp",
             "log",
-            "inv(x) = 1/x",
         ],
-        extra_sympy_mappings={
-            "inv": lambda x: 1 / x,
-        },
-        elementwise_loss="loss(prediction, target) = (prediction - target)^2",
+        elementwise_loss="loss(prediction, target) = ((prediction - target) / target)^2",
     )
     model.fit(X, y, variable_names=list(X.columns))
     return model
