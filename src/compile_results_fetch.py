@@ -126,9 +126,10 @@ _AUTO_CNN: dict[str, dict] = {
 }
 _AUTO_MLP: dict[str, dict] = {"california": {"hidden_sizes": [64, 32]}}
 
-# Only T values used by the T-sweep axis in create_experiments.py. Used as an
-# axis-tag fallback when run.tags is empty.
-_T_SWEEP_T_VALUES: set[int] = {1000, 1500, 2000, 3000, 5000}
+# Prefix marking a W&B tag as architecture-ladder membership (e.g. "ladder:mlp-depth").
+# Kept in sync with experiments.architectures.LADDER_TAG_PREFIX but declared locally
+# so this fetch script stays independent of the training code.
+_LADDER_TAG_PREFIX: str = "ladder:"
 
 _OPTIMIZER_TYPE_TO_NAME: dict[str, str] = {
     "SGDConfig": "sgd",
@@ -250,14 +251,30 @@ def _seed(cfg: dict) -> int | None:
     return int(raw)
 
 
-def _axis(tags: list[str], T: int | None) -> str:
+def _axis(tags: list[str]) -> str:
+    """Coarse axis from run tags: "T-sweep" or "arch".
+
+    Read directly from the tags written by create_experiments.py. "arch-sweep" is
+    accepted for back-compat with pre-ladder projects.
+    """
     if "T-sweep" in tags:
         return "T-sweep"
-    if "arch-sweep" in tags:
-        return "arch-sweep"
-    if T is not None and T in _T_SWEEP_T_VALUES:
-        return "T-sweep"
-    return "arch-sweep"
+    if "arch" in tags or "arch-sweep" in tags:
+        return "arch"
+    return "unknown"
+
+
+def _ladder_memberships(tags: list[str]) -> dict[str, bool]:
+    """One ``in_<ladder>`` boolean per ``ladder:<name>`` tag on the run.
+
+    Discovered generically from the tag prefix, so new ladders need no change here.
+    Runs with no ladder tags (e.g. the T-sweep) contribute no columns.
+    """
+    return {
+        f"in_{t.removeprefix(_LADDER_TAG_PREFIX).replace('-', '_')}": True
+        for t in tags
+        if t.startswith(_LADDER_TAG_PREFIX)
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +360,8 @@ def _fetch_one_run(
     seed = _seed(cfg)
     arch_label, n_params = _arch_info(env, dataset)
     optimizer = resolve_optimizer(env)
-    axis = _axis(list(run.tags or []), T)
+    tags = list(run.tags or [])
+    axis = _axis(tags)
 
     common = {
         "run_id": run.id,
@@ -356,6 +374,7 @@ def _fetch_one_run(
         "seed": seed,
         "axis": axis,
         "optimizer": optimizer,
+        **_ladder_memberships(tags),
     }
 
     history = _history(run)

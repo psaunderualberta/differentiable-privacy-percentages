@@ -46,6 +46,7 @@ from conf.optimizer_config import (
     OptimizerConfig,
     SGDConfig,
 )
+from experiments.architectures import LADDER_TAG_PREFIX, LADDERS
 from networks.cnn.config import CNNConfig
 from networks.mlp.config import MLPConfig
 from policy.schedules.config import (
@@ -101,27 +102,21 @@ def _to_run_config(
 # ---------------------------------------------------------------------------
 
 # Shared privacy / optimisation budget.
-EPSILONS: list[float] = [1, 3, 5, 8]
 DELTA: float = 1e-6
 BATCH_SIZE: int = 250  # T=250 ≈ 1 MNIST epoch (N=60 000)
 DATASETS: list[str] = ["mnist", "fashion-mnist"]
 NUM_OUTER_STEPS: int = 1000
 SEEDS: tuple[int, ...] = (0, 1, 2)
 
-# --- Axis 1: vary T, architecture fixed at medium MLP ---
+# --- Axis 1: vary T, architecture fixed at the dataset-default CNN ---
+T_SWEEP_EPSILONS: list[float] = [1, 3, 5, 8]
 T_VALUES: list[int] = [1500, 2000, 3000, 5000, 7000]
 
-# --- Axis 2: vary architecture, T fixed at ~20 epochs ---
+# --- Axis 2: architecture ladders (experiments/architectures.py), T fixed at ~20 epochs ---
+# Exploratory first look — single (loose) privacy budget; T-sweep keeps full eps breadth.
+LADDER_EPSILONS: list[float] = [8]
 T_FOR_ARCH_SWEEP: int = 5000
 
-# MLP-only architectures
-MLP_ARCHS: list[MLPConfig] = [
-    MLPConfig(hidden_sizes=(16,)),  # ~13K
-    MLPConfig(hidden_sizes=(512, 256)),  # ~535K
-    # MLPConfig(hidden_sizes=(128,)) shared with T-sweep; omitted to avoid duplicates
-]
-
-# CNN+MLP architectures
 OPTIMIZERS: list[OptimizerConfig] = [
     SGDConfig(learning_rate=dist_config_helper(value=0.05, distribution="constant")),
     # AdamConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
@@ -133,32 +128,25 @@ def _opt_tag(opt: OptimizerConfig) -> str:
     return type(opt).__name__.removesuffix("Config").lower()
 
 
-CNN_ARCHS: list[CNNConfig] = [
-    CNNConfig(  # ~11K
-        channels=(16, 32),
-        kernel_sizes=(8, 4),
-        paddings=(2, 0),
-        strides=(2, 2),
-        pool_kernel_size=2,
-        mlp=MLPConfig(hidden_sizes=(32,)),
-    ),
-    CNNConfig(  # ~38K
-        channels=(32, 64),
-        kernel_sizes=(8, 4),
-        paddings=(2, 0),
-        strides=(2, 2),
-        pool_kernel_size=2,
-        mlp=MLPConfig(hidden_sizes=(64,)),
-    ),
-    CNNConfig(  # ~141K
-        channels=(64, 128),
-        kernel_sizes=(8, 4),
-        paddings=(2, 0),
-        strides=(2, 2),
-        pool_kernel_size=2,
-        mlp=MLPConfig(hidden_sizes=(128,)),
-    ),
-]
+def _arch_ladder_tags() -> list[tuple[MLPConfig | CNNConfig, list[str]]]:
+    """Invert LADDERS into ``[(unique arch, [ladder tags])]``.
+
+    Architectures shared across ladders (e.g. the width/depth anchor) are emitted
+    once with the union of their ``ladder:<name>`` tags, so the W&B run is created
+    a single time and downstream tooling reads its membership from the tags.
+    """
+    unique: list[tuple[MLPConfig | CNNConfig, list[str]]] = []
+    for ladder_name, archs in LADDERS.items():
+        tag = f"{LADDER_TAG_PREFIX}{ladder_name}"
+        for arch in archs:
+            for existing_arch, tags in unique:
+                if existing_arch == arch:
+                    if tag not in tags:
+                        tags.append(tag)
+                    break
+            else:
+                unique.append((arch, [tag]))
+    return unique
 
 
 def _group_label(ds: str, eps: float, axis: str, opt_tag: str) -> str:
@@ -204,9 +192,13 @@ def _make_sweep_config(
     )
 
 
-def _build_experiments() -> dict[str, list[tuple[str, str, str, SweepConfig]]]:
-    """Return {opt_tag: [(axis_tag, group, run_name, SweepConfig), ...]} for every condition × seed."""
-    experiments: dict[str, list[tuple[str, str, str, SweepConfig]]] = {}
+def _build_experiments() -> dict[str, list[tuple[list[str], str, str, SweepConfig]]]:
+    """Return {opt_tag: [(tags, group, run_name, SweepConfig), ...]} for every condition × seed.
+
+    ``tags`` is the complete W&B tag list for the run, including the axis tag and
+    any ``ladder:<name>`` membership tags.
+    """
+    experiments: dict[str, list[tuple[list[str], str, str, SweepConfig]]] = {}
 
     def get_name(
         ds: str,
@@ -221,50 +213,40 @@ def _build_experiments() -> dict[str, list[tuple[str, str, str, SweepConfig]]]:
 
     for opt in OPTIMIZERS:
         opt_tag = _opt_tag(opt)
-        bucket: list[tuple[str, str, str, SweepConfig]] = []
+        bucket: list[tuple[list[str], str, str, SweepConfig]] = []
+
+        # Axis 1: T-sweep — dataset-default arch, full eps breadth.
         for ds in DATASETS:
-            for eps in EPSILONS:
-                # Axis 1: T sweep (medium MLP, all T values including T=3000 anchor)
+            for eps in T_SWEEP_EPSILONS:
                 for T in T_VALUES:
                     arch = DATASET_NETWORK_DEFAULTS[ds]
                     for seed in SEEDS:
                         name = get_name(ds, eps, "T", T, arch, seed, opt_tag)
                         bucket.append(
                             (
-                                "T-sweep",
+                                ["config-seed", "T-sweep", opt_tag],
                                 _group_label(ds, eps, "T-sweep", opt_tag),
                                 name,
                                 _make_sweep_config(ds, eps, T, arch, seed, opt),
                             )
                         )
 
-                # Axis 2: architecture sweep (T=3000, MLP variants excluding the anchor already above)
-                for arch in MLP_ARCHS:
+        # Axis 2: architecture ladders — deduped archs, eps=8 only, T fixed.
+        for ds in DATASETS:
+            for eps in LADDER_EPSILONS:
+                for arch, ladder_tags in _arch_ladder_tags():
                     T = T_FOR_ARCH_SWEEP
                     for seed in SEEDS:
                         name = get_name(ds, eps, "arch", T, arch, seed, opt_tag)
                         bucket.append(
                             (
-                                "arch-sweep",
-                                _group_label(ds, eps, "arch-sweep", opt_tag),
+                                ["config-seed", "arch", opt_tag, *ladder_tags],
+                                _group_label(ds, eps, "arch", opt_tag),
                                 name,
-                                _make_sweep_config(ds, eps, T_FOR_ARCH_SWEEP, arch, seed, opt),
+                                _make_sweep_config(ds, eps, T, arch, seed, opt),
                             )
                         )
 
-                # Axis 2: architecture sweep (T=3000, CNN+MLP variants)
-                for arch in CNN_ARCHS:
-                    T = T_FOR_ARCH_SWEEP
-                    for seed in SEEDS:
-                        name = get_name(ds, eps, "arch", T, arch, seed, opt_tag)
-                        bucket.append(
-                            (
-                                "arch-sweep",
-                                _group_label(ds, eps, "arch-sweep", opt_tag),
-                                name,
-                                _make_sweep_config(ds, eps, T_FOR_ARCH_SWEEP, arch, seed, opt),
-                            )
-                        )
         experiments[opt_tag] = bucket
 
     return experiments
@@ -285,9 +267,9 @@ class LauncherConfig:
     """Number of parallel workers to use when creating W&B runs."""
 
 
-def _init_run(args: tuple[str, str, str, str, str, dict, str]) -> tuple[str, str, str]:
+def _init_run(args: tuple[str, str, str, str, list[str], dict, str]) -> tuple[str, str, str]:
     """Worker: create a single W&B run and return (opt_tag, run_id, name)."""
-    project, entity, name, group, axis, config, opt_tag = args
+    project, entity, name, group, tags, config, opt_tag = args
     run = wandb.init(
         project=project,
         entity=entity,
@@ -295,7 +277,7 @@ def _init_run(args: tuple[str, str, str, str, str, dict, str]) -> tuple[str, str
         group=group,
         config=config,
         job_type="config-seed",
-        tags=["config-seed", axis, opt_tag],
+        tags=tags,
     )
     assert run is not None
     run_id = run.id
@@ -322,7 +304,7 @@ if __name__ == "__main__":
         run_counts = []
         paths = []
         for opt_tag, bucket in experiments.items():
-            for _axis, group, name, sweep_conf in bucket:
+            for _tags, group, name, sweep_conf in bucket:
                 print(f"\n{'─' * 64}")
                 print(f"  {name}  [group={group}]")
                 print(json.dumps(_to_run_config(sweep_conf), indent=2, default=str))
@@ -335,14 +317,14 @@ if __name__ == "__main__":
     else:
         tasks = []
         for opt_tag, bucket in experiments.items():
-            for axis, group, name, sweep_conf in bucket:
+            for tags, group, name, sweep_conf in bucket:
                 tasks.append(
                     (
                         conf.project,
                         conf.entity,
                         name,
                         group,
-                        axis,
+                        tags,
                         _to_run_config(sweep_conf),
                         opt_tag,
                     )

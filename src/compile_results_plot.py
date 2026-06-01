@@ -65,6 +65,23 @@ SCHEDULE_COLORS: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
+# Axis selection
+# ---------------------------------------------------------------------------
+
+# compile_results_fetch._axis() writes "arch" for the architecture sweep, but
+# accepts the legacy "arch-sweep" tag for back-compat with pre-ladder projects.
+# Mirror that tolerance here so plots render against either vintage of cache.
+_ARCH_AXES: tuple[str, ...] = ("arch", "arch-sweep")
+
+
+def _axis_mask(df: pd.DataFrame, axis: str) -> pd.Series:
+    """Boolean mask selecting rows for ``axis``; "arch" also matches legacy "arch-sweep"."""
+    if axis == "arch":
+        return df["axis"].isin(_ARCH_AXES)
+    return df["axis"] == axis
+
+
+# ---------------------------------------------------------------------------
 # Aggregation
 # ---------------------------------------------------------------------------
 
@@ -167,7 +184,7 @@ def plot_main(
     metric: str,
     out_path_stem: Path,
 ) -> None:
-    df = scalars_df[scalars_df["axis"] == axis].copy()
+    df = scalars_df[_axis_mask(scalars_df, axis)].copy()
     if df.empty:
         print(f"  [skip] no rows for axis={axis}")
         return
@@ -217,7 +234,7 @@ def plot_main(
                     alpha=0.12,
                     linewidth=0,
                 )
-            if axis == "arch-sweep":
+            if axis == "arch":
                 ax.set_xticks([x_to_pos[v] for v in x_vals])
                 ax.set_xticklabels(x_vals, rotation=40, ha="right", fontsize=7)
             ax.grid(True, alpha=0.3, linewidth=0.5)
@@ -241,7 +258,7 @@ def plot_delta(
     metric: str,
     out_path_stem: Path,
 ) -> None:
-    df = scalars_df[scalars_df["axis"] == axis].copy()
+    df = scalars_df[_axis_mask(scalars_df, axis)].copy()
     if df.empty:
         print(f"  [skip] no rows for axis={axis}")
         return
@@ -296,7 +313,7 @@ def plot_delta(
                     alpha=0.15,
                     linewidth=0,
                 )
-            if axis == "arch-sweep":
+            if axis == "arch":
                 ax.set_xticks([x_to_pos[v] for v in x_vals])
                 ax.set_xticklabels(x_vals, rotation=40, ha="right", fontsize=7)
             ax.grid(True, alpha=0.3, linewidth=0.5)
@@ -366,7 +383,7 @@ def plot_shape(
 def plot_shape_variant(
     schedules_df: pd.DataFrame,
     var: str,  # "sigma" or "clip"
-    axis_tag: str,  # "T-sweep" or "arch-sweep"
+    axis_tag: str,  # "T-sweep" or "arch"
     color_col: str,  # "T", "arch_label", or "seed"
     out_path_stem: Path,
 ) -> None:
@@ -381,7 +398,7 @@ def plot_shape_variant(
         print(f"  [skip] no schedule rows for {var}")
         return
 
-    df = schedules_df[schedules_df["axis"] == axis_tag]
+    df = schedules_df[_axis_mask(schedules_df, axis_tag)]
     if df.empty:
         print(f"  [skip] no rows for axis={axis_tag} ({var}, color={color_col})")
         return
@@ -507,7 +524,7 @@ def build_table(
     scalars_df: pd.DataFrame,
     axis: str,
 ) -> pd.DataFrame:
-    df = scalars_df[scalars_df["axis"] == axis].copy()
+    df = scalars_df[_axis_mask(scalars_df, axis)].copy()
     if df.empty:
         return pd.DataFrame()
 
@@ -531,7 +548,7 @@ def build_table(
     pivot_mean = pivot_mean[cols]
     pivot_se = pivot_se.reindex(columns=cols)
 
-    if axis == "arch-sweep":
+    if axis == "arch":
         param_map = (
             df.dropna(subset=["arch_param_count"]).groupby("arch_label")["arch_param_count"].first()
         )
@@ -649,7 +666,7 @@ def plot_curves(
     one value in the data, emit one plot per value with a filename suffix and
     warn that the plot was split.
     """
-    df = histories_df[(histories_df["axis"] == axis) & (histories_df["dataset"] == dataset)].copy()
+    df = histories_df[_axis_mask(histories_df, axis) & (histories_df["dataset"] == dataset)].copy()
     if df.empty:
         print(f"  [skip] no history for axis={axis}, dataset={dataset}")
         return
@@ -818,7 +835,7 @@ def main(conf: PlotConfig) -> None:
         out = out_root / opt
         out.mkdir(parents=True, exist_ok=True)
 
-        for axis_tag, prefix in (("T-sweep", "t_sweep"), ("arch-sweep", "arch_sweep")):
+        for axis_tag, prefix in (("T-sweep", "t_sweep"), ("arch", "arch_sweep")):
             plot_main(s, axis_tag, "mean_acc", out / f"{prefix}_main")
             plot_delta(s, axis_tag, CONSTANT, "mean_acc", out / f"{prefix}_delta_vs_constant")
             plot_delta(s, axis_tag, DYNAMIC, "mean_acc", out / f"{prefix}_delta_vs_dynamic")
@@ -834,7 +851,7 @@ def main(conf: PlotConfig) -> None:
         for var in ("sigma", "clip"):
             for axis_tag, axis_prefix, struct_col, struct_tag in (
                 ("T-sweep", "T_sweep", "T", "by_T"),
-                ("arch-sweep", "arch_sweep", "arch_label", "by_arch"),
+                ("arch", "arch_sweep", "arch_label", "by_arch"),
             ):
                 plot_shape_variant(
                     sch,
@@ -856,7 +873,7 @@ def main(conf: PlotConfig) -> None:
             if not h.empty:
                 curves_dir = out / "curves"
                 for dataset in sorted(h["dataset"].unique()):
-                    for axis_tag, prefix in (("T-sweep", "t_sweep"), ("arch-sweep", "arch_sweep")):
+                    for axis_tag, prefix in (("T-sweep", "t_sweep"), ("arch", "arch_sweep")):
                         plot_curves(
                             h,
                             axis_tag,
