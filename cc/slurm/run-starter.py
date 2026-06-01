@@ -58,7 +58,7 @@ class SlurmConfig:
     project_dir: str = os.environ["PROJECT_SOURCE_ROOT"]
     cpus_per_task: int = 2
     gpus: int = 1
-    mem_per_gpu: str = "6G"
+    mem_per_gpu: str = "8G"
     account: str = "aip-nidhih"
     wandb_proj: str = "Testing Mu-gdp"
     prerequisites: tuple[str, ...] = ()

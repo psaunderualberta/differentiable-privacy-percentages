@@ -1,11 +1,11 @@
 import optax
 import tqdm
+import wandb
 from jax import device_put, devices
 from jax import random as jr
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 
-import wandb
 from conf.scope import RunContext, current, using
 from conf.singleton_conf import SingletonConfig
 from environments.dp import get_private_model_training_schemas
