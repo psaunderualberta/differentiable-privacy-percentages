@@ -105,7 +105,7 @@ def _to_run_config(
 DELTA: float = 1e-6
 BATCH_SIZE: int = 250  # T=250 ≈ 1 MNIST epoch (N=60 000)
 DATASETS: list[str] = ["mnist", "fashion-mnist"]
-NUM_OUTER_STEPS: int = 1500
+NUM_OUTER_STEPS: int = 2000
 SEEDS: tuple[int, ...] = (0, 1, 2)
 
 # --- Axis 1: vary T, architecture fixed at the dataset-default CNN ---
