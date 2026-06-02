@@ -27,6 +27,12 @@ reference point — here the width-128 / depth-1 MLP, where the width and depth 
 The param-matched ladder's target parameter count is defined by the anchor.
 _Avoid_: baseline, pivot, origin.
 
+**Rung**:
+A single architecture within a ladder — one position on the ordered family. Per-ladder
+plots use a categorical x-axis over rungs, ordered by the ladder definition (`LADDERS`)
+and ticked by `arch_label`. The anchor is a rung shared by several ladders.
+_Avoid_: point, step, level.
+
 **Width ladder**:
 A ladder that fixes depth (number of layers) and varies layer width.
 _Avoid_: size sweep.
@@ -56,3 +62,18 @@ A W&B run tag of the form `ladder:<name>` (e.g. `ladder:mlp-depth`). A single ru
 one tag per ladder it belongs to, so the deduplicated anchor run carries several.
 Downstream tooling discovers ladder membership generically from the `ladder:` prefix.
 _Avoid_: axis tag (reserved for the coarser T-sweep / arch distinction), label.
+
+### Result plots
+
+**Per-ladder plot**:
+A figure showing a single ladder, with its rungs on a categorical x-axis. Lives under
+`plots/<optimizer>/ladders/<ladder-name>/`. Each ladder gets its own scalar plots
+(main, deltas, table) and schedule-shape-by-rung plots.
+_Avoid_: arch plot, sweep plot.
+
+**Overlay**:
+A cross-ladder comparison plot that draws one line per ladder on a shared axis (parameter
+count), under `plots/<optimizer>/ladders/overall/`. The overlay answers cross-ladder
+questions (does the learned advantage scale with model size); it replaces the old lumped
+arch plot that mixed all ladders onto one mis-sorted param-count line.
+_Avoid_: combined plot, lumped plot, arch-sweep plot.

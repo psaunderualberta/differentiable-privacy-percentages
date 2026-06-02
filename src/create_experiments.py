@@ -105,7 +105,7 @@ def _to_run_config(
 DELTA: float = 1e-6
 BATCH_SIZE: int = 250  # T=250 ≈ 1 MNIST epoch (N=60 000)
 DATASETS: list[str] = ["mnist", "fashion-mnist"]
-NUM_OUTER_STEPS: int = 1000
+NUM_OUTER_STEPS: int = 1500
 SEEDS: tuple[int, ...] = (0, 1, 2)
 
 # --- Axis 1: vary T, architecture fixed at the dataset-default CNN ---
@@ -173,7 +173,7 @@ def _make_sweep_config(
         dataset=ds,
         num_outer_steps=NUM_OUTER_STEPS,
         with_baselines=True,
-        baseline_log_interval=200,
+        baseline_log_interval=50,
         plotting_interval=50,
         prng_seed=dist_config_helper(value=float(seed), distribution="constant"),
         env=EnvConfig(
@@ -187,7 +187,7 @@ def _make_sweep_config(
         ),
         schedule_optimizer=ScheduleOptimizerConfig(
             schedule=DecoupledSigmaAndClipScheduleConfig(),
-            lr=dist_config_helper(value=10.0, distribution="constant"),
+            lr=dist_config_helper(value=1.0, distribution="constant"),
         ),
     )
 
