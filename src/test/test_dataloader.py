@@ -68,7 +68,8 @@ def loader(datasets):
 class TestDataloaderTestChunks:
     def test_loaded_test_data_is_offset_correctly(self, loader):
         loaded_x, loaded_y = loader.load_test_chunk(np.array([0]))
-        expected_location = loader.n_val
+        # Test chunk index 0 maps to the (n_val)-th entry of the permuted pool.
+        expected_location = int(loader._val_test_perm()[loader.n_val])
         expected_x, expected_y = _preprocess(
             np.load(loader.val_x_path)[expected_location : expected_location + 1],
             np.load(loader.val_y_path)[expected_location : expected_location + 1],
@@ -98,7 +99,8 @@ class TestDataloaderTestChunks:
 class TestDataloaderValChunks:
     def test_loaded_val_data_is_offset_correctly(self, loader):
         loaded_x, loaded_y = loader.load_val_chunk(np.array([0]))
-        expected_location = 0
+        # Val chunk index 0 maps to the 0-th entry of the permuted pool.
+        expected_location = int(loader._val_test_perm()[0])
         expected_x, expected_y = _preprocess(
             np.load(loader.val_x_path)[expected_location : expected_location + 1],
             np.load(loader.val_y_path)[expected_location : expected_location + 1],
@@ -107,3 +109,9 @@ class TestDataloaderValChunks:
 
         assert np.allclose(loaded_x, expected_x, atol=1e-5)
         assert np.allclose(loaded_y, expected_y, atol=1e-5)
+
+    def test_val_and_test_indices_are_disjoint(self, loader):
+        perm = loader._val_test_perm()
+        val_rows = set(perm[np.arange(loader.n_val)].tolist())
+        test_rows = set(perm[np.arange(loader.n_test) + loader.n_val].tolist())
+        assert val_rows.isdisjoint(test_rows)

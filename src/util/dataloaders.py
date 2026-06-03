@@ -95,6 +95,21 @@ class DatasetLoader:
     dataset_name: str
     val_chunk_size: int
     """Must divide n_val; determines the static batch shape inside the val scan."""
+    split_seed: int = 0
+    """Seed for the deterministic permutation used to split the val file into
+    val/test.  The raw val file is often ordered (e.g. a difficulty gradient),
+    so a contiguous slice would give a biased test set; permuting first makes
+    val and test exchangeable draws from the same distribution."""
+
+    def _val_test_perm(self) -> np.ndarray:
+        """Deterministic permutation of the val/test pool rows ([0, n_val+n_test)).
+
+        Recomputed on demand (cheap relative to the memmap reads) so the loader
+        stays a hashable, array-free static field.  Indices into the val file are
+        obtained by mapping a contiguous chunk index through this permutation.
+        """
+        pool = self.n_val + self.n_test
+        return np.random.default_rng(self.split_seed).permutation(pool)
 
     def __post_init__(self) -> None:
         assert self.n_val % self.val_chunk_size == 0, (
@@ -133,15 +148,24 @@ class DatasetLoader:
         self,
         indices: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Fetch and preprocess a validation chunk by integer index array."""
-        return self._load_chunk(indices)
+        """Fetch and preprocess a validation chunk by integer index array.
+
+        The contiguous `indices` (in [0, n_val)) are mapped through the val/test
+        permutation so val draws are spread across the whole file.
+        """
+        return self._load_chunk(self._val_test_perm()[indices])
 
     def load_test_chunk(
         self,
         indices: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Fetch and preprocess a test chunk by integer index array."""
-        return self._load_chunk(indices + self.n_val)
+        """Fetch and preprocess a test chunk by integer index array.
+
+        The contiguous `indices` (in [0, n_test)) are offset past the val region
+        and mapped through the same permutation, so val and test are disjoint
+        i.i.d. draws from the shuffled pool.
+        """
+        return self._load_chunk(self._val_test_perm()[indices + self.n_val])
 
 
 # ---------------------------------------------------------------------------
