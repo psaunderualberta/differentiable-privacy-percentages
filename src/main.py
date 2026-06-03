@@ -238,9 +238,6 @@ def main():
 
         iterator.set_description(f"Training Progress - Loss: {loss:.4f}")
 
-        if (t + 1) % wandb_config.checkpoint_every == 0:
-            save_checkpoint(make_state(schedule, opt_state, key, init_key, t, es_state), t, run)
-
         if log_baselines_during_training and (t + 1) % sweep_config.baseline_log_interval == 0:
             baseline.log_comparison(schedule, eval_key, logger=logger)
 
@@ -248,6 +245,9 @@ def main():
             print(f"Graceful shutdown at step {t}; checkpointing for job-chain resubmit")
             save_checkpoint(make_state(schedule, opt_state, key, init_key, t, es_state), t, run)
             break
+
+        if (t + 1) % wandb_config.checkpoint_every == 0:
+            save_checkpoint(make_state(schedule, opt_state, key, init_key, t, es_state), t, run)
 
     # Resubmit job (dependency ensures won't start until current ends)
     if not shutdown_requested() and not time_limit_approaching():

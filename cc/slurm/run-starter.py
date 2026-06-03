@@ -58,7 +58,7 @@ class SlurmConfig:
     project_dir: str = os.environ["PROJECT_SOURCE_ROOT"]
     cpus_per_task: int = 2
     gpus: int = 1
-    mem_per_gpu: str = "8G"
+    mem_per_gpu: str = "12G"
     account: str = "aip-nidhih"
     wandb_proj: str = "Testing Mu-gdp"
     prerequisites: tuple[str, ...] = ()
@@ -102,7 +102,7 @@ echo "CUDA devices: $CUDA_VISIBLE_DEVICES"
 echo "starting training..."
 echo tmpdir: $SLURM_TMPDIR
 echo main_args: {self.main_args}
-srun time uv run main.py {self.main_args}
+time uv run main.py {self.main_args}
 
 # End printing
 echo "Job finished with exit code $? at: `date`"
