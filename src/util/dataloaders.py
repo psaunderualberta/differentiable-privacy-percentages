@@ -7,7 +7,7 @@ from datasets import load_dataset
 from sklearn.datasets import fetch_california_housing
 from sklearn.preprocessing import PolynomialFeatures
 
-from conf.singleton_conf import SingletonConfig
+from conf.scope import current
 
 __DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
 
@@ -374,8 +374,8 @@ def get_dataset_loader() -> DatasetLoader:
     Does NOT load any data into memory.  The DatasetLoader's load_* methods
     use numpy memmaps to fetch only the requested samples on demand.
     """
-    sweep_config = SingletonConfig.get_sweep_config_instance()
-    env_config = SingletonConfig.get_environment_config_instance()
+    sweep_config = current().config.sweep
+    env_config = current().config.sweep.env
     dataset_name = sweep_config.dataset
     poly_d = sweep_config.dataset_poly_d
     batch_size = env_config.batch_size
@@ -410,9 +410,14 @@ def get_dataset_loader() -> DatasetLoader:
 
     sample_shape = _get_sample_shape(raw_sample_shape, dataset_name)
 
-    # Trim val set to a multiple of batch_size so val_chunk_size divides n_val exactly
+    # Trim val set to a multiple of batch_size so val_chunk_size divides (n_val + n_test) exactly,
+    # and n_test / (n_val + n_test) \approx test_percentace
+    val_test_split = sweep_config.val_test_split
     val_chunk_size = batch_size
-    n_val = (n_val_raw // val_chunk_size) * val_chunk_size
+    n_test_raw = round(n_val_raw * (1 - val_test_split))
+    n_true_val_raw = round(n_val_raw * val_test_split)
+    n_val = (n_true_val_raw // val_chunk_size) * val_chunk_size
+    n_test = (n_test_raw // val_chunk_size) * val_chunk_size
 
     return DatasetLoader(
         x_path=x_train,
@@ -421,7 +426,7 @@ def get_dataset_loader() -> DatasetLoader:
         val_y_path=y_val,
         n_train=n_train,
         n_val=n_val,
-        n_test=0,
+        n_test=n_test,
         sample_shape=sample_shape,
         label_shape=label_shape,
         dataset_name=dataset_name,
