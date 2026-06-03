@@ -209,6 +209,8 @@ def main():
             es_state,
         )
 
+        print(statistics.test_loss, statistics.test_accuracy)
+
         logger.log(Loggable(table_name="train_losses", data={"losses": statistics.losses}))
         logger.log(Loggable(table_name="accuracies", data={"accuracies": statistics.accuracies}))
 

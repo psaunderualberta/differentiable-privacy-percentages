@@ -32,8 +32,8 @@ from util.util import (
 class TrainingStatistics(eqx.Module):
     val_loss: Array
     val_accuracy: Array
-    # test_loss: Array
-    # test_accuracy: Array
+    test_loss: Array
+    test_accuracy: Array
     losses: Array
     accuracies: Array
 
@@ -142,6 +142,38 @@ def get_validation_statistics(network, loader) -> tuple[Array, Array]:
     val_accuracy = total_acc / n_val
 
     return val_loss, val_accuracy
+
+
+def get_test_statistics(network, loader) -> tuple[Array, Array]:
+    # --- Chunked validation evaluation via pure_callback ---
+    n_test_chunks = loader.n_test // loader.val_chunk_size
+    test_chunk_idx = jnp.arange(loader.n_test, dtype=jnp.int32).reshape(
+        n_test_chunks, loader.val_chunk_size
+    )
+
+    xv_spec = jax.ShapeDtypeStruct((loader.val_chunk_size, *loader.sample_shape), jnp.float32)
+    yv_spec = jax.ShapeDtypeStruct((loader.val_chunk_size, *loader.label_shape), jnp.float32)
+
+    def _fetch_test_chunk(indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        return loader.load_test_chunk(np.asarray(indices))
+
+    def test_body(
+        carry: tuple[Array, Array],
+        chunk_indices: Array,
+    ) -> tuple[tuple[Array, Array], None]:
+        batch_x, batch_y = jax.pure_callback(_fetch_test_chunk, (xv_spec, yv_spec), chunk_indices)
+        batch_loss, _ = loss(network, batch_x, batch_y)
+        batch_acc = classification_accuracy(network, batch_x, batch_y)
+        n = jnp.array(loader.val_chunk_size, jnp.float32)
+        total_loss, total_acc = carry
+        return (total_loss + batch_loss * n, total_acc + batch_acc * n), None
+
+    (total_loss, total_acc), _ = jax.lax.scan(test_body, (0.0, 0.0), test_chunk_idx)
+    n_test = jnp.array(loader.n_test, jnp.float32)
+    test_loss = total_loss / n_test
+    test_accuracy = total_acc / n_test
+
+    return test_loss, test_accuracy
 
 
 @eqx.filter_jit
@@ -269,9 +301,15 @@ def train_with_noise(
     losses = jnp.concat([losses, jnp.asarray([final_loss])])
 
     val_loss, val_accuracy = get_validation_statistics(network_final, loader)
+    test_loss, test_accuracy = get_test_statistics(network_final, loader)
 
     return network_final, TrainingStatistics(
-        val_loss=val_loss, losses=losses, accuracies=accuracies, val_accuracy=val_accuracy
+        val_loss=val_loss,
+        val_accuracy=val_accuracy,
+        test_loss=test_loss,
+        test_accuracy=test_accuracy,
+        losses=losses,
+        accuracies=accuracies,
     )
 
 
@@ -422,7 +460,13 @@ def train_with_stateful_noise(
     losses = jnp.concat([losses, jnp.asarray([final_loss])])
 
     val_loss, val_accuracy = get_validation_statistics(network_final, loader)
+    test_loss, test_accuracy = get_test_statistics(network_final, loader)
 
     return network_final, TrainingStatistics(
-        val_loss=val_loss, losses=losses, accuracies=accuracies, val_accuracy=val_accuracy
+        val_loss=val_loss,
+        val_accuracy=val_accuracy,
+        test_loss=test_loss,
+        test_accuracy=test_accuracy,
+        losses=losses,
+        accuracies=accuracies,
     )
