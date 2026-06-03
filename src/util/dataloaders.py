@@ -86,6 +86,7 @@ class DatasetLoader:
     val_y_path: str
     n_train: int
     n_val: int
+    n_test: int
     """Number of validation samples after trimming to a multiple of val_chunk_size."""
     sample_shape: tuple[int, ...]
     """Per-sample shape *after* preprocessing, e.g. (1, 28, 28) for MNIST."""
@@ -102,6 +103,12 @@ class DatasetLoader:
             f"before constructing DatasetLoader."
         )
 
+        x_val_rows = _get_mmap(self.val_x_path).shape[0]
+        if self.n_val + self.n_test > x_val_rows:
+            raise ValueError(
+                f"n_val ({self.n_val}) + n_test ({self.n_test}) must be <= rows(x_val) ({x_val_rows})"
+            )
+
     def load_train_batch(
         self,
         indices: np.ndarray,
@@ -114,14 +121,27 @@ class DatasetLoader:
         y_mmap = _get_mmap(self.y_path)
         return _preprocess(x_mmap[indices].copy(), y_mmap[indices].copy(), self.dataset_name)
 
+    def _load_chunk(
+        self,
+        indices: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        x_mmap = _get_mmap(self.val_x_path)
+        y_mmap = _get_mmap(self.val_y_path)
+        return _preprocess(x_mmap[indices].copy(), y_mmap[indices].copy(), self.dataset_name)
+
     def load_val_chunk(
         self,
         indices: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Fetch and preprocess a validation chunk by integer index array."""
-        x_mmap = _get_mmap(self.val_x_path)
-        y_mmap = _get_mmap(self.val_y_path)
-        return _preprocess(x_mmap[indices].copy(), y_mmap[indices].copy(), self.dataset_name)
+        return self._load_chunk(indices)
+
+    def load_test_chunk(
+        self,
+        indices: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Fetch and preprocess a test chunk by integer index array."""
+        return self._load_chunk(indices + self.n_val)
 
 
 # ---------------------------------------------------------------------------
