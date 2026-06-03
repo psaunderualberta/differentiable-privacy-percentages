@@ -1,11 +1,11 @@
 import optax
 import tqdm
-import wandb
 from jax import device_put, devices
 from jax import random as jr
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 
+import wandb
 from conf.scope import RunContext, current, using
 from conf.singleton_conf import SingletonConfig
 from environments.dp import get_private_model_training_schemas
@@ -201,7 +201,7 @@ def main():
         # mb_key = device_put(mb_key, sharding)
         # init_key = device_put(init_key, sharding)
         noise_keys = device_put(jr.split(noise_key, parallel_axis_size), sharding)
-        (loss, (losses, accuracies, val_accs)), grads, es_state = get_training_loss(
+        (loss, statistics), grads, es_state = get_training_loss(
             schedule,
             mb_key,
             init_key,
@@ -209,15 +209,15 @@ def main():
             es_state,
         )
 
-        logger.log(Loggable(table_name="train_losses", data={"losses": losses}))
-        logger.log(Loggable(table_name="accuracies", data={"accuracies": accuracies}))
+        logger.log(Loggable(table_name="train_losses", data={"losses": statistics.losses}))
+        logger.log(Loggable(table_name="accuracies", data={"accuracies": statistics.accuracies}))
 
         wandb.log(
             {
                 "val-loss": loss,
-                "val-accuracy": val_accs.mean(),
-                "train-loss": losses[:, -1].mean(),
-                "train-accuracies": accuracies[:, -1].mean(),
+                "val-accuracy": statistics.val_accuracy.mean(),
+                "train-loss": statistics.losses[:, -1].mean(),
+                "train-accuracies": statistics.accuracies[:, -1].mean(),
             },
         )
 

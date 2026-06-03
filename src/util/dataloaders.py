@@ -421,6 +421,7 @@ def get_dataset_loader() -> DatasetLoader:
         val_y_path=y_val,
         n_train=n_train,
         n_val=n_val,
+        n_test=0,
         sample_shape=sample_shape,
         label_shape=label_shape,
         dataset_name=dataset_name,

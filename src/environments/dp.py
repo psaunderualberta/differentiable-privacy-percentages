@@ -29,6 +29,15 @@ from util.util import (
 )
 
 
+class TrainingStatistics(eqx.Module):
+    val_loss: Array
+    val_accuracy: Array
+    # test_loss: Array
+    # test_accuracy: Array
+    losses: Array
+    accuracies: Array
+
+
 def get_private_model_training_schemas() -> list[LoggingSchema]:
     """Return logging schemas for the inner-loop train-loss and accuracy tables."""
     return [
@@ -110,7 +119,7 @@ def train_with_noise(
     mb_key: PRNGKeyArray,
     init_key: PRNGKeyArray,
     noise_key: PRNGKeyArray,
-) -> tuple[eqx.Module, Array, Array, Array, Array]:
+) -> tuple[eqx.Module, TrainingStatistics]:
     # Get noise and clip schedules
     noise_schedule = schedule.get_private_noise_scales()
     clip_schedule = schedule.get_private_clips()
@@ -255,7 +264,9 @@ def train_with_noise(
     val_loss = total_loss / n_val
     val_accuracy = total_acc / n_val
 
-    return network_final, val_loss, losses, accuracies, val_accuracy
+    return network_final, TrainingStatistics(
+        val_loss=val_loss, losses=losses, accuracies=accuracies, val_accuracy=val_accuracy
+    )
 
 
 @eqx.filter_jit
@@ -265,7 +276,7 @@ def train_with_stateful_noise(
     mb_key: PRNGKeyArray,
     init_key: PRNGKeyArray,
     noise_key: PRNGKeyArray,
-) -> tuple[eqx.Module, Array, Array, Array, Array]:
+) -> tuple[eqx.Module, TrainingStatistics]:
     initial_schedule_state = schedule.get_initial_state()
     iters = schedule.get_iteration_array()
 
@@ -432,4 +443,6 @@ def train_with_stateful_noise(
     val_loss = total_loss / n_val
     val_accuracy = total_acc / n_val
 
-    return network_final, val_loss, losses, accuracies, val_accuracy
+    return network_final, TrainingStatistics(
+        val_loss=val_loss, losses=losses, accuracies=accuracies, val_accuracy=val_accuracy
+    )

@@ -31,7 +31,7 @@ from jaxtyping import Array, PRNGKeyArray, PyTree
 
 from conf.config import ESConfig
 from conf.singleton_conf import SingletonConfig
-from environments.dp import DPTrainingParams, train_with_noise
+from environments.dp import DPTrainingParams, TrainingStatistics, train_with_noise
 from environments.nes import ESState, adaptation_sampling_update, nes_es_step
 from policy.schedules.abstract import AbstractNoiseAndClipSchedule
 
@@ -90,16 +90,16 @@ def _make_analytic_training_loss_fn(env_params: DPTrainingParams):
         mb_key: PRNGKeyArray,
         init_key: PRNGKeyArray,
         noise_keys: PRNGKeyArray,
-    ) -> tuple[Array, tuple[Array, Array, Array]]:
-        _, to_diff, losses, accuracies, val_acc = vmapped_train_with_noise(
+    ) -> tuple[Array, TrainingStatistics]:
+        _, statistics = vmapped_train_with_noise(
             schedule,
             env_params,
             mb_key,
             init_key,
             noise_keys,
         )
-        to_diff = jnp.mean(to_diff).squeeze()
-        return to_diff, (losses, accuracies, val_acc)
+        to_diff = jnp.mean(statistics.val_loss).squeeze()
+        return to_diff, statistics
 
     @eqx.filter_jit
     def get_training_loss(
@@ -173,14 +173,19 @@ def _make_es_training_loss_fn(
                 diff_perturbed = jax.tree.map(lambda d, dl: d + dl, diff, delta)
                 sched = eqx.combine(diff_perturbed, static)
                 sched = sched.project()
-                _, val_loss, losses, accs, val_acc = train_with_noise(
+                _, statistics = train_with_noise(
                     sched,
                     env_params,
                     mb_key,
                     init_key,
                     crn_k,
                 )
-                return val_loss, losses, accs, val_acc
+                return (
+                    statistics.val_loss,
+                    statistics.losses,
+                    statistics.accuracies,
+                    statistics.val_accuracy,
+                )
 
             # vl_pos, l_pos, a_pos, va_pos = _one_side(+1.0)
             # vl_neg, l_neg, a_neg, va_neg = _one_side(-1.0)
@@ -200,18 +205,24 @@ def _make_es_training_loss_fn(
             # (half_pop, 2, ...) → (population_size, ...)
             return x.reshape(population_size, *x.shape[2:])
 
-        F = _flatten_pop(val_losses)
-        losses_pop = _flatten_pop(losses)
-        accs_pop = _flatten_pop(accuracies)
-        val_accs_pop = _flatten_pop(val_accs)
+        statistics = TrainingStatistics(
+            val_loss=_flatten_pop(val_losses),
+            losses=_flatten_pop(losses),
+            accuracies=_flatten_pop(accuracies),
+            val_accuracy=_flatten_pop(val_accs),
+        )
+        # F = _flatten_pop(val_losses)
+        # losses_pop = _flatten_pop(losses)
+        # accs_pop = _flatten_pop(accuracies)
+        # val_accs_pop = _flatten_pop(val_accs)
 
         # Mean-parameter gradient + log-σ natural-gradient update.
-        g_diff, new_es_state = nes_es_step(es_state, eps, F)
+        g_diff, new_es_state = nes_es_step(es_state, eps, statistics.val_loss)
 
         if adaptation_enabled:
             new_eta = adaptation_sampling_update(
                 eps=eps,
-                fitnesses=F,
+                fitnesses=statistics.val_loss,
                 eta_sigma=new_es_state.eta_sigma,
                 eta_sigma_init=eta_sigma_init,
                 c=adaptation_c,
@@ -231,7 +242,7 @@ def _make_es_training_loss_fn(
         )
         grads = eqx.combine(g_diff, zero_static)
 
-        loss = jnp.mean(F).squeeze()
-        return (loss, (losses_pop, accs_pop, val_accs_pop)), grads, new_es_state
+        loss = jnp.mean(statistics.val_loss).squeeze()
+        return (loss, statistics), grads, new_es_state
 
     return get_training_loss

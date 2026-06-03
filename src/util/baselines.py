@@ -11,9 +11,9 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import tqdm
-import wandb
 from jaxtyping import Array, PRNGKeyArray
 
+import wandb
 from environments.dp import (
     DPTrainingParams,
     train_with_noise,
@@ -256,7 +256,7 @@ class Baseline:
             key, mb_key, init_key = jr.split(key, 3)
             key, noise_key = jr.split(key)
             if isinstance(schedule, AbstractNoiseAndClipSchedule):
-                _, val_loss, losses, accuracies, val_acc = train_with_noise(
+                _, statistics = train_with_noise(
                     schedule,
                     self.env_params,
                     mb_key,
@@ -264,7 +264,7 @@ class Baseline:
                     noise_key,
                 )
             else:
-                _, val_loss, losses, accuracies, val_acc = train_with_stateful_noise(
+                _, statistics = train_with_stateful_noise(
                     schedule,
                     self.env_params,
                     mb_key,
@@ -274,10 +274,10 @@ class Baseline:
             df.loc[len(df)] = {  # type: ignore
                 "type": name,
                 "step": 0,  # only recording one step for these
-                "loss": val_loss,
-                "accuracy": val_acc,
-                "losses": losses,
-                "accuracies": accuracies,
+                "loss": statistics.val_loss,
+                "accuracy": statistics.val_accuracy,
+                "losses": statistics.losses,
+                "accuracies": statistics.accuracies,
             }
 
         # Create a copy of baseline data, then another to be modified
