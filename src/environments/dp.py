@@ -112,6 +112,38 @@ def training_step(
     return new_model, new_opt_state, noise_key, new_loss, accuracy
 
 
+def get_validation_statistics(network, loader) -> tuple[Array, Array]:
+    # --- Chunked validation evaluation via pure_callback ---
+    n_val_chunks = loader.n_val // loader.val_chunk_size
+    val_chunk_idx = jnp.arange(loader.n_val, dtype=jnp.int32).reshape(
+        n_val_chunks, loader.val_chunk_size
+    )
+
+    xv_spec = jax.ShapeDtypeStruct((loader.val_chunk_size, *loader.sample_shape), jnp.float32)
+    yv_spec = jax.ShapeDtypeStruct((loader.val_chunk_size, *loader.label_shape), jnp.float32)
+
+    def _fetch_val_chunk(indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        return loader.load_val_chunk(np.asarray(indices))
+
+    def val_body(
+        carry: tuple[Array, Array],
+        chunk_indices: Array,
+    ) -> tuple[tuple[Array, Array], None]:
+        batch_x, batch_y = jax.pure_callback(_fetch_val_chunk, (xv_spec, yv_spec), chunk_indices)
+        batch_loss, _ = loss(network, batch_x, batch_y)
+        batch_acc = classification_accuracy(network, batch_x, batch_y)
+        n = jnp.array(loader.val_chunk_size, jnp.float32)
+        total_loss, total_acc = carry
+        return (total_loss + batch_loss * n, total_acc + batch_acc * n), None
+
+    (total_loss, total_acc), _ = jax.lax.scan(val_body, (0.0, 0.0), val_chunk_idx)
+    n_val = jnp.array(loader.n_val, jnp.float32)
+    val_loss = total_loss / n_val
+    val_accuracy = total_acc / n_val
+
+    return val_loss, val_accuracy
+
+
 @eqx.filter_jit
 def train_with_noise(
     schedule: AbstractNoiseAndClipSchedule,
@@ -236,33 +268,7 @@ def train_with_noise(
     final_loss, _ = loss(network_final, final_batch_x, final_batch_y)
     losses = jnp.concat([losses, jnp.asarray([final_loss])])
 
-    # --- Chunked validation evaluation via pure_callback ---
-    n_val_chunks = loader.n_val // loader.val_chunk_size
-    val_chunk_idx = jnp.arange(loader.n_val, dtype=jnp.int32).reshape(
-        n_val_chunks, loader.val_chunk_size
-    )
-
-    xv_spec = jax.ShapeDtypeStruct((loader.val_chunk_size, *loader.sample_shape), jnp.float32)
-    yv_spec = jax.ShapeDtypeStruct((loader.val_chunk_size, *loader.label_shape), jnp.float32)
-
-    def _fetch_val_chunk(indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        return loader.load_val_chunk(np.asarray(indices))
-
-    def val_body(
-        carry: tuple[Array, Array],
-        chunk_indices: Array,
-    ) -> tuple[tuple[Array, Array], None]:
-        batch_x, batch_y = jax.pure_callback(_fetch_val_chunk, (xv_spec, yv_spec), chunk_indices)
-        batch_loss, _ = loss(network_final, batch_x, batch_y)
-        batch_acc = classification_accuracy(network_final, batch_x, batch_y)
-        n = jnp.array(loader.val_chunk_size, jnp.float32)
-        total_loss, total_acc = carry
-        return (total_loss + batch_loss * n, total_acc + batch_acc * n), None
-
-    (total_loss, total_acc), _ = jax.lax.scan(val_body, (0.0, 0.0), val_chunk_idx)
-    n_val = jnp.array(loader.n_val, jnp.float32)
-    val_loss = total_loss / n_val
-    val_accuracy = total_acc / n_val
+    val_loss, val_accuracy = get_validation_statistics(network_final, loader)
 
     return network_final, TrainingStatistics(
         val_loss=val_loss, losses=losses, accuracies=accuracies, val_accuracy=val_accuracy
@@ -415,33 +421,7 @@ def train_with_stateful_noise(
     final_loss, _ = loss(network_final, final_batch_x, final_batch_y)
     losses = jnp.concat([losses, jnp.asarray([final_loss])])
 
-    # --- Chunked validation evaluation ---
-    n_val_chunks = loader.n_val // loader.val_chunk_size
-    val_chunk_idx = jnp.arange(loader.n_val, dtype=jnp.int32).reshape(
-        n_val_chunks, loader.val_chunk_size
-    )
-
-    xv_spec = jax.ShapeDtypeStruct((loader.val_chunk_size, *loader.sample_shape), jnp.float32)
-    yv_spec = jax.ShapeDtypeStruct((loader.val_chunk_size, *loader.label_shape), jnp.float32)
-
-    def _fetch_val_chunk(indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        return loader.load_val_chunk(np.asarray(indices))
-
-    def val_body(
-        carry: tuple[Array, Array],
-        chunk_indices: Array,
-    ) -> tuple[tuple[Array, Array], None]:
-        batch_x, batch_y = jax.pure_callback(_fetch_val_chunk, (xv_spec, yv_spec), chunk_indices)
-        batch_loss, _ = loss(network_final, batch_x, batch_y)
-        batch_acc = classification_accuracy(network_final, batch_x, batch_y)
-        n = jnp.array(loader.val_chunk_size, jnp.float32)
-        total_loss, total_acc = carry
-        return (total_loss + batch_loss * n, total_acc + batch_acc * n), None
-
-    (total_loss, total_acc), _ = jax.lax.scan(val_body, (0.0, 0.0), val_chunk_idx)
-    n_val = jnp.array(loader.n_val, jnp.float32)
-    val_loss = total_loss / n_val
-    val_accuracy = total_acc / n_val
+    val_loss, val_accuracy = get_validation_statistics(network_final, loader)
 
     return network_final, TrainingStatistics(
         val_loss=val_loss, losses=losses, accuracies=accuracies, val_accuracy=val_accuracy
