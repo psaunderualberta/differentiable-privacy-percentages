@@ -239,6 +239,7 @@ class Baseline:
         name: str,
         key: PRNGKeyArray | None = None,
         with_progress_bar: bool = True,
+        test_data: bool = False,
         iterations: int = -1,
     ) -> pd.DataFrame:
         df = pd.DataFrame(columns=self.columns)  # type: ignore[arg-type]
@@ -274,8 +275,8 @@ class Baseline:
             df.loc[len(df)] = {  # type: ignore
                 "type": name,
                 "step": 0,  # only recording one step for these
-                "loss": statistics.val_loss,
-                "accuracy": statistics.val_accuracy,
+                "loss": statistics.test_loss if test_data else statistics.val_loss,
+                "accuracy": statistics.test_accuracy if test_data else statistics.val_accuracy,
                 "losses": statistics.losses,
                 "accuracies": statistics.accuracies,
             }
@@ -321,7 +322,7 @@ class Baseline:
         schedule = schedule_class(*best_params)
 
         return self.generate_schedule_data(
-            schedule, name, key, with_progress_bar=with_progress_bar
+            schedule, name, key, with_progress_bar=with_progress_bar, test_data=True
         ), schedule
 
     def log_comparison(
@@ -342,7 +343,7 @@ class Baseline:
         else:
             self.delete_non_baseline_data()
 
-        eval_df = self.generate_schedule_data(schedule, label)
+        eval_df = self.generate_schedule_data(schedule, label, test_data=True)
         logger.log_figure(
             "Baseline vs. Losses", self.baseline_comparison_final_loss_plotter(eval_df)
         )
@@ -423,7 +424,9 @@ class Baseline:
             self.privacy_params,
         )
 
-        return self.generate_schedule_data(best_schedule, name, with_progress_bar=with_progress_bar)
+        return self.generate_schedule_data(
+            best_schedule, name, with_progress_bar=with_progress_bar, test_data=True
+        )
 
     def generate_baseline_data(
         self,
