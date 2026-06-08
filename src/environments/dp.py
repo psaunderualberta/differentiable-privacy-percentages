@@ -26,6 +26,7 @@ from util.util import (
     clip_grads_abadi,
     get_spherical_noise,
     reinit_model,
+    sum_clipped_per_example_grads,
 )
 
 
@@ -91,13 +92,59 @@ def training_step(
         Tuple of (new_model, new_opt_state, noise_key, loss, accuracy).
     """
     if private:
-        new_loss, grads = vmapped_loss(model, batch_x, batch_y)
-        clipped_grads = clip_grads_abadi(grads, clip)
+        env_conf = SingletonConfig.get_environment_config_instance()
+        batch_size = env_conf.batch_size
+        micro = env_conf.microbatch_size_derived
 
-        # Add spherical noise to gradients
+        if micro >= batch_size:
+            # Whole-batch per-sample gradients (no microbatching).
+            new_loss, grads = vmapped_loss(model, batch_x, batch_y)
+            summed = sum_clipped_per_example_grads(grads, clip)
+            loss_sum = new_loss * batch_size
+        else:
+            # Accumulate the sum of clipped per-sample gradients one microbatch
+            # at a time. The scan body is checkpointed so the backward pass
+            # rematerialises (and frees) one microbatch's per-sample gradients at
+            # a time, capping the live working set at micro x params.
+            num_micro = batch_size // micro
+            mb_x = batch_x.reshape(num_micro, micro, *batch_x.shape[1:])
+            mb_y = batch_y.reshape(num_micro, micro, *batch_y.shape[1:])
+
+            def _micro_sum(bx: Array, by: Array) -> tuple[Array, PyTree]:
+                # vmapped_loss returns the microbatch-mean loss; multiply by micro
+                # to recover the loss sum so the accumulated total / batch_size is
+                # the exact batch mean.
+                mean_loss, per_sample_grads = vmapped_loss(model, bx, by)
+                return mean_loss * micro, sum_clipped_per_example_grads(per_sample_grads, clip)
+
+            init = jax.tree.map(
+                lambda s: jnp.zeros(s.shape, s.dtype),
+                jax.eval_shape(_micro_sum, mb_x[0], mb_y[0]),
+            )
+
+            @partial(
+                jax_checkpoint,
+                policy=jax.checkpoint_policies.nothing_saveable,
+            )
+            def _accumulate(
+                carry: tuple[Array, PyTree],
+                xs: tuple[Array, Array],
+            ) -> tuple[tuple[Array, PyTree], None]:
+                loss_acc, sum_acc = carry
+                bx, by = xs
+                mb_loss, mb_sum = _micro_sum(bx, by)
+                sum_acc = jax.tree.map(lambda a, b: a + b, sum_acc, mb_sum)
+                return (loss_acc + mb_loss, sum_acc), None
+
+            (loss_sum, summed), _ = jax.lax.scan(_accumulate, init, (mb_x, mb_y))
+
+        # Mean clipped gradient + a single spherical-noise draw (both 1/B).
+        mean_clipped = jax.tree.map(lambda g: g / batch_size, summed)
+        new_loss = loss_sum / batch_size
+
         noise_key, _key = jr.split(noise_key)
-        noises = get_spherical_noise(clipped_grads, noise, clip, _key)
-        noised_grads = eqx.apply_updates(clipped_grads, noises)
+        noises = get_spherical_noise(mean_clipped, noise, clip, _key)
+        noised_grads = eqx.apply_updates(mean_clipped, noises)
     else:
         new_loss, grads = loss(model, batch_x, batch_y)
         noised_grads = grads

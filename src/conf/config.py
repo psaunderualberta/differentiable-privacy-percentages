@@ -179,11 +179,31 @@ class EnvConfig:
     K=1 is equivalent to the current single scan with no behaviour change.
     K>1 reduces peak gradient tape memory by a factor of K at negligible runtime cost."""
 
+    microbatch_size: int = -1
+    """Per-microbatch size for DP-SGD per-sample gradient accumulation.
+    -1 (or >= batch_size) means no microbatching: the whole Poisson minibatch's
+    per-sample gradients are materialised at once. A smaller value (must divide
+    batch_size) caps the live per-sample-gradient working set at
+    microbatch_size x params instead of batch_size x params, trading compute for
+    memory. Numerically identical to the no-microbatching path (per-example clip
+    multipliers depend only on each example's own gradient)."""
+
     @property
     def scan_segments_derived(self) -> int:
         if self.scan_segments < 0:
             return self.num_training_steps
         return self.scan_segments
+
+    @property
+    def microbatch_size_derived(self) -> int:
+        if self.microbatch_size <= 0 or self.microbatch_size >= self.batch_size:
+            return self.batch_size
+        if self.batch_size % self.microbatch_size != 0:
+            raise ValueError(
+                f"microbatch_size ({self.microbatch_size}) must divide "
+                f"batch_size ({self.batch_size}).",
+            )
+        return self.microbatch_size
 
     def to_wandb_sweep(self) -> dict[str, Any]:
         return to_wandb_sweep_params(self)

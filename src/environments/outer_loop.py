@@ -165,10 +165,10 @@ def _make_es_training_loss_fn(
         def _eval_pair(
             eps_p: PyTree,
             crn_k: PRNGKeyArray,
-        ) -> tuple[Array, Array, Array, Array]:
+        ) -> tuple[Array, Array, Array, Array, Array, Array]:
             """Evaluate antithetic +ε / -ε with shared spherical-noise CRN."""
 
-            def _one_side(sign: float) -> tuple[Array, Array, Array, Array]:
+            def _one_side(sign: float) -> tuple[Array, Array, Array, Array, Array, Array]:
                 delta = jax.tree.map(lambda e: sign * sigma * e, eps_p)
                 diff_perturbed = jax.tree.map(lambda d, dl: d + dl, diff, delta)
                 sched = eqx.combine(diff_perturbed, static)
@@ -182,9 +182,11 @@ def _make_es_training_loss_fn(
                 )
                 return (
                     statistics.val_loss,
+                    statistics.val_accuracy,
+                    statistics.test_loss,
+                    statistics.test_accuracy,
                     statistics.losses,
                     statistics.accuracies,
-                    statistics.val_accuracy,
                 )
 
             # vl_pos, l_pos, a_pos, va_pos = _one_side(+1.0)
@@ -193,7 +195,7 @@ def _make_es_training_loss_fn(
             return eqx.filter_vmap(_one_side)(signs)
 
         # Vmap over the half_pop pairs; mb_key/init_key are closure-shared.
-        val_losses, losses, accuracies, val_accs = eqx.filter_vmap(
+        val_losses, val_accs, test_losses, test_accs, losses, accuracies = eqx.filter_vmap(
             _eval_pair,
             in_axes=(0, 0),
         )(eps, noise_keys)
@@ -207,9 +209,11 @@ def _make_es_training_loss_fn(
 
         statistics = TrainingStatistics(
             val_loss=_flatten_pop(val_losses),
+            val_accuracy=_flatten_pop(val_accs),
+            test_loss=_flatten_pop(test_losses),
+            test_accuracy=_flatten_pop(test_accs),
             losses=_flatten_pop(losses),
             accuracies=_flatten_pop(accuracies),
-            val_accuracy=_flatten_pop(val_accs),
         )
         # F = _flatten_pop(val_losses)
         # losses_pop = _flatten_pop(losses)

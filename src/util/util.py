@@ -45,12 +45,46 @@ def sample_batch_uniform(
 
 
 @eqx.filter_jit
+def sum_clipped_per_example_grads(grads: eqx.Module, C: Array) -> eqx.Module:
+    """Return the *sum* of Abadi-clipped per-example gradients (no 1/B factor).
+
+    Each example's clip multiplier depends only on that example's own global
+    gradient norm, so clipping a batch in microbatches and summing the partial
+    sums is exact.  ``clip_grads_abadi`` is just this divided by the batch size;
+    microbatched DP-SGD accumulates this sum and divides once at the end.
+
+    Applies the smooth global-norm clipping scheme from
+    https://proceedings.neurips.cc/paper_files/paper/2023/file/8249b30d877c91611fd8c7aa6ac2b5fe-Paper-Conference.pdf
+    (global L2 norm over all layers, not layer-wise).
+
+    Args:
+        grads: Per-example gradient pytree with a leading batch dimension.
+        C: Clipping threshold.
+
+    Returns:
+        Summed clipped gradient pytree (batch dimension removed).
+    """
+
+    def get_multiplier(grad: eqx.Module):
+        l22_norm = jnp.sqrt(
+            1e-8 + sum(jnp.sum(jnp.abs(x) ** 2) for x in jax.tree.leaves(grad)),
+        )
+        return C / (l22_norm + 1 / (l22_norm + 1))
+
+    grads_flat, grads_treedef = jax.tree.flatten(grads)
+    multipliers = jax.vmap(get_multiplier)(grads)
+    summed = jax.tree.map(
+        lambda g: jnp.tensordot(multipliers, g, axes=1),
+        grads_flat,
+    )
+    return jax.tree.unflatten(grads_treedef, summed)
+
+
 def clip_grads_abadi(grads: eqx.Module, C: Array) -> eqx.Module:
     """Clip per-example gradients using the Abadi smooth global-norm clipping rule.
 
-    Applies the differentially-private clipping scheme from
-    https://proceedings.neurips.cc/paper_files/paper/2023/file/8249b30d877c91611fd8c7aa6ac2b5fe-Paper-Conference.pdf,
-    computing the global L2 norm over all layers and returning mean clipped gradients.
+    Returns the *mean* clipped gradient (sum of clipped per-example gradients
+    divided by the batch size).
 
     Args:
         grads: Per-example gradient pytree with a leading batch dimension.
@@ -59,30 +93,9 @@ def clip_grads_abadi(grads: eqx.Module, C: Array) -> eqx.Module:
     Returns:
         Mean clipped gradient pytree (batch dimension removed).
     """
-    # https://github.com/google-deepmind/optax/blob/main/optax/contrib/_privacy.py#L35#L87
-    grads_flat, grads_treedef = jax.tree.flatten(grads)
-
-    # computes "sum of the clipped per-example grads,"
-    # per https://optax.readthedocs.io/en/latest/api/transformations.html#optax.per_example_global_norm_clip
-    # NOTE: This computes the global norm over all layers, not layer-wise
-    # sum_clipped, _ = per_example_global_norm_clip(grads_flat, C)
-
-    # DP optimization as described in https://proceedings.neurips.cc/paper_files/paper/2023/file/8249b30d877c91611fd8c7aa6ac2b5fe-Paper-Conference.pdf
-
-    def get_multiplier(grad: eqx.Module):
-        l22_norm = jnp.sqrt(
-            1e-8 + sum(jnp.sum(jnp.abs(x) ** 2) for x in jax.tree.leaves(grad)),
-        )
-        return C / (l22_norm + 1 / (l22_norm + 1))
-
     batch_size = SingletonConfig.get_environment_config_instance().batch_size
-    multipliers = jax.vmap(get_multiplier)(grads) / batch_size
-    mean_clipped = jax.tree.map(
-        lambda g: jnp.tensordot(multipliers, g, axes=1),
-        grads_flat,
-    )
-
-    return jax.tree.unflatten(grads_treedef, mean_clipped)
+    summed = sum_clipped_per_example_grads(grads, C)
+    return jax.tree.map(lambda g: g / batch_size, summed)
 
 
 # Create random PRNG keys w/ same pytree structure as model
