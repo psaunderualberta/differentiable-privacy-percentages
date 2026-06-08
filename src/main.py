@@ -1,3 +1,4 @@
+import numpy as np
 import optax
 import tqdm
 from jax import device_put, devices
@@ -36,6 +37,10 @@ def main():
     """Run the outer gradient-based loop that learns the DP-SGD noise/clip schedule."""
     sweep_config = current().config.sweep
     wandb_config = current().config.wandb_conf
+
+    # Seed the global numpy RNG before any DistributionConfig.sample()
+    # (assuming not done above)
+    np.random.seed(sweep_config.master_seed)
 
     num_outer_steps = sweep_config.num_outer_steps
     env_prng_seed = sweep_config.prng_seed.sample()

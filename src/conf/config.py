@@ -230,6 +230,12 @@ class SweepConfig:
     val_test_split: float = 0.8  # Percentage of validation set to use for validation (i.e. evaluating policy), rest for test
     dataset_poly_d: int | None = None
     num_outer_steps: int = 100
+    # Seeds the global numpy RNG once at startup so that non-constant
+    # DistributionConfig defaults (e.g. prng_seed, momentum) are sampled
+    # reproducibly for a given command. Change this to vary which value is
+    # drawn from those distributions. Does not affect W&B sweeps, where the
+    # agent injects concrete constants that bypass sampling.
+    master_seed: int = 0
     prng_seed: DistributionConfig = dist_config_helper(
         values=(447831761, 159020393, 435372193),
         distribution="values",
