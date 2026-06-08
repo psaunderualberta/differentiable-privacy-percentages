@@ -182,7 +182,7 @@ def _make_sweep_config(
             delta=DELTA,
             batch_size=BATCH_SIZE,
             num_training_steps=T,
-            scan_segments=int(T**0.5),  # Loading data as-needed
+            scan_segments=T,  # Loading data as-needed
             optimizer=optimizer,
         ),
         schedule_optimizer=ScheduleOptimizerConfig(
