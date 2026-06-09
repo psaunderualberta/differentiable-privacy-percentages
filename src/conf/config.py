@@ -277,6 +277,16 @@ class WandbConfig:
     entity: str | None = None
     mode: Literal["disabled", "online", "offline"] = "disabled"
     restart_run_id: str | None = None
+    # Directory for W&B local run storage.  Mainly relevant in offline mode:
+    # the run dir must survive until it is synced, so it should live on
+    # persistent storage (not the per-job SLURM_TMPDIR, which is wiped at
+    # job end).  None falls back to ./wandb in the working directory.
+    wandb_dir: str | None = None
+    # Offline mode only: how often (seconds) a background thread runs
+    # `wandb sync` on the in-progress run so the dashboard updates near-live
+    # without coupling the training loop to the network.  0 disables the
+    # background daemon (data is still synced once at the end of the run).
+    wandb_sync_interval_secs: int = 500
 
     # --- Checkpointing ---
     # Run ID whose checkpoint artifact to restore.  Set to the same value as

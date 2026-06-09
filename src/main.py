@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import optax
 import tqdm
@@ -30,7 +32,11 @@ from util.job_chain import (
 )
 from util.logger import Loggable, WandbTableLogger
 from util.util import ensure_valid_pytree, get_optimal_mesh, jnp2np2jnp
-from util.wandb_init import init_wandb_run
+from util.wandb_init import (
+    init_wandb_run,
+    start_offline_sync_daemon,
+    sync_offline_run,
+)
 
 
 def main():
@@ -185,102 +191,130 @@ def main():
     # ---
     # Main Training Loop
     # ---
+    run_id = run.id
+    # Capture the run directory before finish(): run.dir is the files/ subdir,
+    # and `wandb sync` wants its parent (the run directory itself).
+    run_dir = os.path.dirname(run.dir)
+    # Offline mode only: keep the cloud dashboard near-live by syncing in the
+    # background.  No-op for online/disabled runs.
+    sync_daemon = start_offline_sync_daemon(
+        wandb_config.mode, run_dir, wandb_config.wandb_sync_interval_secs
+    )
+
     iterator = tqdm.tqdm(
         range(start_step, num_outer_steps),
         desc="Training Progress",
         total=num_outer_steps - start_step,
     )
     sharding = NamedSharding(mesh, P("x", None))
-    for t in iterator:
-        key, _ = jr.split(key)
+    interrupted = False
+    try:
+        for t in iterator:
+            key, _ = jr.split(key)
 
-        # Log schedule parameters for this iteration
-        for loggable_item in schedule.get_loggables():
-            logger.log(loggable_item)
+            # Log schedule parameters for this iteration
+            for loggable_item in schedule.get_loggables():
+                logger.log(loggable_item)
 
-        # Compute training loss and gradients
-        key, mb_key, noise_key = jr.split(key, 3)
-        if not sweep_config.train_on_single_network:
-            key, init_key = jr.split(key)
+            # Compute training loss and gradients
+            key, mb_key, noise_key = jr.split(key, 3)
+            if not sweep_config.train_on_single_network:
+                key, init_key = jr.split(key)
 
-        # mb_key = device_put(mb_key, sharding)
-        # init_key = device_put(init_key, sharding)
-        noise_keys = device_put(jr.split(noise_key, parallel_axis_size), sharding)
-        (loss, statistics), grads, es_state = get_training_loss(
-            schedule,
-            mb_key,
-            init_key,
-            noise_keys,
-            es_state,
-        )
+            # mb_key = device_put(mb_key, sharding)
+            # init_key = device_put(init_key, sharding)
+            noise_keys = device_put(jr.split(noise_key, parallel_axis_size), sharding)
+            (loss, statistics), grads, es_state = get_training_loss(
+                schedule,
+                mb_key,
+                init_key,
+                noise_keys,
+                es_state,
+            )
 
-        logger.log(Loggable(table_name="train_losses", data={"losses": statistics.losses}))
-        logger.log(Loggable(table_name="accuracies", data={"accuracies": statistics.accuracies}))
+            logger.log(Loggable(table_name="train_losses", data={"losses": statistics.losses}))
+            logger.log(
+                Loggable(table_name="accuracies", data={"accuracies": statistics.accuracies})
+            )
 
-        wandb.log(
-            {
-                "val-loss": loss,
-                "val-accuracy": statistics.val_accuracy.mean(),
-                "test-loss": statistics.test_loss.mean(),
-                "test-accuracy": statistics.test_accuracy.mean(),
-                "train-loss": statistics.losses[:, -1].mean(),
-                "train-accuracies": statistics.accuracies[:, -1].mean(),
-            },
-        )
+            wandb.log(
+                {
+                    "val-loss": loss,
+                    "val-accuracy": statistics.val_accuracy.mean(),
+                    "test-loss": statistics.test_loss.mean(),
+                    "test-accuracy": statistics.test_accuracy.mean(),
+                    "train-loss": statistics.losses[:, -1].mean(),
+                    "train-accuracies": statistics.accuracies[:, -1].mean(),
+                },
+            )
 
-        # Validate and apply gradient update
-        loss = ensure_valid_pytree(loss, "loss in main")
-        grads = ensure_valid_pytree(grads, "grads in main")
-        updates, opt_state = optimizer.update(grads, opt_state, schedule)
-        schedule = schedule.apply_updates(updates)
-        schedule = ensure_valid_pytree(schedule, "schedule in main after updates")
-        x_new = schedule.project()
-        x_new = ensure_valid_pytree(x_new, "schedule in main after project")
-        if getattr(schedule, "use_fista", False):
-            schedule = schedule.fista_advance(x_new)
-            schedule = schedule.fista_extrapolate()
-        else:
-            schedule = x_new
-        schedule = ensure_valid_pytree(schedule, "schedule in main after fista")
+            # Validate and apply gradient update
+            loss = ensure_valid_pytree(loss, "loss in main")
+            grads = ensure_valid_pytree(grads, "grads in main")
+            updates, opt_state = optimizer.update(grads, opt_state, schedule)
+            schedule = schedule.apply_updates(updates)
+            schedule = ensure_valid_pytree(schedule, "schedule in main after updates")
+            x_new = schedule.project()
+            x_new = ensure_valid_pytree(x_new, "schedule in main after project")
+            if getattr(schedule, "use_fista", False):
+                schedule = schedule.fista_advance(x_new)
+                schedule = schedule.fista_extrapolate()
+            else:
+                schedule = x_new
+            schedule = ensure_valid_pytree(schedule, "schedule in main after fista")
 
-        iterator.set_description(f"Training Progress - Loss: {loss:.4f}")
+            iterator.set_description(f"Training Progress - Loss: {loss:.4f}")
 
-        if log_baselines_during_training and (t + 1) % sweep_config.baseline_log_interval == 0:
-            baseline.log_comparison(schedule, eval_key, logger=logger)
+            if log_baselines_during_training and (t + 1) % sweep_config.baseline_log_interval == 0:
+                baseline.log_comparison(schedule, eval_key, logger=logger)
 
-        if shutdown_requested() or time_limit_approaching():
-            print(f"Graceful shutdown at step {t}; checkpointing for job-chain resubmit")
-            save_checkpoint(make_state(schedule, opt_state, key, init_key, t, es_state), t, run)
-            break
+            if shutdown_requested() or time_limit_approaching():
+                print(f"Graceful shutdown at step {t}; checkpointing for job-chain resubmit")
+                save_checkpoint(make_state(schedule, opt_state, key, init_key, t, es_state), t, run)
+                break
 
-        if (t + 1) % wandb_config.checkpoint_every == 0:
-            save_checkpoint(make_state(schedule, opt_state, key, init_key, t, es_state), t, run)
+            if (t + 1) % wandb_config.checkpoint_every == 0:
+                save_checkpoint(make_state(schedule, opt_state, key, init_key, t, es_state), t, run)
 
-    # Resubmit job (dependency ensures won't start until current ends)
-    if not shutdown_requested() and not time_limit_approaching():
-        # Final logging
-        for loggable_item in schedule.get_loggables(force=True):
-            logger.log(loggable_item)
+        # Final logging (skipped on graceful shutdown, which resubmits instead)
+        if not shutdown_requested() and not time_limit_approaching():
+            for loggable_item in schedule.get_loggables(force=True):
+                logger.log(loggable_item)
 
-        if sweep_config.with_baselines:
-            baseline.log_comparison(schedule, eval_key, logger=logger)
+            if sweep_config.with_baselines:
+                baseline.log_comparison(schedule, eval_key, logger=logger)
 
-        for multi_line_table in schedule.get_logging_schemas():
-            logger.line_plot(multi_line_table.table_name)
-        for bulk_line_table in get_private_model_training_schemas():
-            logger.bulk_line_plots(bulk_line_table.table_name)
+            for multi_line_table in schedule.get_logging_schemas():
+                logger.line_plot(multi_line_table.table_name)
+            for bulk_line_table in get_private_model_training_schemas():
+                logger.bulk_line_plots(bulk_line_table.table_name)
 
-    # End-only case: log_comparison() lazily generated baseline data above;
-    # save it now so future restarts can skip the sweep.
-    if sweep_config.with_baselines and not baseline_data_saved:
-        baseline.save(run.id, run)
+        # End-only case: log_comparison() lazily generated baseline data above;
+        # save it now so future restarts can skip the sweep.
+        if sweep_config.with_baselines and not baseline_data_saved:
+            baseline.save(run.id, run)
+    except KeyboardInterrupt:
+        # Ctrl+C: don't let the run die mid-flight.  Fall through to the finally
+        # block so the run is finished and any offline data is synced; skip the
+        # job-chain resubmit since this was a deliberate manual kill.
+        interrupted = True
+        print("\nKeyboardInterrupt — finishing run and syncing offline data before exit...")
+    finally:
+        # Stop the background syncer before the final sync so the two don't run
+        # `wandb sync` on the same dir concurrently.
+        if sync_daemon is not None:
+            sync_daemon.stop()
+        logger.finish()
+        print(f"dp_psac_ref eval command:\n  {_dp_psac_ref_cmd}")
+        run.finish()
+        # Offline runs never touched the network during training (so they can't
+        # be marked "crashed" mid-run); push the buffered data to the cloud now,
+        # while we're still inside the SLURM allocation and SLURM_TMPDIR exists.
+        sync_offline_run(wandb_config.mode, run_dir)
 
-    run_id = run.id
-    logger.finish()
-    print(f"dp_psac_ref eval command:\n  {_dp_psac_ref_cmd}")
-    run.finish()
-
-    resubmit_if_requested(run_id)
+    # Resubmit job (dependency ensures won't start until current ends).
+    if not interrupted:
+        resubmit_if_requested(run_id)
 
 
 if __name__ == "__main__":
