@@ -286,7 +286,7 @@ class WandbConfig:
     # `wandb sync` on the in-progress run so the dashboard updates near-live
     # without coupling the training loop to the network.  0 disables the
     # background daemon (data is still synced once at the end of the run).
-    wandb_sync_interval_secs: int = 500
+    wandb_sync_interval_secs: int = 0
 
     # --- Checkpointing ---
     # Run ID whose checkpoint artifact to restore.  Set to the same value as

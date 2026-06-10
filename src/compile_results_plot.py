@@ -282,7 +282,7 @@ def plot_main(
 
     agg = aggregate_across_seeds(df, xaxis.col, metric)
     fig, axes = _facet_grid(datasets, epsilons)
-    ylabel = "val accuracy" if metric == "mean_acc" else "val loss"
+    ylabel = "test accuracy" if metric == "mean_acc" else "test loss"
 
     for i, ds in enumerate(datasets):
         for j, eps in enumerate(epsilons):
@@ -424,7 +424,7 @@ def plot_overlay(
     ladder_color = {name: cmap(i % 10) for i, name in enumerate(ladder_names)}
 
     fig, axes = _facet_grid(datasets, epsilons)
-    ylabel = "Learned val accuracy" if kind == "acc" else "Learned - Constant (Δ acc)"
+    ylabel = "Learned test accuracy" if kind == "acc" else "Learned - Constant (Δ acc)"
 
     drew_any = False
     for i, ds in enumerate(datasets):
@@ -803,7 +803,7 @@ def _latex_escape(s: str) -> str:
 
 def plot_curves(
     histories_df: pd.DataFrame,
-    metric: str,  # "val_loss" or "val_acc"
+    metric: str,  # "test_loss" or "test_acc"
     dataset: str,
     out_path_stem: Path,
 ) -> None:
@@ -861,7 +861,7 @@ def _plot_curves_single(
         sharey="row",
     )
 
-    ylabel = "val loss" if metric == "val_loss" else "val accuracy"
+    ylabel = "test loss" if metric == "test_loss" else "test accuracy"
 
     for i, rv in enumerate(row_vals):
         for j, eps in enumerate(epsilons):
@@ -965,8 +965,8 @@ def _plot_t_sweep(s: pd.DataFrame, sch: pd.DataFrame, histories: pd.DataFrame, o
     if not histories.empty:
         curves_dir = out / "curves"
         for dataset in sorted(histories["dataset"].unique()):
-            plot_curves(histories, "val_loss", dataset, curves_dir / f"t_sweep_loss__{dataset}")
-            plot_curves(histories, "val_acc", dataset, curves_dir / f"t_sweep_acc__{dataset}")
+            plot_curves(histories, "test_loss", dataset, curves_dir / f"t_sweep_loss__{dataset}")
+            plot_curves(histories, "test_acc", dataset, curves_dir / f"t_sweep_acc__{dataset}")
 
 
 def _plot_ladders(s: pd.DataFrame, sch: pd.DataFrame, out: Path) -> None:

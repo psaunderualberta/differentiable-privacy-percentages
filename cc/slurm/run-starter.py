@@ -66,9 +66,10 @@ class SlurmConfig:
     @property
     def main_args(self) -> str:
         return (
-            f'--wandb_conf.project="{self.wandb_proj}"'
+            f' --wandb_conf.project="{self.wandb_proj}"'
             f' --wandb-conf.entity "psaunder"'
-            f' --wandb-conf.mode "online"'
+            f" --wandb-conf.mode offline"
+            f" --wandb-conf.wandb-sync-interval-secs 300"
             f' --wandb-conf.restart_run_id="{self.run_id}"'
             f' --wandb-conf.checkpoint_run_id="{self.run_id}"'
         )

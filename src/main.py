@@ -49,7 +49,7 @@ def main():
     np.random.seed(sweep_config.master_seed)
 
     num_outer_steps = sweep_config.num_outer_steps
-    env_prng_seed = sweep_config.prng_seed.sample()
+    key = jr.PRNGKey(sweep_config.prng_seed.sample())
 
     # Initialize dataset
     X_shape, y_shape, X_test_shape, y_test_shape = get_dataset_shapes()
@@ -109,7 +109,6 @@ def main():
     )
     opt_state = optimizer.init(schedule)  # type: ignore
 
-    key = jr.PRNGKey(env_prng_seed)
     key, init_key, _ = jr.split(key, 3)
 
     # ---
@@ -163,7 +162,7 @@ def main():
     # ---
     # Baseline setup
     # ---
-    eval_key = jr.PRNGKey(0)
+    key, eval_key = jr.split(key)
     baseline = Baseline(env_params, gdp_params, eval_key)
     log_baselines_during_training = (
         sweep_config.with_baselines and sweep_config.baseline_log_interval > 0
@@ -304,13 +303,16 @@ def main():
         # `wandb sync` on the same dir concurrently.
         if sync_daemon is not None:
             sync_daemon.stop()
+
         logger.finish()
-        print(f"dp_psac_ref eval command:\n  {_dp_psac_ref_cmd}")
-        run.finish()
         # Offline runs never touched the network during training (so they can't
         # be marked "crashed" mid-run); push the buffered data to the cloud now,
         # while we're still inside the SLURM allocation and SLURM_TMPDIR exists.
-        sync_offline_run(wandb_config.mode, run_dir)
+        if sync_daemon is not None:
+            sync_offline_run(wandb_config.mode, run_dir)
+
+        print(f"dp_psac_ref eval command:\n  {_dp_psac_ref_cmd}")
+        run.finish()
 
     # Resubmit job (dependency ensures won't start until current ends).
     if not interrupted:

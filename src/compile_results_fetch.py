@@ -285,17 +285,17 @@ def _ladder_memberships(tags: list[str]) -> dict[str, bool]:
 def _history(run: Any) -> list[dict]:
     """Return the full per-outer-step history as a list of dicts.
 
-    Each dict has keys: outer_step, val_acc, val_loss. NaN/Inf values are kept
+    Each dict has keys: outer_step, test_acc, test_loss. NaN/Inf values are kept
     so downstream plotting can show divergence as a break in the curve.
     """
-    rows = list(run.scan_history(keys=["val-accuracy", "val-loss"]))
+    rows = list(run.scan_history(keys=["test-accuracy", "test-loss"]))
     if not rows:
-        raise RuntimeError("no val-accuracy / val-loss rows in run history")
+        raise RuntimeError("no test-accuracy / test-loss rows in run history")
     return [
         {
             "outer_step": i,
-            "val_acc": float(r["val-accuracy"]),
-            "val_loss": float(r["val-loss"]),
+            "test_acc": float(r["test-accuracy"]),
+            "test_loss": float(r["test-loss"]),
         }
         for i, r in enumerate(rows)
     ]
@@ -378,8 +378,8 @@ def _fetch_one_run(
     }
 
     history = _history(run)
-    learned_acc = history[-1]["val_acc"]
-    learned_loss = history[-1]["val_loss"]
+    learned_acc = history[-1]["test_acc"]
+    learned_loss = history[-1]["test_loss"]
     bdf = _baseline_means(api, entity, project, run.id)
     means = bdf.groupby("type")[["accuracy", "loss"]].mean()
     counts = bdf.groupby("type").size()
