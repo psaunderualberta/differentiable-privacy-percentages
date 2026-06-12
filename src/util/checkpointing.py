@@ -37,7 +37,6 @@ import os
 import pathlib
 from typing import Any
 
-import jax.numpy as jnp
 import numpy as np
 import orbax.checkpoint as ocp
 
@@ -78,18 +77,6 @@ def _find_local_checkpoint(run_id: str, step: int | None) -> pathlib.Path | None
 
     target = run_dir / str(step)
     return target if target.exists() else None
-
-
-def make_state(schedule, opt_state, key, init_key, step: int, es_state) -> dict[str, Any]:
-    """Bundle all outer-loop training state into a checkpointable dict."""
-    return {
-        "schedule": schedule,
-        "opt_state": opt_state,
-        "key": key,
-        "init_key": init_key,
-        "step": jnp.array(step, dtype=jnp.int32),
-        "es_state": es_state,
-    }
 
 
 def save_checkpoint(

@@ -1,5 +1,6 @@
 import os
 
+import jax.numpy as jnp
 import numpy as np
 import optax
 import tqdm
@@ -17,24 +18,13 @@ from environments.outer_loop import make_initial_es_state, make_training_loss_fn
 from policy.factory import make_schedule
 from privacy.gdp_privacy import get_privacy_params
 from util.baselines import Baseline
-from util.checkpointing import (
-    load_checkpoint,
-    make_state,
-    save_checkpoint,
-)
 from util.dataloaders import get_dataset_shapes
 from util.eval import make_dp_psac_ref_cmd
-from util.job_chain import (
-    register_signal_handler,
-    resubmit_if_requested,
-    shutdown_requested,
-    time_limit_approaching,
-)
 from util.logger import Loggable, WandbTableLogger
+from util.run_lifecycle import RunLifecycle, TrainingState
 from util.util import (
     ensure_valid_pytree,
     get_optimal_mesh,
-    jnp2np2jnp,
     pytree_has_inf,
     pytree_has_nan,
 )
@@ -131,40 +121,22 @@ def main():
     key, init_key, _ = jr.split(key, 3)
 
     # ---
-    # Checkpoint restore (happens before wandb.init so we know start_step)
+    # Checkpoint restore (happens before wandb.init so we know start_step).
+    # RunLifecycle owns the restore-or-start decision and the device-uncommit.
     # ---
-    start_step = 0
-    if wandb_config.checkpoint_run_id is not None:
-        state_template = make_state(schedule, opt_state, key, init_key, 0, es_state)
-        result = load_checkpoint(
-            wandb_config.checkpoint_run_id,
-            wandb_config.checkpoint_step,
-            state_template,
-            wandb_config.entity,
-            wandb_config.project,
-        )
-        if result is not None:
-            restored_state, start_step = result
-            schedule = restored_state["schedule"]
-            opt_state = restored_state["opt_state"]
-            key = restored_state["key"]
-            init_key = restored_state["init_key"]
-            es_state = restored_state["es_state"]
-            # Orbax restores arrays as device-committed (bound to device 0).
-            # This conflicts with sharded noise_keys inside the JIT call.
-            # Round-trip through numpy to produce uncommitted arrays, matching
-            # what a fresh (non-checkpoint) run provides.
-            schedule = jnp2np2jnp(schedule)
-            opt_state = jnp2np2jnp(opt_state)
-            key = jnp2np2jnp(key)
-            init_key = jnp2np2jnp(init_key)
+    lifecycle = RunLifecycle()
+    template = TrainingState(schedule, opt_state, key, init_key, es_state, jnp.array(0, jnp.int32))
+    restored, start_step = lifecycle.restore(template)
+    if restored is not None:
+        schedule, opt_state = restored.schedule, restored.opt_state
+        key, init_key, es_state = restored.key, restored.init_key, restored.es_state
 
     # ---
     # W&B init
     # ---
     print("Starting...")
     run = init_wandb_run(wandb_config, sweep_config)
-    register_signal_handler()
+    lifecycle.attach(run)
 
     _dp_psac_ref_cmd = make_dp_psac_ref_cmd(
         run_id=run.id,
@@ -209,7 +181,6 @@ def main():
     # ---
     # Main Training Loop
     # ---
-    run_id = run.id
     # Capture the run directory before finish(): run.dir is the files/ subdir,
     # and `wandb sync` wants its parent (the run directory itself).
     run_dir = os.path.dirname(run.dir)
@@ -225,7 +196,6 @@ def main():
         total=num_outer_steps - start_step,
     )
     sharding = NamedSharding(mesh, P("x", None))
-    interrupted = False
     try:
         for t in iterator:
             key, _ = jr.split(key)
@@ -295,16 +265,17 @@ def main():
             if log_baselines_during_training and (t + 1) % sweep_config.baseline_log_interval == 0:
                 baseline.log_comparison(schedule, eval_key, logger=logger)
 
-            if shutdown_requested() or time_limit_approaching():
+            state = TrainingState(
+                schedule, opt_state, key, init_key, es_state, jnp.array(t, jnp.int32)
+            )
+            if lifecycle.should_stop():
                 print(f"Graceful shutdown at step {t}; checkpointing for job-chain resubmit")
-                save_checkpoint(make_state(schedule, opt_state, key, init_key, t, es_state), t, run)
+                lifecycle.checkpoint(state, force=True)  # checkpoint-before-break
                 break
-
-            if (t + 1) % wandb_config.checkpoint_every == 0:
-                save_checkpoint(make_state(schedule, opt_state, key, init_key, t, es_state), t, run)
+            lifecycle.checkpoint(state)  # periodic, internally gated
 
         # Final logging (skipped on graceful shutdown, which resubmits instead)
-        if not shutdown_requested() and not time_limit_approaching():
+        if not lifecycle.stopped_for_chain:
             for loggable_item in schedule.get_loggables(force=True):
                 logger.log(loggable_item)
 
@@ -322,9 +293,9 @@ def main():
             baseline.save(run.id, run)
     except KeyboardInterrupt:
         # Ctrl+C: don't let the run die mid-flight.  Fall through to the finally
-        # block so the run is finished and any offline data is synced; skip the
-        # job-chain resubmit since this was a deliberate manual kill.
-        interrupted = True
+        # block so the run is finished and any offline data is synced; the
+        # interrupt latch suppresses the job-chain resubmit in finalize().
+        lifecycle.mark_interrupted()
         print("\nKeyboardInterrupt — finishing run and syncing offline data before exit...")
     finally:
         # Stop the background syncer before the final sync so the two don't run
@@ -342,9 +313,10 @@ def main():
         print(f"dp_psac_ref eval command:\n  {_dp_psac_ref_cmd}")
         run.finish()
 
-    # Resubmit job (dependency ensures won't start until current ends).
-    if not interrupted:
-        resubmit_if_requested(run_id)
+    # Resubmit the continuation job iff a job-chain stop was latched (no-op for
+    # KeyboardInterrupt / normal completion).  Runs after teardown so the
+    # dependency-chained successor won't start until this run has finished.
+    lifecycle.finalize()
 
 
 if __name__ == "__main__":

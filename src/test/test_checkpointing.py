@@ -1,7 +1,6 @@
 """Tests for util/checkpointing.py.
 
 Covers:
-- make_state structure and dtypes
 - save_checkpoint writes to the correct local directory
 - save_checkpoint + load_checkpoint round-trip preserves array values
 - load_checkpoint with step=None returns the highest-numbered (latest) step
@@ -26,7 +25,27 @@ import pytest
 
 import util.checkpointing as ckpt
 from environments.nes import ESState
-from util.checkpointing import load_checkpoint, make_state, save_checkpoint
+from util.checkpointing import load_checkpoint, save_checkpoint
+from util.run_lifecycle import TrainingState
+
+
+def make_state(schedule, opt_state, key, init_key, step, es_state) -> dict[str, Any]:
+    """Build the Orbax wire-format dict the checkpointer round-trips.
+
+    Local test helper replacing the removed ``checkpointing.make_state``: it
+    bundles state through the ``TrainingState`` façade so these I/O tests
+    exercise the exact wire format ``main.py`` writes.  The façade's own
+    structure/dtype contract is asserted in ``test_run_lifecycle.py``.
+    """
+    return TrainingState(
+        schedule=schedule,
+        opt_state=opt_state,
+        key=key,
+        init_key=init_key,
+        es_state=es_state,
+        step=jnp.array(step, dtype=jnp.int32),
+    ).as_orbax_dict()
+
 
 # ---------------------------------------------------------------------------
 # Minimal helpers shared across tests
@@ -95,44 +114,6 @@ def full_state(schedule) -> dict[str, Any]:
 def _patch_project_root(tmp_path, monkeypatch):
     """Redirect all checkpoint I/O to a temporary directory for every test."""
     monkeypatch.setattr(ckpt, "_PROJECT_ROOT", tmp_path)
-
-
-# ---------------------------------------------------------------------------
-# make_state
-# ---------------------------------------------------------------------------
-
-
-class TestMakeState:
-    def test_has_all_required_keys(self, full_state):
-        assert set(full_state.keys()) == {
-            "schedule",
-            "opt_state",
-            "key",
-            "init_key",
-            "step",
-            "es_state",
-        }
-
-    def test_es_state_stored(self, schedule):
-        opt_state = _make_opt_state(schedule)
-        es_state = ESState(log_sigma=jnp.float32(jnp.log(0.1)), eta_sigma=jnp.float32(0.05))
-        state = make_state(
-            schedule, opt_state, jr.PRNGKey(0), jr.PRNGKey(1), step=0, es_state=es_state
-        )
-        assert state["es_state"] is es_state
-
-    def test_step_is_int32_array(self, full_state):
-        assert full_state["step"].dtype == jnp.int32
-
-    def test_step_value_stored(self, full_state):
-        assert int(full_state["step"]) == 42
-
-    def test_schedule_preserved(self, full_state, schedule):
-        assert jnp.array_equal(full_state["schedule"].weights, schedule.weights)
-
-    def test_keys_are_jax_arrays(self, full_state):
-        assert full_state["key"].shape == jr.PRNGKey(0).shape
-        assert full_state["init_key"].shape == jr.PRNGKey(0).shape
 
 
 # ---------------------------------------------------------------------------
