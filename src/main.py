@@ -270,9 +270,9 @@ def main():
             )
             if lifecycle.should_stop():
                 print(f"Graceful shutdown at step {t}; checkpointing for job-chain resubmit")
-                lifecycle.checkpoint(state, force=True)  # checkpoint-before-break
+                lifecycle.checkpoint(state, force=True)
                 break
-            lifecycle.checkpoint(state)  # periodic, internally gated
+            lifecycle.checkpoint(state)
 
         # Final logging (skipped on graceful shutdown, which resubmits instead)
         if not lifecycle.stopped_for_chain:
