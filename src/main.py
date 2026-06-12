@@ -31,7 +31,13 @@ from util.job_chain import (
     time_limit_approaching,
 )
 from util.logger import Loggable, WandbTableLogger
-from util.util import ensure_valid_pytree, get_optimal_mesh, jnp2np2jnp
+from util.util import (
+    ensure_valid_pytree,
+    get_optimal_mesh,
+    jnp2np2jnp,
+    pytree_has_inf,
+    pytree_has_nan,
+)
 from util.wandb_init import (
     init_wandb_run,
     start_offline_sync_daemon,
@@ -103,9 +109,22 @@ def main():
     es_state = make_initial_es_state()  # None unless ES enabled
 
     # Initialise optimizer and PRNG keys (may be overwritten by checkpoint restore)
-    optimizer = optax.sgd(
-        learning_rate=sweep_config.schedule_optimizer.lr.sample(),
-        momentum=sweep_config.schedule_optimizer.momentum.sample(),
+    # Robustness chain (applied to the gradient in order):
+    #   clip_by_global_norm -> zero_nans -> sgd
+    # A rare divergent inner DP-SGD run yields a finite forward loss but an
+    # Inf/NaN backward. clip_by_global_norm collapses any Inf/NaN into a NaN
+    # global-norm scale (so the whole step is poisoned uniformly), then
+    # zero_nans rewrites those NaNs to 0 *before* the momentum trace — turning
+    # the corrupt step into a no-op instead of crashing the run. Finite steps
+    # are simply clipped to max_grad_norm. zero_nans must precede sgd so the
+    # momentum trace never ingests a NaN.
+    optimizer = optax.chain(
+        optax.clip_by_global_norm(sweep_config.schedule_optimizer.max_grad_norm),
+        optax.zero_nans(),
+        optax.sgd(
+            learning_rate=sweep_config.schedule_optimizer.lr.sample(),
+            momentum=sweep_config.schedule_optimizer.momentum.sample(),
+        ),
     )
     opt_state = optimizer.init(schedule)  # type: ignore
 
@@ -244,12 +263,21 @@ def main():
                     "test-accuracy": statistics.test_accuracy.mean(),
                     "train-loss": statistics.losses[:, -1].mean(),
                     "train-accuracies": statistics.accuracies[:, -1].mean(),
+                    # Pre-clip gradient norm — use this to calibrate
+                    # schedule_optimizer.max_grad_norm. `grad-nonfinite` is 1.0 on
+                    # steps where the clip_by_global_norm -> zero_nans chain had to
+                    # neutralise an Inf/NaN backward (i.e. a divergent inner run).
+                    "grad-global-norm": optax.global_norm(grads),
+                    "grad-nonfinite": (pytree_has_nan(grads) | pytree_has_inf(grads)) * 1.0,
                 },
             )
 
-            # Validate and apply gradient update
+            # Validate and apply gradient update. We intentionally do NOT raise on
+            # non-finite grads here: the optimizer chain (clip_by_global_norm ->
+            # zero_nans) rewrites a corrupt step into a no-op so a rare divergent
+            # inner DP-SGD run can't kill a multi-hour outer run. The downstream
+            # schedule checks still guard against anything the chain misses.
             loss = ensure_valid_pytree(loss, "loss in main")
-            grads = ensure_valid_pytree(grads, "grads in main")
             updates, opt_state = optimizer.update(grads, opt_state, schedule)
             schedule = schedule.apply_updates(updates)
             schedule = ensure_valid_pytree(schedule, "schedule in main after updates")

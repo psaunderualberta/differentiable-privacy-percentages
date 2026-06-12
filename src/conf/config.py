@@ -124,6 +124,13 @@ class ScheduleOptimizerConfig:
         distribution="values",
     )
     max_sigma: float = 10.0
+    # Global-norm clip on the outer-loop schedule gradient, applied before the
+    # SGD update as a safety net against the rare divergent inner-DP-SGD run
+    # whose backward pass overflows to Inf/NaN. Paired with optax.zero_nans()
+    # (which neutralises a corrupt step rather than letting it crash the run).
+    # 1.0 is the conventional default; check the logged ``grad-global-norm``
+    # metric to confirm it is not throttling normal steps and raise if needed.
+    max_grad_norm: float = 1.0
     es: ESConfig = dataclasses.field(default_factory=ESConfig)
     # When non-empty, sweep over these schedule type names rather than fixing
     # _type to the current schedule's class.  Set programmatically before
