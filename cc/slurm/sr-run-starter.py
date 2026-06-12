@@ -74,7 +74,8 @@ class SRSlurmConfig:
     """Print the sbatch script(s) without submitting (off-cluster check)."""
 
     def jobname_for(self, target: str) -> str:
-        return self.jobname or f"sr-{target}"
+        last_folder = os.path.basename(os.path.abspath(self.cache_dir))
+        return self.jobname or f"sr-{last_folder}-{target}"
 
     def sbatch_file(self, target: str) -> str:
         jobname = self.jobname_for(target)
