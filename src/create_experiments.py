@@ -52,6 +52,7 @@ from networks.mlp.config import MLPConfig
 from policy.schedules.config import (
     DecoupledSigmaAndClipScheduleConfig,
 )
+from util.sweep_file import write_sweep_file
 
 # ---------------------------------------------------------------------------
 # Serialiser
@@ -256,6 +257,35 @@ def _build_experiments() -> dict[str, list[tuple[list[str], str, str, SweepConfi
 
 
 # ---------------------------------------------------------------------------
+# Per-run memory prediction (heuristic, GPU-free)
+# ---------------------------------------------------------------------------
+
+
+def _mem_per_gpu_by_name(
+    experiments: dict[str, list[tuple[list[str], str, str, SweepConfig]]],
+) -> dict[str, str]:
+    """Map each run *name* to its ``mem_per_gpu`` request (e.g. ``"32G"``).
+
+    Uses the GPU-free param-count heuristic from ``predict_memory`` directly on
+    the in-memory ``SweepConfig``s — no W&B round-trip. Configs sharing a memory
+    signature (ε/seed-independent) are estimated once. Imported lazily so the
+    W&B-creation worker pool does not pay the JAX import cost.
+    """
+    from predict_memory import _next_pow2_gib, _peak_bytes_for, _signature
+
+    sig_to_mem: dict[tuple, str] = {}
+    name_to_mem: dict[str, str] = {}
+    for bucket in experiments.values():
+        for _tags, _group, name, sweep_conf in bucket:
+            sig = _signature(sweep_conf)
+            if sig not in sig_to_mem:
+                peak, _method = _peak_bytes_for(sweep_conf, heuristic_only=True)
+                sig_to_mem[sig] = f"{_next_pow2_gib(peak, 1)}G"
+            name_to_mem[name] = sig_to_mem[sig]
+    return name_to_mem
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -303,20 +333,25 @@ if __name__ == "__main__":
 
     print(f"{total} runs across {len(experiments)} optimizers  →  project '{conf.project}'")
 
+    # GPU-free heuristic memory request per run, written as the mem_per_gpu
+    # column. Refine later on a GPU node with predict_memory.py if desired.
+    print("\nPredicting per-run memory (heuristic, deduped by signature)…")
+    name_to_mem = _mem_per_gpu_by_name(experiments)
+
     if conf.dry_run:
         run_counts = []
         paths = []
         for opt_tag, bucket in experiments.items():
             for _tags, group, name, sweep_conf in bucket:
                 print(f"\n{'─' * 64}")
-                print(f"  {name}  [group={group}]")
+                print(f"  {name}  [group={group}]  mem_per_gpu={name_to_mem[name]}")
                 print(json.dumps(_to_run_config(sweep_conf), indent=2, default=str))
             run_counts.append(len(bucket))
             paths.append(output_paths[opt_tag])
 
-        print(f"Would write {sum(run_counts)} run IDs in total:")
+        print(f"\nWould write {sum(run_counts)} run rows in total:")
         for count, path in zip(run_counts, paths):
-            print(f"\t{count} run IDs to:\n  {path}")
+            print(f"\t{count} run rows to:\n  {path}")
     else:
         tasks = []
         for opt_tag, bucket in experiments.items():
@@ -341,21 +376,25 @@ if __name__ == "__main__":
 
         for opt_tag, results in results_by_opt.items():
             output_path = output_paths[opt_tag]
-            with open(output_path, "w") as f:
-                for run_id, _name in results:
-                    f.write(run_id + "\n")
-            print(f"\nRun IDs ({opt_tag}) → {output_path}")
+            rows = [
+                {"run_id": run_id, "mem_per_gpu": name_to_mem[name]} for run_id, name in results
+            ]
+            write_sweep_file(output_path, rows)
+            print(f"\nRun IDs + mem_per_gpu ({opt_tag}) → {output_path}")
 
-        print("\nPredict per-run memory (run on a GPU node), then submit to SLURM:")
-        for opt_tag, output_path in output_paths.items():
-            mem_path = output_path.rsplit(".", 1)[0] + ".mem.txt"
-            print(f"\n  # {opt_tag}")
+        print(
+            "\nThe sweep files carry per-run flags as named columns. Optionally"
+            " refine mem_per_gpu on a GPU node (rewrites the column in place):"
+        )
+        for output_path in output_paths.values():
             print(
                 f"  uv run predict_memory.py --entity {conf.entity}"
                 f' --project "{conf.project}" --sweep-file {output_path}'
             )
+        print("\nSubmit to SLURM (reads run_id + mem_per_gpu from the header):")
+        for opt_tag, output_path in output_paths.items():
             print(
-                f"  parallel -q --colsep '\\t' uv run cc/slurm/run-starter.py"
-                f" --run_id={{1}} --mem_per_gpu={{2}}"
-                f" --jobname='\"{safe_name}-{opt_tag}\"' :::: {mem_path}"
+                f"  parallel --colsep '\\t' --header : -q uv run cc/slurm/run-starter.py"
+                f" --run_id={{run_id}} --mem_per_gpu={{mem_per_gpu}}"
+                f" --jobname='\"{safe_name}-{opt_tag}\"' :::: {output_path}"
             )

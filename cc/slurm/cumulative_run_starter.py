@@ -1,13 +1,41 @@
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import tqdm
 import tyro
+
 import wandb
+
+# The sweep-file format helpers live in src/; this script is standalone, so put
+# src on the path before importing them.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src")))
+from util.sweep_file import RUN_ID_COL, read_sweep_file
 
 
 def _sweeps_dir() -> Path:
     return Path(__file__).parent.parent / "sweeps"
+
+
+def _submit_command(sweep_id: str, sweep_name: str, project: str) -> str:
+    """Build the ``parallel`` command that submits every run in a sweep file.
+
+    Header-format files (first column ``run_id``) forward each named column as
+    ``--<column>={<column>}`` so per-run flags (e.g. ``mem_per_gpu``) reach
+    run-starter.py; legacy bare run-ID lists fall back to ``--run_id={}``.
+    """
+    rel = f"cc/sweeps/{sweep_id}.txt"
+    base = (
+        "parallel --tmpdir /scratch/$USER -j 5 -q uv run cc/slurm/run-starter.py --runtime.medium"
+    )
+    tail = f"--wandb-proj {project} --jobname='\"{sweep_name}\"'"
+
+    header = (_sweeps_dir() / f"{sweep_id}.txt").read_text().splitlines()[0].split("\t")
+    if header[0] == RUN_ID_COL:
+        flags = " ".join(f"--{col}={{{col}}}" for col in header)
+        return f"{base} --colsep '\\t' --header : {flags} {tail} :::: {rel}"
+    return f"cat {rel} | {base} --run_id={{}} {tail}"
 
 
 def _local_sweep_ids() -> list[str]:
@@ -16,8 +44,7 @@ def _local_sweep_ids() -> list[str]:
 
 def _count_runs(sweep_file: Path) -> int:
     assert sweep_file.exists()
-    with open(sweep_file) as f:
-        return len(f.readlines())
+    return len(read_sweep_file(sweep_file))
 
 
 def _most_recent_sweep_ids(n: int, project: str, api: wandb.Api) -> list[str]:
@@ -86,15 +113,7 @@ def main(
         iterator.set_description(f"{sweep_id}")
         sweep = sweep_objects.get(sweep_id)
 
-        cmd = " ".join(
-            [
-                "cat",
-                f"cc/sweeps/{sweep_id}.txt",
-                "|",
-                "parallel --tmpdir /scratch/$USER -j 5 -q uv run cc/slurm/run-starter.py --runtime.medium",
-                f"--run_id={{}} --wandb-proj {project} --jobname='\"{sweep}\"'",
-            ]
-        )
+        cmd = _submit_command(sweep_id, sweep, project)
         process_out = subprocess.run(
             cmd,
             shell=True,

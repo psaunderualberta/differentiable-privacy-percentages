@@ -13,15 +13,19 @@ back to every matching ``run_id`` (ε and seed do not affect memory).
 
 The emitted memory is the smallest power-of-two gibibytes >= the measured peak.
 
+The sweep file is the self-describing header format written by
+``create_experiments.py`` (``run_id<TAB>mem_per_gpu`` ...); this tool *refines*
+the ``mem_per_gpu`` column in place, preserving all other columns and row order.
+Legacy bare run-ID lists are accepted as input and gain a ``mem_per_gpu`` column.
+
 Usage (from src/, ideally on a GPU node so the analysis targets the GPU backend):
     uv run predict_memory.py --entity <entity> --project <project> \\
         --sweep-file cc/sweeps/<file>.txt
 
-Output: a ``<sweep-file>.mem.txt`` of ``<run_id>\\t<mem>`` lines.  Submit with:
-    while read -r id mem; do \\
-        uv run cc/slurm/run-starter.py --run_id="$id" --mem_per_gpu="$mem" \\
-            --jobname='"<name>"'; \\
-    done < cc/sweeps/<file>.mem.txt
+Submit with (reads the header columns):
+    parallel --colsep '\\t' --header : -q uv run cc/slurm/run-starter.py \\
+        --run_id={run_id} --mem_per_gpu={mem_per_gpu} \\
+        --jobname='"<name>"' :::: cc/sweeps/<file>.txt
 """
 
 from __future__ import annotations
@@ -59,6 +63,7 @@ from networks.net_factory import resolve_network_config
 from policy.factory import make_schedule
 from privacy.gdp_privacy import get_privacy_params
 from util.dataloaders import get_dataset_shapes
+from util.sweep_file import read_sweep_file, write_sweep_file
 
 
 @dataclass
@@ -68,7 +73,9 @@ class PredictConfig:
     sweep_file: str
     """Path to a sweep .txt of run IDs (one per line), e.g. cc/sweeps/<file>.txt."""
     out: str | None = None
-    """Output path for the run_id<TAB>mem map. Defaults to <sweep_file>.mem.txt."""
+    """Where to write the updated header file. Defaults to rewriting --sweep-file
+    in place (the mem_per_gpu column is replaced; all other columns and the row
+    order are preserved)."""
     min_gib: int = 1
     """Floor for the emitted power-of-two memory request."""
     safety_factor: float = 1.0
@@ -277,10 +284,10 @@ def _peak_bytes_for(sweep, heuristic_only: bool = False) -> tuple[int, str]:
 
 def main() -> None:
     conf = tyro.cli(PredictConfig)
-    out_path = conf.out or (conf.sweep_file.rsplit(".", 1)[0] + ".mem.txt")
+    out_path = conf.out or conf.sweep_file
 
-    with open(conf.sweep_file) as f:
-        run_ids = [line.strip() for line in f if line.strip()]
+    rows = read_sweep_file(conf.sweep_file)
+    run_ids = [row["run_id"] for row in rows]
     print(f"{len(run_ids)} run IDs from {conf.sweep_file}")
 
     wandb_conf = WandbConfig(entity=conf.entity, project=conf.project)
@@ -331,23 +338,24 @@ def main() -> None:
             "(conservative; CNN activation memory not modelled)."
         )
 
-    # Emit run_id -> mem.
-    lines = []
+    # Rewrite the mem_per_gpu column in place, preserving every other column and
+    # the row order (read_sweep_file returned rows in file order).
+    rid_to_mem: dict[str, str] = {}
     for rid, sweep in sweeps.items():
         sig = _signature(sweep)
         peak = sig_to_bytes[sig] * conf.safety_factor
-        mem = _next_pow2_gib(peak, conf.min_gib)
-        lines.append(f"{rid}\t{mem}G")
+        rid_to_mem[rid] = f"{_next_pow2_gib(peak, conf.min_gib)}G"
+    for row in rows:
+        row["mem_per_gpu"] = rid_to_mem[row["run_id"]]
 
-    with open(out_path, "w") as f:
-        f.write("\n".join(lines) + "\n")
+    write_sweep_file(out_path, rows)
 
-    print(f"\nWrote {len(lines)} run_id->mem rows to {out_path}")
-    print("\nSubmit with:")
+    print(f"\nUpdated mem_per_gpu for {len(rows)} runs in {out_path}")
+    print("\nSubmit with (reads run_id + mem_per_gpu from the header):")
     print(
-        f"  while read -r id mem; do uv run cc/slurm/run-starter.py"
-        f' --run_id="$id" --mem_per_gpu="$mem" --jobname=\'"<name>"\';'
-        f" done < {out_path}"
+        f"  parallel --colsep '\\t' --header : -q uv run cc/slurm/run-starter.py"
+        f" --run_id={{run_id}} --mem_per_gpu={{mem_per_gpu}}"
+        f" --jobname='\"<name>\"' :::: {out_path}"
     )
 
 
