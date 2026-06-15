@@ -104,7 +104,7 @@ def _to_run_config(
 # Shared privacy / optimisation budget.
 DELTA: float = 1e-6
 BATCH_SIZE: int = 250  # T=250 ≈ 1 MNIST epoch (N=60 000)
-DATASETS: list[str] = ["mnist", "fashion-mnist"]
+DATASETS: list[str] = ["mnist", "fashion-mnist", "cifar-10"]
 NUM_OUTER_STEPS: int = 2000
 SEEDS: tuple[int, ...] = (0, 1, 2)
 
@@ -120,7 +120,7 @@ T_FOR_ARCH_SWEEP: int = 5000
 OPTIMIZERS: list[OptimizerConfig] = [
     SGDConfig(
         learning_rate=dist_config_helper(value=1.0, distribution="constant"),
-        momentum=dist_config_helper(value=0.0, distribution="constant"),
+        momentum=dist_config_helper(value=0.9, distribution="constant"),
     ),
     # AdamConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
     # AdamWConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
@@ -346,9 +346,16 @@ if __name__ == "__main__":
                     f.write(run_id + "\n")
             print(f"\nRun IDs ({opt_tag}) → {output_path}")
 
-        print("\nSubmit to SLURM:")
+        print("\nPredict per-run memory (run on a GPU node), then submit to SLURM:")
         for opt_tag, output_path in output_paths.items():
+            mem_path = output_path.rsplit(".", 1)[0] + ".mem.txt"
+            print(f"\n  # {opt_tag}")
             print(
-                f"  cat {output_path} | parallel -q uv run cc/slurm/run-starter.py"
-                f" --run_id={{}} --jobname='\"{safe_name}-{opt_tag}\"'"
+                f"  uv run predict_memory.py --entity {conf.entity}"
+                f' --project "{conf.project}" --sweep-file {output_path}'
+            )
+            print(
+                f"  parallel -q --colsep '\\t' uv run cc/slurm/run-starter.py"
+                f" --run_id={{1}} --mem_per_gpu={{2}}"
+                f" --jobname='\"{safe_name}-{opt_tag}\"' :::: {mem_path}"
             )
