@@ -44,8 +44,8 @@ from conf.config_util import (
     dist_config_helper,
 )
 from conf.optimizer_config import (
+    AdamConfig,
     OptimizerConfig,
-    SGDConfig,
 )
 from experiments.architectures import LADDER_TAG_PREFIX, LADDERS
 from networks.cnn.config import CNNConfig
@@ -120,11 +120,11 @@ LADDER_EPSILONS: list[float] = [8]
 T_FOR_ARCH_SWEEP: int = 5000
 
 OPTIMIZERS: list[OptimizerConfig] = [
-    SGDConfig(
-        learning_rate=dist_config_helper(value=1.0, distribution="constant"),
-        momentum=dist_config_helper(value=0.9, distribution="constant"),
-    ),
-    # AdamConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
+    # SGDConfig(
+    #     learning_rate=dist_config_helper(value=1.0, distribution="constant"),
+    #     momentum=dist_config_helper(value=0.9, distribution="constant"),
+    # ),
+    AdamConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
     # AdamWConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
 ]
 
