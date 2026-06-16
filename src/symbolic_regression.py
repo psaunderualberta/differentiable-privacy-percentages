@@ -14,6 +14,8 @@ import pandas as pd
 import tyro
 from pysr import PySRRegressor
 
+from sr_identity import canonical_identity, derive_slug, identity_flags
+
 # Fixed PySR run_id so a synthesis's run directory is reused across chained jobs.
 _RUN_ID = "pysr_run"
 _THIS_SCRIPT = Path(__file__).resolve()
@@ -46,7 +48,8 @@ class PySRConfig:
     include_nonfinite_schedules: bool = False
     include_diverged_training: bool = False
     out_dir: str = ""
-    """Where to persist fitted models + eval inputs. Defaults to <cache_dir>/pysr_eval/."""
+    """Base for persisted models + eval inputs; the synthesis-group slug is appended.
+    Defaults to <cache_dir>/pysr_eval/, so artefacts land in <cache_dir>/pysr_eval/<slug>/."""
     niterations: int = 100_000
     """PySR search iterations. Lower (e.g. 5) for quick smoke tests."""
     maxsize: int = 25
@@ -269,11 +272,12 @@ def _fit_with_mirror(
         _rsync(run_directory, mirror)  # final sync of the freshest checkpoint
 
 
-def _resubmit_chain(target: str) -> None:
+def _resubmit_chain(conf: PySRConfig, target: str) -> None:
     """Resubmit the next job in this synthesis's chain via sr-run-starter.py.
 
-    Reads chain context from ``CHAIN_*`` env vars injected by sr-run-starter.py;
-    no-ops (with a warning) when run outside that launcher.
+    Reads chain context from ``CHAIN_*`` env vars injected by sr-run-starter.py and
+    re-emits the synthesis identity from ``conf`` so the successor stays on the same slug
+    directory; no-ops (with a warning) when run outside that launcher.
     """
     resubmit_script = os.environ.get("CHAIN_RESUBMIT_SCRIPT")
     if resubmit_script is None:
@@ -285,6 +289,9 @@ def _resubmit_chain(target: str) -> None:
     if "SLURM_JOB_ID" in os.environ:
         prereqs = ["--prerequisites", os.environ["SLURM_JOB_ID"]]
 
+    # Re-emit the synthesis identity from conf so the successor lands on the same slug
+    # directory (and warm-starts the same PySR state) — no identity is threaded through
+    # CHAIN_* env vars. See docs/adr/0005.
     cmd = [
         "uv",
         "run",
@@ -303,6 +310,7 @@ def _resubmit_chain(target: str) -> None:
         os.environ.get("CHAIN_ACCOUNT", ""),
         "--jobname",
         os.environ.get("CHAIN_JOBNAME", f"sr-{target}"),
+        *identity_flags(asdict(conf)),
         *prereqs,
     ]
     print(f"Resubmitting chain (depth {depth + 1}): {' '.join(cmd)}")
@@ -379,10 +387,17 @@ def main(conf: PySRConfig):
 
     print(f"Regressing on {len(keep_runs)} runs ({len(schedules)} rows)")
 
+    # This synthesis group's identity slug disambiguates it from other filterings of the
+    # same sweep (datasets, arch, ...). It is one path segment above the per-target dir on
+    # both the scratch run directory and the persistent mirror. See docs/adr/0005.
+    slug = derive_slug(canonical_identity(asdict(conf)))
+
     # Persist the inputs the evaluator needs to reconstruct predicted schedules:
     # the full-resolution (every inner step) per-run feature+actual table, plus a
-    # manifest recording exactly which runs/filters produced these models.
-    out_dir = Path(conf.out_dir) if conf.out_dir else cache_dir / "pysr_eval"
+    # manifest recording exactly which runs/filters produced these models. The slug dir is
+    # a self-contained synthesis-group artifact: point the evaluator's --eval-dir here.
+    out_base = Path(conf.out_dir) if conf.out_dir else cache_dir / "pysr_eval"
+    out_dir = out_base / slug
     out_dir.mkdir(parents=True, exist_ok=True)
     schedules.to_parquet(out_dir / "features_full.parquet", index=False)
     _write_manifest(out_dir, conf, keep_runs, schedules)
@@ -391,7 +406,10 @@ def main(conf: PySRConfig):
     feature_df = feature_df.drop(columns=list(_NON_FEATURE_COLS), errors="ignore")
 
     procs = _resolve_procs(conf)
-    scratch_base = Path(os.path.expandvars(conf.scratch_dir))
+    # Live run dirs: <scratch_dir>/<sweep>/<slug>/<target>. The sweep segment keeps two
+    # sweeps with identical filters apart on shared /scratch (the mirror is already under
+    # cache_dir, so it needs only <slug>/<target>).
+    scratch_base = Path(os.path.expandvars(conf.scratch_dir)) / cache_dir.name / slug
 
     for target in conf.targets:
         others = {"sigma", "clip", "mu"} - {target}
@@ -423,7 +441,7 @@ def main(conf: PySRConfig):
         if should_resubmit(
             elapsed, conf.timeout_in_seconds, conf.pad_seconds, depth, conf.max_chain_jobs
         ):
-            _resubmit_chain(target)
+            _resubmit_chain(conf, target)
         else:
             print("  synthesis complete or chain cap reached — not resubmitting.")
 

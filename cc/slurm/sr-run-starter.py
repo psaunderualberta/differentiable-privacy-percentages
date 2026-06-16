@@ -28,7 +28,8 @@ Examples:
 
 import os
 import subprocess
-from dataclasses import dataclass, field
+import sys
+from dataclasses import asdict, dataclass, field
 from tempfile import NamedTemporaryFile
 from typing import Literal
 
@@ -41,6 +42,11 @@ os.environ["PROJECT_SOURCE_ROOT"] = os.path.abspath(
     os.path.join(os.environ["PROJECT_ROOT"], "src"),
 )
 
+# Slug/identity logic is shared with symbolic_regression.py via this stdlib-only module,
+# so the launcher computes the SAME slug without importing pysr. See docs/adr/0005.
+sys.path.insert(0, os.environ["PROJECT_SOURCE_ROOT"])
+from sr_identity import identity_flags, slug_for
+
 _THIS_SCRIPT = os.path.abspath(__file__)
 
 
@@ -50,6 +56,20 @@ class SRSlurmConfig:
     """Path to the <entity>__<project> dir produced by compile_results_fetch.py."""
     targets: tuple[Literal["sigma", "clip", "mu"], ...] = ("sigma", "clip", "mu")
     """One independent synthesis (and chain) is submitted per target."""
+
+    # --- Synthesis identity (row filters + search space) -----------------------------
+    # These select WHICH problem each synthesis fits and so determine its slug directory.
+    # Defaults MUST mirror PySRConfig's, or the launcher's slug (used in the job name)
+    # would diverge from the script's on-disk slug. See docs/adr/0005.
+    datasets: tuple[str, ...] = ()
+    arch_labels: tuple[str, ...] = ()
+    optimizers: tuple[str, ...] = ()
+    run_ids: tuple[str, ...] = ()
+    datapoint_frequency: int = 100
+    keep_features: tuple[str, ...] = ()
+    include_nonfinite_schedules: bool = False
+    include_diverged_training: bool = False
+
     ntasks: int = 32
     """SLURM tasks = PySR worker processes. No --nodes pin, so this backfills freely."""
     chain_depth: int = 0
@@ -75,20 +95,24 @@ class SRSlurmConfig:
 
     def jobname_for(self, target: str) -> str:
         last_folder = os.path.basename(os.path.abspath(self.cache_dir))
-        return self.jobname or f"sr-{last_folder}-{target}"
+        slug = slug_for(asdict(self))
+        return self.jobname or f"sr-{last_folder}-{slug}-{target}"
 
     def sbatch_file(self, target: str) -> str:
         jobname = self.jobname_for(target)
+        # Identity flags (datasets, maxsize, the include flags, ...) are forwarded so the
+        # script reconstructs the same slug; orchestration flags are passed alongside.
+        identity = " ".join(identity_flags(asdict(self)))
         main_args = (
             f"--cache_dir '{self.cache_dir}'"
             f" --targets {target}"
             f" --niterations {self.niterations}"
-            f" --maxsize {self.maxsize}"
             f" --timeout_in_seconds {self.timeout_in_seconds}"
             f" --pad_seconds {self.pad_seconds}"
             f" --max_chain_jobs {self.max_chain_jobs}"
             f" --scratch_dir '{self.scratch_dir}'"
             f" --procs {self.ntasks}"
+            f"{' ' + identity if identity else ''}"
         )
         return f"""#!/bin/bash
 #SBATCH --ntasks={self.ntasks}

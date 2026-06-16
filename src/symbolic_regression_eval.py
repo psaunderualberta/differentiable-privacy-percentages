@@ -2,7 +2,9 @@
 """symbolic_regression_eval.py — Assess how well the equations found by
 ``symbolic_regression.py`` match the learned σ/C/μ schedules.
 
-Reads the artefacts ``symbolic_regression.py`` persists under ``<cache_dir>/pysr_eval``:
+Reads the artefacts ``symbolic_regression.py`` persists under one synthesis-group slug
+directory, ``<cache_dir>/pysr_eval/<slug>`` (the slug keys the run filters/search space;
+see docs/adr/0005):
 
     manifest.json          filters + included runs that produced the models
     features_full.parquet  per-run, EVERY inner step: features + actual σ/C/μ
@@ -32,7 +34,7 @@ correlation scalars — see docs/adr/0001. Privacy validity uses the budget
 recovered from the (on-budget) actual schedule, so it needs neither δ nor p.
 
 Usage (from src/):
-    uv run symbolic_regression_eval.py --eval-dir cache/results/<entity>__<project>/pysr_eval
+    uv run symbolic_regression_eval.py --eval-dir cache/results/<entity>__<project>/pysr_eval/<slug>
 """
 
 from __future__ import annotations
@@ -556,7 +558,8 @@ def write_table(table: pd.DataFrame, stem: Path) -> None:
 @dataclass
 class EvalConfig:
     eval_dir: str
-    """The pysr_eval dir written by symbolic_regression.py."""
+    """A synthesis-group slug dir written by symbolic_regression.py
+    (``<cache_dir>/pysr_eval/<slug>``)."""
     out_dir: str = ""
     """Output dir. Defaults to <eval_dir>."""
     complexity: int = -1
