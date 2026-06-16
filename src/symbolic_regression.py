@@ -217,7 +217,8 @@ def run_regression(
     }
 
     run_directory = output_directory / _RUN_ID
-    if run_directory.exists():
+    hall_of_fame = run_directory / "hall_of_fame.csv"
+    if hall_of_fame.exists():  # created by previous run, not from anything else in this script
         print(f"  resuming synthesis from {run_directory}")
         # 1.5.10 forwards **kwargs straight to set_params (no nested pysr_kwargs arg).
         model = PySRRegressor.from_file(
@@ -229,7 +230,6 @@ def run_regression(
             output_directory=str(output_directory),
             run_id=_RUN_ID,
             batching=True,
-            turbo=True,
             parsimony=1e-4,
             maxsize=conf.maxsize,
             binary_operators=["*", "/"],
