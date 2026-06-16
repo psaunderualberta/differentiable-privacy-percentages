@@ -86,7 +86,9 @@ class SRSlurmConfig:
     """Defaults to 'sr-<target>' per submitted job when empty."""
     account: str = "aip-nidhih"
     mem_per_cpu: str = "4G"
-    logfile: str = os.path.join(os.environ["PROJECT_ROOT"], "cc", "logs", "%j", "%x.log")
+    logfile: str = os.path.join(
+        os.environ["PROJECT_ROOT"], "cc", "logs", "synthesis", "%j", "%x.log"
+    )
     project_dir: str = os.environ["PROJECT_SOURCE_ROOT"]
     prerequisites: tuple[str, ...] = field(default_factory=tuple)
     """Job ids this submission must run after (`-d after:`); set by resubmission."""
@@ -138,6 +140,8 @@ echo "Current working directory: `pwd`"
 echo "Starting synthesis '{target}' (chain depth {self.chain_depth}) at: `date`"
 echo "SLURM_NTASKS: $SLURM_NTASKS   nodes: $SLURM_JOB_NODELIST"
 echo
+
+module load julia/1.10.10
 
 # Single launch: bare `uv run` (NOT srun) so PySR's slurm cluster_manager owns srun.
 time uv run symbolic_regression.py {main_args}

@@ -26,16 +26,19 @@ def _submit_command(sweep_id: str, sweep_name: str, project: str) -> str:
     run-starter.py; legacy bare run-ID lists fall back to ``--run_id={}``.
     """
     rel = f"cc/sweeps/{sweep_id}.txt"
-    base = (
-        "parallel --tmpdir /scratch/$USER -j 5 -q uv run cc/slurm/run-starter.py --runtime.medium"
-    )
-    tail = f"--wandb-proj {project} --jobname='\"{sweep_name}\"'"
+    cmd = "uv run cc/slurm/run-starter.py --runtime.medium"
+    tail = f"--wandb-proj '{project}' --jobname='\"{sweep_name}\"'"
 
     header = (_sweeps_dir() / f"{sweep_id}.txt").read_text().splitlines()[0].split("\t")
     if header[0] == RUN_ID_COL:
+        # GNU parallel's own options (--colsep, --header) must precede the
+        # command, otherwise they are passed through to run-starter.py and the
+        # {column} substitutions are never set up.
+        opts = "parallel --tmpdir /scratch/$USER -j 5 -q --colsep '\\t' --header :"
         flags = " ".join(f"--{col}={{{col}}}" for col in header)
-        return f"{base} --colsep '\\t' --header : {flags} {tail} :::: {rel}"
-    return f"cat {rel} | {base} --run_id={{}} {tail}"
+        return f"{opts} {cmd} {flags} {tail} :::: {rel}"
+    opts = "parallel --tmpdir /scratch/$USER -j 5 -q"
+    return f"cat {rel} | {opts} {cmd} --run_id={{}} {tail}"
 
 
 def _local_sweep_ids() -> list[str]:
