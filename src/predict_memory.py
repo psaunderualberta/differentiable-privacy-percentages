@@ -78,6 +78,8 @@ class PredictConfig:
     order are preserved)."""
     min_gib: int = 1
     """Floor for the emitted power-of-two memory request."""
+    max_gib: int = 24
+    """Ceil for the emitted power-of-two memory request."""
     safety_factor: float = 1.0
     """Multiply the measured peak before rounding up (headroom for runtime/host
     allocations XLA's static analysis does not capture)."""
@@ -87,10 +89,10 @@ class PredictConfig:
     target (compilation would OOM) or for a fast, no-GPU estimate."""
 
 
-def _next_pow2_gib(num_bytes: float, min_gib: int) -> int:
+def _next_pow2_gib(num_bytes: float, min_gib: int, max_gib: int) -> int:
     """Smallest power-of-two gibibytes >= num_bytes (>= min_gib)."""
     gib = max(num_bytes / 2**30, float(min_gib))
-    return max(min_gib, 1 << math.ceil(math.log2(gib)))
+    return min(max(min_gib, 1 << math.ceil(math.log2(gib))), max_gib)
 
 
 def _signature(sweep: SweepConfig) -> tuple:
@@ -219,10 +221,6 @@ def _peak_bytes_for(sweep, heuristic_only: bool = False) -> tuple[int, str]:
         resolved_network = resolve_network_config(sweep.env.network, sweep.dataset)
         conv_fm = _conv_feature_map_elements(resolved_network, x_shape[-2], x_shape[-1])
 
-        schedule = make_schedule(sweep.schedule_optimizer.schedule, gdp_params).project()
-        if getattr(schedule, "use_fista", False):
-            schedule = schedule.fista_extrapolate()
-
         es_conf = sweep.schedule_optimizer.es
         if es_conf.enabled:
             parallel_axis_size = int(es_conf.population_size.sample()) // 2
@@ -230,8 +228,6 @@ def _peak_bytes_for(sweep, heuristic_only: bool = False) -> tuple[int, str]:
             parallel_axis_size = sweep.schedule_optimizer.batch_size
 
         env_params = DPTrainingParams.create_direct_from_config()
-        get_training_loss = make_training_loss_fn(env_params)
-        es_state = make_initial_es_state()
 
         if heuristic_only:
             P = _param_count(env_params.network)
@@ -244,11 +240,17 @@ def _peak_bytes_for(sweep, heuristic_only: bool = False) -> tuple[int, str]:
             )
             return peak, "heuristic"
 
+        schedule = make_schedule(sweep.schedule_optimizer.schedule, gdp_params).project()
+        if getattr(schedule, "use_fista", True):
+            schedule = schedule.fista_extrapolate()
+
         key = jr.PRNGKey(0)
         key, mb_key, init_key, noise_key = jr.split(key, 4)
         noise_keys = jr.split(noise_key, parallel_axis_size)
 
         try:
+            get_training_loss = make_training_loss_fn(env_params)
+            es_state = make_initial_es_state()
             compiled = get_training_loss.lower(
                 schedule, mb_key, init_key, noise_keys, es_state
             ).compile()
@@ -344,7 +346,7 @@ def main() -> None:
     for rid, sweep in sweeps.items():
         sig = _signature(sweep)
         peak = sig_to_bytes[sig] * conf.safety_factor
-        rid_to_mem[rid] = f"{_next_pow2_gib(peak, conf.min_gib)}G"
+        rid_to_mem[rid] = f"{_next_pow2_gib(peak, conf.min_gib, conf.max_gib)}G"
     for row in rows:
         row["mem_per_gpu"] = rid_to_mem[row["run_id"]]
 

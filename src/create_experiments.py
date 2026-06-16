@@ -25,6 +25,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+import tqdm
 import tyro
 
 import wandb
@@ -263,6 +264,8 @@ def _build_experiments() -> dict[str, list[tuple[list[str], str, str, SweepConfi
 
 def _mem_per_gpu_by_name(
     experiments: dict[str, list[tuple[list[str], str, str, SweepConfig]]],
+    min_gib: int = 1,
+    max_gib: int = 24,
 ) -> dict[str, str]:
     """Map each run *name* to its ``mem_per_gpu`` request (e.g. ``"32G"``).
 
@@ -275,12 +278,13 @@ def _mem_per_gpu_by_name(
 
     sig_to_mem: dict[tuple, str] = {}
     name_to_mem: dict[str, str] = {}
-    for bucket in experiments.values():
-        for _tags, _group, name, sweep_conf in bucket:
+    for experiment_name, bucket in experiments.items():
+        iterator = tqdm.tqdm(bucket, desc=f"Finding memory usage: {experiment_name}")
+        for _tags, _group, name, sweep_conf in iterator:
             sig = _signature(sweep_conf)
             if sig not in sig_to_mem:
                 peak, _method = _peak_bytes_for(sweep_conf, heuristic_only=True)
-                sig_to_mem[sig] = f"{_next_pow2_gib(peak, 1)}G"
+                sig_to_mem[sig] = f"{_next_pow2_gib(peak, min_gib, max_gib)}G"
             name_to_mem[name] = sig_to_mem[sig]
     return name_to_mem
 
