@@ -20,8 +20,8 @@ Per optimizer the script writes:
             (var ∈ {sigma, clip})
         ladders/
             overall/
-                arch_overlay_delta_vs_constant.{pdf,png}
-                arch_overlay_acc.{pdf,png}
+                arch_forest_delta.{pdf,png}
+                arch_forest_abs.{pdf,png}
             <ladder-name>/
                 main.{pdf,png}
                 delta_vs_constant.{pdf,png}
@@ -33,7 +33,9 @@ Per optimizer the script writes:
 The architecture sweep is no longer plotted as a single lumped param-count axis.
 Instead each ladder (``experiments.architectures.LADDERS``) gets its own
 subdirectory with its rungs on a categorical x-axis, and ``ladders/overall/``
-holds cross-ladder overlays (one line per ladder vs parameter count).
+holds cross-ladder **forest plots** (rungs on a categorical y-axis grouped into
+per-ladder blocks; datasets as columns) answering the architecture-robustness
+question rather than a scaling question.
 
 Usage (from src/):
     uv run compile_results_plot.py --in-dir cache/results/<entity>__<project>
@@ -51,6 +53,7 @@ import numpy as np
 import pandas as pd
 import tyro
 from matplotlib.lines import Line2D
+from matplotlib.transforms import blended_transform_factory
 
 # Ladder definitions are the single source of truth for rung ordering and the
 # arch_label of each rung. This couples the plot script to the training code —
@@ -63,7 +66,7 @@ from networks.cnn.config import CNNConfig
 from networks.mlp.config import MLPConfig
 
 LEARNED = "Learned Schedule"
-CONSTANT = "Constant σ/clip"  # noqa: RUF001
+CONSTANT = "Constant σ/clip"
 MEDIAN = "Clip to Median Gradient Norm"
 DYNAMIC = "Dynamic-DPSGD"
 
@@ -201,18 +204,25 @@ def paired_delta(
     baseline: str,
     x_col: str,
     metric: str = "mean_acc",
-) -> pd.DataFrame:
-    """Per-seed Δ = Learned − baseline, then aggregate across seeds."""
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Per-seed Δ = Learned − baseline, aggregated across seeds.
+
+    Returns ``(agg, merged)``: ``agg`` is mean/stderr/lo/hi/n per
+    (dataset, eps, x_col); ``merged`` is the pre-aggregation per-seed frame
+    (one row per seed, with ``seed`` and ``delta`` columns) so callers that need
+    the individual seed points (e.g. forest plots) don't have to re-pair.
+    """
     keys = ["dataset", "eps", x_col, "seed"]
     learned = df[df["schedule"] == LEARNED][[*keys, metric]].rename(columns={metric: "learned"})
     base = df[df["schedule"] == baseline][[*keys, metric]].rename(columns={metric: "base"})
     merged = learned.merge(base, on=keys, how="inner")
     merged["delta"] = merged["learned"] - merged["base"]
-    return (
+    agg = (
         merged.groupby(["dataset", "eps", x_col], dropna=False)["delta"]
         .agg(mean="mean", stderr=_stderr, lo="min", hi="max", n="count")
         .reset_index()
     )
+    return agg, merged
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +351,7 @@ def plot_delta(
     datasets = sorted(df["dataset"].unique())
     epsilons = sorted(df["eps"].dropna().unique())
 
-    delta = paired_delta(df, baseline, xaxis.col, metric)
+    delta, _ = paired_delta(df, baseline, xaxis.col, metric)
     if delta.empty:
         print(f"  [skip] no paired data Learned vs {baseline} for {out_path_stem.name}")
         return
@@ -386,8 +396,18 @@ def plot_delta(
 
 
 # ---------------------------------------------------------------------------
-# Cross-ladder overlays
+# Cross-ladder forest plots (ladders/overall/)
 # ---------------------------------------------------------------------------
+#
+# The overall view answers an architecture-*robustness* question — does Learned
+# beat Constant at *every* architecture — not a scaling question (the T-sweep
+# owns scaling). The ladders vary different knobs (width/depth/pm-depth/channels)
+# and are not comparable on a shared parameter-count axis (ADR 0002), so the
+# param axis is dropped entirely. Instead rungs go on a categorical y-axis,
+# grouped into per-ladder blocks; datasets are columns sharing the row order.
+# Each rung shows its individual seeds as dots, plus a mean marker and a min–max
+# bar — a forest plot, not a box plot, since n=3 seeds is too few for a
+# five-number summary.
 
 
 def _param_map(df: pd.DataFrame) -> pd.Series:
@@ -395,90 +415,310 @@ def _param_map(df: pd.DataFrame) -> pd.Series:
     return df.dropna(subset=["arch_param_count"]).groupby("arch_label")["arch_param_count"].first()
 
 
-def plot_overlay(
+# Vertical layout (data units; one rung occupies ~1.0). The y-axis runs from 0
+# at the top downward into negatives, so the first ladder block sits at the top.
+_FOREST_HEADER_GAP = 0.9  # header row → first rung
+_FOREST_ROW_GAP = 1.0  # rung → rung
+_FOREST_BLOCK_GAP = 0.8  # last rung of a block → next header
+
+
+def _forest_columns(arch_df: pd.DataFrame) -> list[tuple[str, float]]:
+    """Ordered (dataset, eps) column keys present in the data.
+
+    Datasets are the primary column axis (the ladder sweep is ε=8 only, so this
+    is one column per dataset); including eps keeps the layout correct if a
+    multi-ε arch cache is ever passed.
+    """
+    combos = arch_df[["dataset", "eps"]].dropna().drop_duplicates().sort_values(["dataset", "eps"])
+    return [(str(d), float(e)) for d, e in combos.itertuples(index=False, name=None)]
+
+
+def _forest_blocks(
+    arch_df: pd.DataFrame, ladder_specs: dict[str, list[str]]
+) -> list[tuple[str, list[str]]]:
+    """``[(ladder_name, [present rung labels in ladder order])]`` for non-empty ladders."""
+    blocks: list[tuple[str, list[str]]] = []
+    for name, ordered_labels in ladder_specs.items():
+        member = arch_df[_ladder_member_mask(arch_df, name)]
+        present = set(member["arch_label"].dropna().unique())
+        labels = [lbl for lbl in ordered_labels if lbl in present]
+        if labels:
+            blocks.append((name, labels))
+    return blocks
+
+
+def _forest_layout(
+    blocks: list[tuple[str, list[str]]],
+) -> tuple[dict[tuple[str, str], float], dict[str, float], float]:
+    """Assign y positions to each (ladder, rung) and each block header.
+
+    Returns ``(rung_y, header_y, y_bottom)`` where ``y_bottom`` is the lowest y
+    used (already past the trailing block gap).
+    """
+    rung_y: dict[tuple[str, str], float] = {}
+    header_y: dict[str, float] = {}
+    y = 0.0
+    for name, labels in blocks:
+        header_y[name] = y
+        y -= _FOREST_HEADER_GAP
+        for lbl in labels:
+            rung_y[(name, lbl)] = y
+            y -= _FOREST_ROW_GAP
+        y -= _FOREST_BLOCK_GAP
+    return rung_y, header_y, y
+
+
+def _forest_figure(
+    ncols: int,
+    blocks: list[tuple[str, list[str]]],
+    rung_y: dict[tuple[str, str], float],
+    header_y: dict[str, float],
+    y_bottom: float,
+    sharex: bool,
+) -> tuple[plt.Figure, np.ndarray]:
+    """One tall row of ``ncols`` forest panels with shared rung order.
+
+    Sets the y-axis to the rung labels (leftmost panel only), draws the bold
+    per-block sub-headers and faint block separators on every panel.
+    """
+    n_rungs = len(rung_y)
+    height = max(3.5, 0.40 * (n_rungs + len(blocks)) + 1.0)
+    fig, axes = plt.subplots(
+        1,
+        ncols,
+        figsize=(4.2 * ncols + 1.0, height),
+        squeeze=False,
+        sharey=True,
+        sharex=sharex,
+    )
+    row = axes[0]
+
+    yticks = list(rung_y.values())
+    yticklabels = [lbl for (_name, lbl) in rung_y]
+    top = _FOREST_HEADER_GAP
+    for ax in row:
+        ax.set_ylim(y_bottom + _FOREST_BLOCK_GAP * 0.5, top)
+        ax.set_yticks(yticks)
+        ax.grid(True, axis="x", alpha=0.3, linewidth=0.5)
+        # Block separators + bold sub-headers on every panel.
+        for name, _labels in blocks:
+            hy = header_y[name]
+            ax.axhline(hy - _FOREST_HEADER_GAP * 0.5, color="0.85", linewidth=0.8)
+            ax.text(
+                0.01,
+                hy,
+                name,
+                transform=blended_transform_factory(ax.transAxes, ax.transData),
+                fontsize=8,
+                fontweight="bold",
+                va="center",
+                ha="left",
+            )
+    row[0].set_yticklabels(yticklabels, fontsize=7)
+    return fig, row
+
+
+def _forest_marker(
+    ax: plt.Axes,
+    y: float,
+    values: np.ndarray,
+    mean: float,
+    lo: float,
+    hi: float,
+    color,
+    marker: str = "D",
+    filled: bool = True,
+) -> None:
+    """Draw one rung: min–max bar + individual seed dots + mean marker."""
+    n = len(values)
+    jit = np.linspace(-0.12, 0.12, n) if n > 1 else np.zeros(1)
+    ax.plot([lo, hi], [y, y], color=color, linewidth=1.1, alpha=0.7, zorder=1)
+    ax.scatter(
+        values,
+        y + jit,
+        s=14,
+        facecolors=color,
+        edgecolors="none",
+        alpha=0.45,
+        zorder=2,
+    )
+    ax.scatter(
+        [mean],
+        [y],
+        s=46,
+        marker=marker,
+        facecolors=color if filled else "white",
+        edgecolors=color,
+        linewidths=1.2,
+        zorder=3,
+    )
+
+
+def plot_forest_delta(
     arch_df: pd.DataFrame,
     ladder_specs: dict[str, list[str]],
-    kind: str,  # "delta_vs_constant" or "acc"
+    baseline: str,
     out_path_stem: Path,
 ) -> None:
-    """Cross-ladder overlay: one line per ladder vs parameter count.
+    """Forest of per-seed Δacc = Learned − baseline, one panel per dataset.
 
-    ``kind="acc"`` plots absolute Learned val-accuracy; ``kind="delta_vs_constant"``
-    plots the per-seed Learned − Constant Δ. x is parameter count (log scale);
-    rows = dataset, cols = eps. ``mlp-depth-pm`` collapses to a near-vertical
-    cluster here by design (constant params) — its own ladder subdir is where
-    its rung axis is meaningful.
+    Shared x across panels (the robustness message reads as "every interval
+    right of the dashed Δ=0 line"). The anchor rung (mlp-128) recurs once in each
+    MLP block by construction — expected.
     """
     if arch_df.empty:
         print(f"  [skip] no arch rows for {out_path_stem.name}")
         return
 
-    datasets = sorted(arch_df["dataset"].unique())
-    epsilons = sorted(arch_df["eps"].dropna().unique())
-    if not datasets or not epsilons:
-        print(f"  [skip] empty grid for {out_path_stem.name}")
+    columns = _forest_columns(arch_df)
+    blocks = _forest_blocks(arch_df, ladder_specs)
+    if not columns or not blocks:
+        print(f"  [skip] empty forest for {out_path_stem.name}")
         return
 
-    ladder_names = list(ladder_specs)
-    cmap = plt.get_cmap("tab10")
-    ladder_color = {name: cmap(i % 10) for i, name in enumerate(ladder_names)}
-
-    fig, axes = _facet_grid(datasets, epsilons)
-    ylabel = "Learned test accuracy" if kind == "acc" else "Learned - Constant (Δ acc)"
-
-    drew_any = False
-    for i, ds in enumerate(datasets):
-        for j, eps in enumerate(epsilons):
-            ax = axes[i, j]
-            if kind == "delta_vs_constant":
-                ax.axhline(0.0, color="black", linewidth=0.6, alpha=0.6)
-            for name in ladder_names:
-                member = arch_df[_ladder_member_mask(arch_df, name)]
-                cell = member[(member["dataset"] == ds) & (member["eps"] == eps)]
-                if cell.empty:
-                    continue
-                pmap = _param_map(cell)
-                if kind == "acc":
-                    agg = aggregate_across_seeds(cell, "arch_label", "mean_acc")
-                    series = agg[agg["schedule"] == LEARNED][["arch_label", "mean"]]
-                else:
-                    series = paired_delta(cell, CONSTANT, "arch_label", "mean_acc")[
-                        ["arch_label", "mean"]
-                    ]
-                if series.empty:
-                    continue
-                series = series.copy()
-                series["x"] = series["arch_label"].map(pmap)
-                series = series.dropna(subset=["x"]).sort_values("x")
-                if series.empty:
-                    continue
-                ax.plot(
-                    series["x"],
-                    series["mean"],
-                    color=ladder_color[name],
-                    marker="o",
-                    markersize=4,
-                    linewidth=1.2,
-                    label=name,
-                )
-                drew_any = True
-            ax.set_xscale("log")
-            ax.grid(True, alpha=0.3, linewidth=0.5)
-
-    if not drew_any:
-        print(f"  [skip] no ladder series for {out_path_stem.name}")
-        plt.close(fig)
+    agg, merged = paired_delta(arch_df, baseline, "arch_label")
+    if agg.empty:
+        print(f"  [skip] no paired data Learned vs {baseline} for {out_path_stem.name}")
         return
 
-    _label_facets(axes, datasets, epsilons, "parameters (log scale)", ylabel)
+    rung_y, header_y, y_bottom = _forest_layout(blocks)
+    fig, row = _forest_figure(len(columns), blocks, rung_y, header_y, y_bottom, sharex=True)
+    color = SCHEDULE_COLORS[LEARNED]
+
+    for c, (ds, eps) in enumerate(columns):
+        ax = row[c]
+        ax.axvline(0.0, color="black", linestyle="--", linewidth=0.8, alpha=0.7)
+        ax.set_title(ds if len(columns) == len({d for d, _ in columns}) else f"{ds}, ε={eps:g}")
+        for name, labels in blocks:
+            for lbl in labels:
+                y = rung_y[(name, lbl)]
+                arow = agg[
+                    (agg["dataset"] == ds) & (agg["eps"] == eps) & (agg["arch_label"] == lbl)
+                ]
+                if arow.empty:
+                    continue
+                seeds = merged[
+                    (merged["dataset"] == ds)
+                    & (merged["eps"] == eps)
+                    & (merged["arch_label"] == lbl)
+                ]["delta"].to_numpy()
+                r = arow.iloc[0]
+                _forest_marker(ax, y, seeds, r["mean"], r["lo"], r["hi"], color, marker="D")
+
+    for ax in row:
+        ax.set_xlabel(f"Learned − {SCHEDULE_SHORT[baseline]} (Δ acc, %)")
+
+    handles = [
+        Line2D([], [], color=color, marker="D", linestyle="none", label="seed mean"),
+        Line2D([], [], color=color, marker="o", linestyle="none", alpha=0.45, label="per seed"),
+        Line2D([], [], color=color, linewidth=1.1, alpha=0.7, label="min–max"),
+        Line2D(
+            [],
+            [],
+            color="black",
+            linestyle="--",
+            linewidth=0.8,
+            label=f"Δ=0 ({SCHEDULE_SHORT[baseline]})",
+        ),
+    ]
     fig.legend(
-        handles=[Line2D([], [], color=ladder_color[n], marker="o", label=n) for n in ladder_names],
-        loc="lower center",
-        ncol=min(len(ladder_names), 5),
-        bbox_to_anchor=(0.5, -0.04),
-        frameon=False,
+        handles=handles, loc="lower center", ncol=4, bbox_to_anchor=(0.5, -0.02), frameon=False
     )
-    fig.tight_layout(rect=(0, 0.04, 1, 1))
+    fig.suptitle("Architecture robustness — Learned vs Constant Δ accuracy", fontsize=10)
+    fig.tight_layout(rect=(0, 0.03, 1, 0.97))
+    _save(fig, out_path_stem)
+
+
+def plot_forest_abs(
+    arch_df: pd.DataFrame,
+    ladder_specs: dict[str, list[str]],
+    out_path_stem: Path,
+) -> None:
+    """Forest of paired absolute accuracy (Constant ○ / Learned ●) per rung.
+
+    Independent x per dataset panel (mnist and fashion-mnist sit in different
+    accuracy ranges), so each column is auto-scaled.
+    """
+    if arch_df.empty:
+        print(f"  [skip] no arch rows for {out_path_stem.name}")
+        return
+
+    columns = _forest_columns(arch_df)
+    blocks = _forest_blocks(arch_df, ladder_specs)
+    if not columns or not blocks:
+        print(f"  [skip] empty forest for {out_path_stem.name}")
+        return
+
+    agg = aggregate_across_seeds(arch_df, "arch_label", "mean_acc")
+    rung_y, header_y, y_bottom = _forest_layout(blocks)
+    fig, row = _forest_figure(len(columns), blocks, rung_y, header_y, y_bottom, sharex=False)
+
+    # Learned filled, Constant open; offset in y so the two don't overlap.
+    schedule_style = [(LEARNED, "o", True, 0.16), (CONSTANT, "o", False, -0.16)]
+
+    for c, (ds, eps) in enumerate(columns):
+        ax = row[c]
+        ax.set_title(ds if len(columns) == len({d for d, _ in columns}) else f"{ds}, ε={eps:g}")
+        for name, labels in blocks:
+            for lbl in labels:
+                y = rung_y[(name, lbl)]
+                for sched, marker, filled, yoff in schedule_style:
+                    arow = agg[
+                        (agg["dataset"] == ds)
+                        & (agg["eps"] == eps)
+                        & (agg["schedule"] == sched)
+                        & (agg["arch_label"] == lbl)
+                    ]
+                    if arow.empty:
+                        continue
+                    seeds = arch_df[
+                        (arch_df["dataset"] == ds)
+                        & (arch_df["eps"] == eps)
+                        & (arch_df["schedule"] == sched)
+                        & (arch_df["arch_label"] == lbl)
+                    ]["mean_acc"].to_numpy()
+                    r = arow.iloc[0]
+                    _forest_marker(
+                        ax,
+                        y + yoff,
+                        seeds,
+                        r["mean"],
+                        r["lo"],
+                        r["hi"],
+                        SCHEDULE_COLORS[sched],
+                        marker=marker,
+                        filled=filled,
+                    )
+
+    for ax in row:
+        ax.set_xlabel("test accuracy (%)")
+
+    handles = [
+        Line2D(
+            [],
+            [],
+            color=SCHEDULE_COLORS[LEARNED],
+            marker="o",
+            linestyle="none",
+            label=SCHEDULE_SHORT[LEARNED],
+        ),
+        Line2D(
+            [],
+            [],
+            color=SCHEDULE_COLORS[CONSTANT],
+            marker="o",
+            linestyle="none",
+            markerfacecolor="white",
+            label=SCHEDULE_SHORT[CONSTANT],
+        ),
+        Line2D([], [], color="0.4", marker="o", linestyle="none", alpha=0.45, label="per seed"),
+        Line2D([], [], color="0.4", linewidth=1.1, alpha=0.7, label="min–max"),
+    ]
+    fig.legend(
+        handles=handles, loc="lower center", ncol=4, bbox_to_anchor=(0.5, -0.02), frameon=False
+    )
+    fig.suptitle("Architecture robustness — paired absolute accuracy", fontsize=10)
+    fig.tight_layout(rect=(0, 0.03, 1, 0.97))
     _save(fig, out_path_stem)
 
 
@@ -1006,10 +1246,12 @@ def _plot_ladders(s: pd.DataFrame, sch: pd.DataFrame, out: Path) -> None:
             )
 
     overall = ladders_dir / "overall"
-    plot_overlay(
-        s_arch, ladder_specs, "delta_vs_constant", overall / "arch_overlay_delta_vs_constant"
-    )
-    plot_overlay(s_arch, ladder_specs, "acc", overall / "arch_overlay_acc")
+    # Remove the superseded param-count overlays so stale figures don't linger.
+    for stale in ("arch_overlay_delta_vs_constant", "arch_overlay_acc"):
+        for ext in ("pdf", "png"):
+            (overall / stale).with_suffix(f".{ext}").unlink(missing_ok=True)
+    plot_forest_delta(s_arch, ladder_specs, CONSTANT, overall / "arch_forest_delta")
+    plot_forest_abs(s_arch, ladder_specs, overall / "arch_forest_abs")
 
 
 def main(conf: PlotConfig) -> None:

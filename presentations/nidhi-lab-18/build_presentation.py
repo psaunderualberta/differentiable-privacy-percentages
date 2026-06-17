@@ -11,7 +11,8 @@ import json
 import pathlib
 import struct
 
-ROOT = pathlib.Path(__file__).parent
+# project root
+ROOT = pathlib.Path(__file__).parent.parent.parent
 RES = ROOT / "src" / "cache" / "results"
 TL = RES / "psaunder__TestLadderSweep" / "plots" / "sgd"
 NM = RES / "psaunder__NoMomentumLadderSweep" / "plots" / "sgd"
@@ -24,7 +25,7 @@ FIGS = {
     "TL_CLIP": TL / "clip_shape.png",
     "NM_DELTA": NM / "t_sweep_delta_vs_constant.png",
     "NM_SIGMA": NM / "sigma_shape.png",
-    "ARCH": TL / "ladders" / "overall" / "arch_overlay_delta_vs_constant.png",
+    "ARCH": TL / "ladders" / "overall" / "arch_forest_abs.png",
 }
 
 

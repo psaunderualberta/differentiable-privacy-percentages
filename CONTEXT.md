@@ -72,8 +72,14 @@ A figure showing a single ladder, with its rungs on a categorical x-axis. Lives 
 _Avoid_: arch plot, sweep plot.
 
 **Overlay**:
-A cross-ladder comparison plot that draws one line per ladder on a shared axis (parameter
-count), under `plots/<optimizer>/ladders/overall/`. The overlay answers cross-ladder
-questions (does the learned advantage scale with model size); it replaces the old lumped
-arch plot that mixed all ladders onto one mis-sorted param-count line.
-_Avoid_: combined plot, lumped plot, arch-sweep plot.
+The cross-ladder figure under `plots/<optimizer>/ladders/overall/`. It answers the
+**robustness** question — does Learned beat Constant at *every* architecture — not a
+scaling question (the T-sweep owns scaling). It is a **forest plot**: rungs on a
+categorical y-axis, grouped into ladder blocks, with Δacc (or paired absolute acc) on
+x. There is no continuous parameter-count axis, because the ladders vary different knobs
+and are not comparable across a shared param axis (see ADR 0002). Two variants:
+`arch_forest_delta` (Learned − Constant Δ, dashed line at 0, shared x across datasets)
+and `arch_forest_abs` (paired Constant/Learned absolute acc, independent x per dataset).
+Each rung shows its 3 seeds as individual dots plus a mean marker and a min–max bar — no
+box plot, since n=3 is too few for a five-number summary.
+_Avoid_: combined plot, lumped plot, arch-sweep plot, param-count overlay.
