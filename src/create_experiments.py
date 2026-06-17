@@ -27,8 +27,8 @@ from typing import Any
 
 import tqdm
 import tyro
-
 import wandb
+
 from networks.net_factory import DATASET_NETWORK_DEFAULTS
 
 # Must be run from src/ — mirrors the PROJECT_ROOT convention in sweep.py.

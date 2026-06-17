@@ -141,7 +141,11 @@ echo "Starting synthesis '{target}' (chain depth {self.chain_depth}) at: `date`"
 echo "SLURM_NTASKS: $SLURM_NTASKS   nodes: $SLURM_JOB_NODELIST"
 echo
 
-module load julia/1.10.10
+# have to do this to make sure the following libraries load, idk why
+module --force purge
+module load StdEnv/2023 julia/1.11.3
+env -u LD_LIBRARY_PATH julia -e 'using ClusterManagers; println("ClusterManagers: OK")'
+env -u LD_LIBRARY_PATH julia -e 'using SymbolicRegression; println("SymbolicRegression: OK")'
 
 # Single launch: bare `uv run` (NOT srun) so PySR's slurm cluster_manager owns srun.
 time uv run symbolic_regression.py {main_args}

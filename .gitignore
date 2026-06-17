@@ -219,3 +219,6 @@ outputs/
 checkpoints/
 artifacts/
 cache/
+
+# weird julia files
+julia-*.out
