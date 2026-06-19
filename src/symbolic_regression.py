@@ -1,9 +1,6 @@
 import json
-import multiprocessing  # used to get cpu count (local fallback only)
 import os
-import pickle
 import subprocess
-import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -56,7 +53,6 @@ class PySRConfig:
     """Max equation complexity PySR will consider."""
 
     # --- SLURM job-chaining (see docs/adr/0002) ---
-    scratch_dir: str = "/scratch/$USER/pysr"
     """Base dir for the live run directory (fast shared tier). Per-target subdir
     is appended; env vars like $USER are expanded. NEVER use $SLURM_TMPDIR."""
     procs: int = 0
@@ -73,7 +69,7 @@ class PySRConfig:
 
 def _validate_targets(targets: tuple[str, ...]) -> None:
     if not 1 <= len(targets) <= 3:
-        raise ValueError(f"targets must have length 1–3, got {len(targets)}: {targets}")  # noqa: RUF001
+        raise ValueError(f"targets must have length 1–3, got {len(targets)}: {targets}")
     if len(set(targets)) != len(targets):
         raise ValueError(f"targets must be unique, got {targets}")
 
@@ -106,6 +102,7 @@ def _runs_with_finite_learned(scalars: pd.DataFrame) -> set[str]:
 
 
 def _filter_features(df: pd.DataFrame, conf: PySRConfig, target: str) -> pd.DataFrame:
+    df = df[~(df[target].isna() | np.isinf(df[target]))]
     df = df.dropna(axis=1)
 
     # Drop constant columns (excluding the target)
@@ -154,37 +151,7 @@ def _resolve_procs(conf: PySRConfig) -> int:
     ntasks = os.environ.get("SLURM_NTASKS")
     if ntasks:
         return int(ntasks)
-    return multiprocessing.cpu_count()
-
-
-def _rsync(src: Path, dst: Path) -> None:
-    """Mirror ``src`` directory into ``dst`` (durable storage), deleting stale files."""
-    if not src.exists():
-        return
-    dst.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        ["rsync", "-a", "--delete", f"{src}/", f"{dst}/"],
-        check=False,
-    )
-
-
-def _start_mirror_daemon(
-    run_directory: Path, mirror: Path, interval_secs: int
-) -> tuple[threading.Event, threading.Thread]:
-    """Background daemon: rsync run directory → mirror every ``interval_secs``.
-
-    Returns a (stop_event, thread) pair; set the event then call ``_rsync`` once
-    more for a final sync after ``fit()`` returns.
-    """
-    stop = threading.Event()
-
-    def loop(stop_event: threading.Event = stop) -> None:
-        while not stop_event.wait(interval_secs):
-            _rsync(run_directory, mirror)
-
-    thread = threading.Thread(target=loop, daemon=True, name="pysr-mirror")
-    thread.start()
-    return stop, thread
+    return 0
 
 
 def run_regression(
@@ -204,17 +171,23 @@ def run_regression(
     X = df[feature_cols]
     y = df[target_col]
 
-    on_slurm = "SLURM_NTASKS" in os.environ
-    populations = 3 * procs
     runtime_kwargs = {
-        "parallelism": "multiprocessing",
-        "procs": procs,
-        "cluster_manager": "slurm" if on_slurm else None,
         "timeout_in_seconds": conf.timeout_in_seconds,
         "niterations": conf.niterations,
-        "populations": populations,
-        "warm_start": True,
     }
+
+    if procs > 0:
+        runtime_kwargs |= {
+            "parallelism": "multiprocessing",
+            "procs": procs,
+            "populations": 3 * procs,
+        }
+
+    on_slurm = "SLURM_NTASKS" in os.environ
+    if on_slurm:
+        runtime_kwargs |= {
+            "cluster_manager": "slurm",
+        }
 
     run_directory = output_directory / _RUN_ID
     hall_of_fame = run_directory / "hall_of_fame.csv"
@@ -223,6 +196,7 @@ def run_regression(
         # 1.5.10 forwards **kwargs straight to set_params (no nested pysr_kwargs arg).
         model = PySRRegressor.from_file(
             run_directory=str(run_directory),
+            warm_start=True,
             **runtime_kwargs,
         )
     else:
@@ -230,15 +204,15 @@ def run_regression(
             output_directory=str(output_directory),
             run_id=_RUN_ID,
             batching=True,
-            parsimony=1e-4,
+            parsimony=1e-3,
             maxsize=conf.maxsize,
-            binary_operators=["*", "/"],
+            binary_operators=["*", "/", "+", "-"],
             unary_operators=[
                 "sqrt",
                 "exp",
                 "log",
             ],
-            elementwise_loss="loss(prediction, target) = ((prediction - target) / target)^2",
+            elementwise_loss="loss(prediction, target) = 5",
             **runtime_kwargs,
         )
 
@@ -246,30 +220,6 @@ def run_regression(
     model.fit(X, y, variable_names=list(X.columns))
     elapsed = time.monotonic() - start
     return model, elapsed
-
-
-def _fit_with_mirror(
-    df: pd.DataFrame,
-    target_col: str,
-    conf: PySRConfig,
-    output_directory: Path,
-    run_directory: Path,
-    mirror: Path,
-    procs: int,
-) -> tuple[PySRRegressor, float]:
-    """Run ``run_regression`` with the background mirror daemon active.
-
-    The final ``_rsync`` runs in a ``finally`` so the freshest checkpoint is
-    mirrored even if ``fit()`` raises — though a crash still ends the chain (no
-    successor is submitted; see docs/adr/0002).
-    """
-    stop_daemon, daemon = _start_mirror_daemon(run_directory, mirror, conf.mirror_sync_secs)
-    try:
-        return run_regression(df, target_col, conf, output_directory, procs)
-    finally:
-        stop_daemon.set()
-        daemon.join(timeout=5)
-        _rsync(run_directory, mirror)  # final sync of the freshest checkpoint
 
 
 def _resubmit_chain(conf: PySRConfig, target: str) -> None:
@@ -319,30 +269,6 @@ def _resubmit_chain(conf: PySRConfig, target: str) -> None:
         print(f"ERROR: resubmit failed:\n{result.stderr}")
     else:
         print(f"Resubmit successful: {result.stdout.strip()}")
-
-
-def _equations_table(model: PySRRegressor) -> pd.DataFrame:
-    """Distil the PySR Pareto front to a human-readable, serialisable table."""
-    eqs = model.equations_
-    cols = [c for c in ("complexity", "loss", "score", "equation") if c in eqs.columns]
-    table = eqs[cols].copy()
-    # Mark which front row PySR would select by default (used in .predict()).
-    selected = getattr(model, "selection_mask_", None)
-    table["selected"] = False
-    if selected is not None:
-        table.loc[np.asarray(selected), "selected"] = True
-    else:
-        table.iloc[-1, table.columns.get_loc("selected")] = True
-    return table.reset_index(drop=True)
-
-
-def _persist_target(model: PySRRegressor, feature_names: list[str], target_dir: Path) -> None:
-    target_dir.mkdir(parents=True, exist_ok=True)
-    with (target_dir / "model.pkl").open("wb") as f:
-        pickle.dump(model, f)
-    _equations_table(model).to_csv(target_dir / "equations.csv", index=False)
-    (target_dir / "feature_names.json").write_text(json.dumps(feature_names, indent=2))
-    print(f"  → persisted {target_dir}")
 
 
 def _write_manifest(
@@ -405,37 +331,22 @@ def main(conf: PySRConfig):
     feature_df = schedules[schedules["inner_step"] % conf.datapoint_frequency == 0]
     feature_df = feature_df.drop(columns=list(_NON_FEATURE_COLS), errors="ignore")
 
-    procs = _resolve_procs(conf)
-    # Live run dirs: <scratch_dir>/<sweep>/<slug>/<target>. The sweep segment keeps two
-    # sweeps with identical filters apart on shared /scratch (the mirror is already under
-    # cache_dir, so it needs only <slug>/<target>).
-    scratch_base = Path(os.path.expandvars(conf.scratch_dir)) / cache_dir.name / slug
-
     for target in conf.targets:
+        target_out_dir = out_dir / target
         others = {"sigma", "clip", "mu"} - {target}
+
         target_df = feature_df.drop(columns=[*others], errors="ignore").copy()
         target_df = _filter_features(target_df, conf, target)
+
         feature_names = [c for c in target_df.columns if c != target]
 
-        # Live run dir on fast scratch; durable mirror under the persisted target dir.
-        output_directory = scratch_base / target
-        run_directory = output_directory / _RUN_ID
-        mirror = out_dir / target / _RUN_ID
-
-        if should_restore_mirror(run_directory.exists(), mirror.exists()):
-            print(f"  /scratch purged — restoring mirror {mirror} → {run_directory}")
-            _rsync(mirror, run_directory)
-
+        procs = _resolve_procs(conf)
         print(f"=== {target} regression ({procs} procs) ===")
         print(f"=== Features: {feature_names} ===")
 
-        model, elapsed = _fit_with_mirror(
-            target_df, target, conf, output_directory, run_directory, mirror, procs
-        )
-
+        model, elapsed = run_regression(target_df, target, conf, target_out_dir, procs)
         print(model)
         print(f"  fit() took {elapsed:.0f}s (timeout {conf.timeout_in_seconds}s)")
-        _persist_target(model, feature_names, out_dir / target)
 
         depth = int(os.environ.get("CHAIN_DEPTH", "0"))
         if should_resubmit(
