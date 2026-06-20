@@ -27,8 +27,8 @@ import os
 # T-filter or a single-architecture filter), ADD ITS NAME HERE TOO.
 #
 # Conceptually this is "every PySRConfig field except the orchestration denylist"
-# (scratch_dir, out_dir, procs, niterations, timeout_in_seconds, pad_seconds,
-# max_chain_jobs, chain_depth, mirror_sync_secs) and except `targets`. It is enumerated
+# (out_dir, procs, niterations, timeout_in_seconds, pad_seconds, max_chain_jobs,
+# chain_depth) and except `targets`. It is enumerated
 # rather than reflected so the launcher can compute a matching slug without importing
 # PySRConfig (which would pull in pysr). See ADR 0005.
 IDENTITY_FIELDS: tuple[str, ...] = (
@@ -42,6 +42,8 @@ IDENTITY_FIELDS: tuple[str, ...] = (
     "include_nonfinite_schedules",
     "include_diverged_training",
     "maxsize",
+    "template_mode",  # template vs pooled-scalar fit — changes the problem (ADR 0006)
+    "n_template_params",  # number of per-condition constants K
 )
 
 # Tuple-valued identity fields are order-insensitive: sorted before hashing/emitting.
@@ -66,6 +68,8 @@ IDENTITY_FLAG_DEFAULTS: dict[str, object] = {
     "include_nonfinite_schedules": False,
     "include_diverged_training": False,
     "maxsize": 25,
+    "template_mode": True,
+    "n_template_params": 3,
 }
 
 
@@ -125,8 +129,11 @@ def identity_flags(mapping: dict) -> list[str]:
                 flags.append(f"--{field}")
                 flags.extend(str(x) for x in items)
         elif isinstance(default, bool):
-            if value and not default:
-                flags.append(f"--{field}")
+            # Forward either polarity: a default-False bool emits its store_true flag
+            # when set; a default-True bool (e.g. template_mode) emits `--no-<field>`
+            # when turned off. tyro accepts the underscore form of both.
+            if value != default:
+                flags.append(f"--{field}" if value else f"--no-{field}")
         elif value != default:
             flags.extend([f"--{field}", str(value)])
     return flags

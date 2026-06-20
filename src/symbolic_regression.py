@@ -1,5 +1,6 @@
 import json
 import os
+import pickle
 import subprocess
 import time
 from dataclasses import asdict, dataclass
@@ -9,8 +10,15 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 import tyro
-from pysr import PySRRegressor
+from pysr import PySRRegressor, TemplateExpressionSpec
 
+from sr_category import (
+    build_category_map,
+    build_constants_table,
+    category_series,
+    save_category_map,
+    template_param_names,
+)
 from sr_identity import canonical_identity, derive_slug, identity_flags
 
 # Fixed PySR run_id so a synthesis's run directory is reused across chained jobs.
@@ -52,9 +60,14 @@ class PySRConfig:
     maxsize: int = 25
     """Max equation complexity PySR will consider."""
 
+    # --- Template mode (per-condition free constants; see docs/adr/0006) ---
+    template_mode: bool = True
+    """Fit one schedule shape f(step_norm) shared across runs plus K per-condition
+    constants (the default). Pass --no-template_mode for the pooled scalar fit."""
+    n_template_params: int = 3
+    """K — number of free per-condition constants the schedule shape is modulated by."""
+
     # --- SLURM job-chaining (see docs/adr/0002) ---
-    """Base dir for the live run directory (fast shared tier). Per-target subdir
-    is appended; env vars like $USER are expanded. NEVER use $SLURM_TMPDIR."""
     procs: int = 0
     """PySR worker processes. 0 ⇒ read $SLURM_NTASKS on SLURM, else cpu_count."""
     timeout_in_seconds: int = 9900
@@ -63,8 +76,43 @@ class PySRConfig:
     """Slack (10m) below timeout: fit() finishing earlier counts as natural completion."""
     max_chain_jobs: int = 16
     """Hard cap on chain depth; the chain stops resubmitting once reached."""
-    mirror_sync_secs: int = 900
-    """Interval (15m) for the background rsync of run directory → persistent mirror."""
+
+
+def build_template_spec(n_conditions: int, n_template_params: int) -> TemplateExpressionSpec:
+    """A ``TemplateExpressionSpec`` for the universal schedule shape ``f``.
+
+    ``f``'s only real input is ``step_norm``; the K per-condition constants are
+    indexed by the 1-indexed ``category`` column and passed in as extra arguments
+    so PySR discovers how the shape is modulated per condition (ADR 0006). Each of
+    the K parameter slots holds one constant per condition.
+    """
+    names = template_param_names(n_template_params)
+    const_args = ", ".join(f"{name}[category]" for name in names)
+    return TemplateExpressionSpec(
+        expressions=["f"],
+        variable_names=["step_norm", "category"],
+        parameters=dict.fromkeys(names, n_conditions),
+        combine=f"f(step_norm, {const_args})",
+    )
+
+
+def extract_template_constants(
+    equation_row, param_names: tuple[str, ...] | list[str]
+) -> dict[str, np.ndarray]:
+    """Read the fitted per-condition constants off one template equation row.
+
+    ``equation_row`` is a row of ``model.equations_`` (or ``model.get_best()``)
+    whose ``"julia_expression"`` carries ``.metadata.parameters`` — a Julia
+    ``NamedTuple`` with one field per declared template parameter. Each field is
+    a length-``n_conditions`` vector. Returns ``{name: float64 ndarray}`` in the
+    order of ``param_names``.
+
+    Fields are read by attribute (``getattr``); the NamedTuple has no string
+    ``getindex`` (``params["p1"]`` raises a Julia ``MethodError``). Values come
+    back float32 and are cast to float64. See docs/adr/0006.
+    """
+    params = equation_row["julia_expression"].metadata.parameters
+    return {name: np.asarray(getattr(params, name), dtype=np.float64) for name in param_names}
 
 
 def _validate_targets(targets: tuple[str, ...]) -> None:
@@ -134,16 +182,6 @@ def should_resubmit(
     return chain_depth < max_chain_jobs
 
 
-def should_restore_mirror(scratch_run_dir_exists: bool, mirror_exists: bool) -> bool:
-    """Restore the persistent mirror onto scratch only if scratch was purged.
-
-    True iff the scratch run directory is gone but a mirror exists — the case
-    where a chained job landed after /scratch was wiped. If scratch survived
-    (back-to-back jobs) we resume in place; with no mirror we start fresh.
-    """
-    return (not scratch_run_dir_exists) and mirror_exists
-
-
 def _resolve_procs(conf: PySRConfig) -> int:
     """Worker-process count: explicit config, else $SLURM_NTASKS, else cpu_count."""
     if conf.procs > 0:
@@ -160,12 +198,17 @@ def run_regression(
     conf: PySRConfig,
     output_directory: Path,
     procs: int,
+    expression_spec: TemplateExpressionSpec | None = None,
 ) -> tuple[PySRRegressor, float]:
     """Fit (or resume) one synthesis. Returns the model and the ``fit()`` wall time.
 
     The run directory ``output_directory/_RUN_ID`` is pinned so chained jobs reuse
     it. If it already holds PySR state we resume via ``from_file`` + ``warm_start``;
     otherwise we start a fresh search writing into that fixed location.
+
+    When ``expression_spec`` is given (template mode) the fresh search fits that
+    spec — the universal shape ``f`` plus per-condition constants — instead of a
+    pooled scalar equation.
     """
     feature_cols = [c for c in df.columns if c != target_col]
     X = df[feature_cols]
@@ -200,21 +243,21 @@ def run_regression(
             **runtime_kwargs,
         )
     else:
-        model = PySRRegressor(
-            output_directory=str(output_directory),
-            run_id=_RUN_ID,
-            batching=True,
-            parsimony=1e-3,
-            maxsize=conf.maxsize,
-            binary_operators=["*", "/", "+", "-"],
-            unary_operators=[
-                "sqrt",
-                "exp",
-                "log",
-            ],
-            elementwise_loss="loss(prediction, target) = 5",
-            **runtime_kwargs,
+        builder_kwargs: dict = {
+            "output_directory": str(output_directory),
+            "run_id": _RUN_ID,
+            "batching": True,
+            "parsimony": 1e-3,
+            "maxsize": conf.maxsize,
+            "binary_operators": ["*", "/", "+", "-"],
+            "unary_operators": ["sqrt", "exp", "log"],
+        }
+        if expression_spec is not None:
+            builder_kwargs["expression_spec"] = expression_spec
+        builder_kwargs["elementwise_loss"] = (
+            "loss(prediction, target) = ((prediction - target) / target)^2"
         )
+        model = PySRRegressor(**builder_kwargs, **runtime_kwargs)
 
     start = time.monotonic()
     model.fit(X, y, variable_names=list(X.columns))
@@ -269,6 +312,43 @@ def _resubmit_chain(conf: PySRConfig, target: str) -> None:
         print(f"ERROR: resubmit failed:\n{result.stderr}")
     else:
         print(f"Resubmit successful: {result.stdout.strip()}")
+
+
+def _equations_table(model: PySRRegressor) -> pd.DataFrame:
+    """Distil the PySR Pareto front to a human-readable, serialisable table.
+
+    The evaluator reads this CSV's ``selected`` column to pick the default
+    equation; ``_selected_index`` falls back to the last (highest-complexity)
+    row when no mask is present.
+    """
+    eqs = model.equations_
+    cols = [c for c in ("complexity", "loss", "score", "equation") if c in eqs.columns]
+    table = eqs[cols].copy()
+    # Mark which front row PySR would select by default (used in .predict()).
+    selected = getattr(model, "selection_mask_", None)
+    table["selected"] = False
+    if selected is not None:
+        table.loc[np.asarray(selected), "selected"] = True
+    else:
+        table.iloc[-1, table.columns.get_loc("selected")] = True
+    return table.reset_index(drop=True)
+
+
+def _persist_target(model: PySRRegressor, feature_names: list[str], target_dir: Path) -> None:
+    """Write the per-target artefacts the evaluator loads (see symbolic_regression_eval.py).
+
+    PySR already checkpoints its own state into the run directory during ``fit``,
+    but the evaluator loads a self-contained, relocatable bundle keyed by target:
+    ``model.pkl`` (the pickled regressor, carrying the whole Pareto front),
+    ``equations.csv`` (the distilled front incl. the ``selected`` row), and
+    ``feature_names.json`` (the exact columns the target was fit on).
+    """
+    target_dir.mkdir(parents=True, exist_ok=True)
+    with (target_dir / "model.pkl").open("wb") as f:
+        pickle.dump(model, f)
+    _equations_table(model).to_csv(target_dir / "equations.csv", index=False)
+    (target_dir / "feature_names.json").write_text(json.dumps(feature_names, indent=2))
+    print(f"  → persisted {target_dir}")
 
 
 def _write_manifest(
@@ -328,25 +408,53 @@ def main(conf: PySRConfig):
     schedules.to_parquet(out_dir / "features_full.parquet", index=False)
     _write_manifest(out_dir, conf, keep_runs, schedules)
 
-    feature_df = schedules[schedules["inner_step"] % conf.datapoint_frequency == 0]
-    feature_df = feature_df.drop(columns=list(_NON_FEATURE_COLS), errors="ignore")
+    sampled = schedules[schedules["inner_step"] % conf.datapoint_frequency == 0].copy()
+
+    # Template mode indexes per-condition constants by a 1-indexed `category`. Build
+    # and persist that map (so the evaluator rebuilds the same column) BEFORE dropping
+    # the condition columns dataset/arch_label below. See docs/adr/0006.
+    category_map = None
+    if conf.template_mode:
+        category_map = build_category_map(sampled)
+        save_category_map(category_map, out_dir / "category_map.json")
+        sampled["category"] = category_series(sampled, category_map)
+        print(f"Template mode: {len(category_map)} conditions, {conf.n_template_params} constants")
+
+    feature_df = sampled.drop(columns=list(_NON_FEATURE_COLS), errors="ignore")
 
     for target in conf.targets:
         target_out_dir = out_dir / target
-        others = {"sigma", "clip", "mu"} - {target}
-
-        target_df = feature_df.drop(columns=[*others], errors="ignore").copy()
-        target_df = _filter_features(target_df, conf, target)
-
-        feature_names = [c for c in target_df.columns if c != target]
 
         procs = _resolve_procs(conf)
         print(f"=== {target} regression ({procs} procs) ===")
-        print(f"=== Features: {feature_names} ===")
 
-        model, elapsed = run_regression(target_df, target, conf, target_out_dir, procs)
+        if conf.template_mode:
+            target_df = feature_df[[target, "step_norm", "category"]].copy()
+            target_df = target_df[
+                ~(target_df[target].isna() | np.isinf(target_df[target]))
+            ].reset_index(drop=True)
+            feature_names = [c for c in target_df.columns if c != target]
+            spec = build_template_spec(len(category_map), conf.n_template_params)
+            model, elapsed = run_regression(
+                target_df, target, conf, target_out_dir, procs, expression_spec=spec
+            )
+            names = template_param_names(conf.n_template_params)
+            constants = extract_template_constants(model.get_best(), names)
+            build_constants_table(constants, category_map).to_csv(
+                target_out_dir / "constants.csv", index=False
+            )
+            print(f"  ✓ constants.csv ({len(category_map)} conditions × {len(names)} params)")
+        else:
+            others = {"sigma", "clip", "mu"} - {target}
+            target_df = feature_df.drop(columns=[*others], errors="ignore").copy()
+            target_df = _filter_features(target_df, conf, target)
+            feature_names = [c for c in target_df.columns if c != target]
+            print(f"=== Features: {feature_names} ===")
+            model, elapsed = run_regression(target_df, target, conf, target_out_dir, procs)
+
         print(model)
         print(f"  fit() took {elapsed:.0f}s (timeout {conf.timeout_in_seconds}s)")
+        _persist_target(model, feature_names, target_out_dir)
 
         depth = int(os.environ.get("CHAIN_DEPTH", "0"))
         if should_resubmit(

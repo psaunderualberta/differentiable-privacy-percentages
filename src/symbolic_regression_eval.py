@@ -51,6 +51,8 @@ import pandas as pd
 import tyro
 from matplotlib.lines import Line2D
 
+from sr_category import category_series, load_category_map
+
 TARGETS: tuple[str, ...] = ("sigma", "clip", "mu")
 _MAX_MU2 = 80.0  # mirror gdp_privacy._MAX_MU2 — cap (C/σ)² before exp() to avoid overflow
 _EPS_POS = 1e-12  # floor for log/ratio of strictly-positive quantities
@@ -78,6 +80,21 @@ def _load_target(eval_dir: Path, target: str) -> TargetModel | None:
     feature_names = json.loads((tdir / "feature_names.json").read_text())
     equations = pd.read_csv(tdir / "equations.csv")
     return TargetModel(target, model, feature_names, equations)
+
+
+def attach_category_column(full: pd.DataFrame, eval_dir: Path) -> pd.DataFrame:
+    """Rebuild the 1-indexed ``category`` column from a persisted ``category_map.json``.
+
+    Template-mode models predict from ``(step_norm, category)``, so the evaluator
+    must re-derive the same condition→category mapping the fit used. Scalar-mode
+    synthesis dirs have no map, so this is a no-op there. See docs/adr/0006.
+    """
+    map_path = eval_dir / "category_map.json"
+    if not map_path.exists():
+        return full
+    full = full.copy()
+    full["category"] = category_series(full, load_category_map(map_path))
+    return full
 
 
 def _predict(tm: TargetModel, df: pd.DataFrame, index: int | None) -> np.ndarray:
@@ -450,7 +467,7 @@ def plot_residual_vs_step(full: pd.DataFrame, target: str, stem: Path) -> None:
         ax.set_title(ds)
         ax.set_xlabel("t / T")
         ax.grid(True, alpha=0.3, lw=0.5)
-    axes[0, 0].set_ylabel(f"residual ({target}_pred − {target})")  # noqa: RUF001
+    axes[0, 0].set_ylabel(f"residual ({target}_pred − {target})")
     axes[0, -1].legend(fontsize=8)
     fig.suptitle(f"{target}: residual structure vs training progress", fontsize=10)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
@@ -577,6 +594,7 @@ def main(conf: EvalConfig) -> None:
     eval_dir = Path(conf.eval_dir)
     out_dir = Path(conf.out_dir) if conf.out_dir else eval_dir
     full = pd.read_parquet(eval_dir / "features_full.parquet")
+    full = attach_category_column(full, eval_dir)
 
     models = {t: tm for t in TARGETS if (tm := _load_target(eval_dir, t)) is not None}
     if not models:
@@ -605,7 +623,7 @@ def main(conf: EvalConfig) -> None:
         privacy.to_csv(pout / "privacy_per_run.csv", index=False)
         print("  ✓ privacy_per_run.csv")
     else:
-        print("\n[skip] privacy validity — needs both σ and clip equations")  # noqa: RUF001
+        print("\n[skip] privacy validity — needs both σ and clip equations")
 
 
 if __name__ == "__main__":

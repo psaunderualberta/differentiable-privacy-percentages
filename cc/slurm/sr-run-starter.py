@@ -69,6 +69,10 @@ class SRSlurmConfig:
     keep_features: tuple[str, ...] = ()
     include_nonfinite_schedules: bool = False
     include_diverged_training: bool = False
+    template_mode: bool = True
+    """Mirror of PySRConfig.template_mode (ADR 0006); identity field, so it must match."""
+    n_template_params: int = 3
+    """Mirror of PySRConfig.n_template_params; identity field, so it must match."""
 
     ntasks: int = 32
     """SLURM tasks = PySR worker processes. No --nodes pin, so this backfills freely."""
@@ -80,7 +84,6 @@ class SRSlurmConfig:
     maxsize: int = 25
     timeout_in_seconds: int = 9900  # 2h45m, below the 2h55m wall time
     pad_seconds: int = 600  # 10m natural-completion slack
-    scratch_dir: str = "/scratch/$USER/pysr"
     walltime: str = "00-02:55:00"  # ~2h55m: PySR timeout + setup/teardown pad
     jobname: str = ""
     """Defaults to 'sr-<target>' per submitted job when empty."""
@@ -112,7 +115,6 @@ class SRSlurmConfig:
             f" --timeout_in_seconds {self.timeout_in_seconds}"
             f" --pad_seconds {self.pad_seconds}"
             f" --max_chain_jobs {self.max_chain_jobs}"
-            f" --scratch_dir '{self.scratch_dir}'"
             f" --procs {self.ntasks}"
             f"{' ' + identity if identity else ''}"
         )

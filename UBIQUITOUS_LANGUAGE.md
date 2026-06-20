@@ -38,6 +38,10 @@ Idea from https://github.com/mattpocock/skills/
 | **Project** | The operation that maps raw gradient-updated schedule weights back onto the valid privacy constraint set (privacy expenditure ≤ target μ) | normalize, clip schedule |
 | **Warmup** | A variant of a schedule that holds σ and C fixed for the first K outer steps before beginning gradient-based optimization | burn-in |
 | **Predicted schedule** | The σ-, C-, or μ-schedule obtained by evaluating a symbolic-regression equation across a run's inner steps. Compared against that run's *actual* learned schedule to assess how well the equation matches it | fitted schedule, equation schedule |
+| **Template mode** | The default symbolic-regression mode (`template_mode`): a PySR `TemplateExpressionSpec` fits one **schedule shape** shared across runs plus per-**condition** free constants, instead of a single pooled equation over the existing features | category mode, parameterized SR |
+| **Schedule shape (f)** | The universal functional form `f(step_norm)`, shared across all conditions in a template-mode fit, that captures how σ/C vary over training progress before per-condition modulation | shape function, base curve |
+| **Schedule hyperparameter (pₖ)** | One of the K free per-condition constants (`p1, p2, …`, default 3) that modulate the **schedule shape** for a given **condition**; interpretable knobs and the (future) stage-2 regression target | template parameter, fitted constant (ambiguous with PySR equation constants) |
+| **Condition** | The grouping key `(dataset, eps, T, arch_label)` that indexes the per-condition constants in template mode; the 3 replicate **seeds** of a condition share one constant vector | category (use only for the PySR feature column), group |
 
 ## Outer Loop (Meta-optimization)
 
