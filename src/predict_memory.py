@@ -76,9 +76,9 @@ class PredictConfig:
     """Where to write the updated header file. Defaults to rewriting --sweep-file
     in place (the mem_per_gpu column is replaced; all other columns and the row
     order are preserved)."""
-    min_gib: int = 1
+    min_gib: int = 8
     """Floor for the emitted power-of-two memory request."""
-    max_gib: int = 24
+    max_gib: int = 32
     """Ceil for the emitted power-of-two memory request."""
     safety_factor: float = 1.0
     """Multiply the measured peak before rounding up (headroom for runtime/host

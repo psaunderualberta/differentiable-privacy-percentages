@@ -27,8 +27,8 @@ from typing import Any
 
 import tqdm
 import tyro
-import wandb
 
+import wandb
 from networks.net_factory import DATASET_NETWORK_DEFAULTS
 
 # Must be run from src/ — mirrors the PROJECT_ROOT convention in sweep.py.
@@ -44,8 +44,8 @@ from conf.config_util import (
     dist_config_helper,
 )
 from conf.optimizer_config import (
-    AdamConfig,
     OptimizerConfig,
+    SGDConfig,
 )
 from experiments.architectures import LADDER_TAG_PREFIX, LADDERS
 from networks.cnn.config import CNNConfig
@@ -106,25 +106,25 @@ def _to_run_config(
 # Shared privacy / optimisation budget.
 DELTA: float = 1e-6
 BATCH_SIZE: int = 250  # T=250 ≈ 1 MNIST epoch (N=60 000)
-DATASETS: list[str] = ["mnist", "fashion-mnist", "cifar-10"]
-NUM_OUTER_STEPS: int = 2000
+DATASETS: list[str] = ["cifar-10"]
+NUM_OUTER_STEPS: int = 3000
 SEEDS: tuple[int, ...] = (0, 1, 2)
 
 # --- Axis 1: vary T, architecture fixed at the dataset-default CNN ---
-T_SWEEP_EPSILONS: list[float] = [1, 3, 5, 8]
+T_SWEEP_EPSILONS: list[float] = [3, 5, 8, 10]
 T_VALUES: list[int] = [1500, 2000, 3000, 5000, 7000]
 
 # --- Axis 2: architecture ladders (experiments/architectures.py), T fixed at ~20 epochs ---
 # Exploratory first look — single (loose) privacy budget; T-sweep keeps full eps breadth.
-LADDER_EPSILONS: list[float] = [8]
+LADDER_EPSILONS: list[float] = [10]
 T_FOR_ARCH_SWEEP: int = 5000
 
 OPTIMIZERS: list[OptimizerConfig] = [
-    # SGDConfig(
-    #     learning_rate=dist_config_helper(value=1.0, distribution="constant"),
-    #     momentum=dist_config_helper(value=0.9, distribution="constant"),
-    # ),
-    AdamConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
+    SGDConfig(
+        learning_rate=dist_config_helper(value=1.0, distribution="constant"),
+        momentum=dist_config_helper(value=0.9, distribution="constant"),
+    ),
+    # AdamConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
     # AdamWConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
 ]
 
@@ -264,8 +264,8 @@ def _build_experiments() -> dict[str, list[tuple[list[str], str, str, SweepConfi
 
 def _mem_per_gpu_by_name(
     experiments: dict[str, list[tuple[list[str], str, str, SweepConfig]]],
-    min_gib: int = 1,
-    max_gib: int = 24,
+    min_gib: int = 8,
+    max_gib: int = 32,
 ) -> dict[str, str]:
     """Map each run *name* to its ``mem_per_gpu`` request (e.g. ``"32G"``).
 
@@ -287,6 +287,48 @@ def _mem_per_gpu_by_name(
                 sig_to_mem[sig] = f"{_next_pow2_gib(peak, min_gib, max_gib)}G"
             name_to_mem[name] = sig_to_mem[sig]
     return name_to_mem
+
+
+# ---------------------------------------------------------------------------
+# W&B project description
+# ---------------------------------------------------------------------------
+
+
+def _append_to_project_description(entity: str, project: str, text: str) -> None:
+    """Append ``text`` to the W&B project's description, preserving what's there.
+
+    The public ``wandb.Api`` ``Project`` object is read-only (no description
+    setter), so we go through the underlying ``upsertModel`` GraphQL mutation
+    that backs project metadata. The current description is fetched first and
+    ``text`` is appended after a blank line.
+    """
+    from wandb_gql import gql
+
+    api = wandb.Api()
+    read = gql(
+        """
+        query ProjectDescription($entity: String!, $name: String!) {
+          project(entityName: $entity, name: $name) { id description }
+        }
+        """
+    )
+    write = gql(
+        """
+        mutation SetProjectDescription(
+          $entity: String!, $name: String!, $description: String!
+        ) {
+          upsertModel(
+            input: {entityName: $entity, name: $name, description: $description}
+          ) {
+            model { id description }
+          }
+        }
+        """
+    )
+    current = api.client.execute(read, {"entity": entity, "name": project})
+    existing = ((current.get("project") or {}).get("description") or "").rstrip()
+    combined = f"{existing}\n\n{text}".strip() if existing else text
+    api.client.execute(write, {"entity": entity, "name": project, "description": combined})
 
 
 # ---------------------------------------------------------------------------
@@ -386,19 +428,49 @@ if __name__ == "__main__":
             write_sweep_file(output_path, rows)
             print(f"\nRun IDs + mem_per_gpu ({opt_tag}) → {output_path}")
 
+        project_root = os.path.abspath(os.path.join(_CC_ROOT, ".."))
+        relative_output_paths = {
+            k: os.path.relpath(path, project_root) for k, path in output_paths.items()
+        }
+
+        refine_cmds = [
+            f"uv run predict_memory.py --entity {conf.entity}"
+            f' --project "{conf.project}" --sweep-file {rel_output_path}'
+            for rel_output_path in relative_output_paths.values()
+        ]
+        submit_cmds = [
+            f"parallel --colsep '\\t' --header : -q uv run cc/slurm/run-starter.py"
+            f" --run_id={{run_id}} --mem_per_gpu={{mem_per_gpu}}"
+            f" --jobname='\"{safe_name}-{opt_tag}\"' :::: {rel_output_path}"
+            for opt_tag, rel_output_path in relative_output_paths.items()
+        ]
+
         print(
             "\nThe sweep files carry per-run flags as named columns. Optionally"
             " refine mem_per_gpu on a GPU node (rewrites the column in place):"
         )
-        for output_path in output_paths.values():
-            print(
-                f"  uv run predict_memory.py --entity {conf.entity}"
-                f' --project "{conf.project}" --sweep-file {output_path}'
-            )
+        for cmd in refine_cmds:
+            print(f"  {cmd}")
         print("\nSubmit to SLURM (reads run_id + mem_per_gpu from the header):")
-        for opt_tag, output_path in output_paths.items():
-            print(
-                f"  parallel --colsep '\\t' --header : -q uv run cc/slurm/run-starter.py"
-                f" --run_id={{run_id}} --mem_per_gpu={{mem_per_gpu}}"
-                f" --jobname='\"{safe_name}-{opt_tag}\"' :::: {output_path}"
-            )
+        for cmd in submit_cmds:
+            print(f"  {cmd}")
+
+        # Persist the same commands to the W&B project description so they are
+        # recoverable from the dashboard, not just this terminal session.
+        description_block = "\n".join(
+            [
+                f"## Experiment batch {timestamp}",
+                "",
+                "Refine per-run memory on a GPU node:",
+                "```bash",
+                *refine_cmds,
+                "```",
+                "",
+                "Submit to SLURM:",
+                "```bash",
+                *submit_cmds,
+                "```",
+            ]
+        )
+        _append_to_project_description(conf.entity, conf.project, description_block)
+        print(f"\nAppended these commands to the '{conf.project}' project description.")
