@@ -234,7 +234,15 @@ def run_regression(
 
     run_directory = output_directory / _RUN_ID
     hall_of_fame = run_directory / "hall_of_fame.csv"
-    if hall_of_fame.exists():  # created by previous run, not from anything else in this script
+    # `from_file` warm-start round-trips PySR's pickled Julia state, which works only
+    # for pooled scalar fits. A template spec's `combine` is an anonymous Julia closure
+    # (`@template_spec do ... end`); its type cannot be reconstructed in a fresh Julia
+    # session, so both the pickled `equations_` and the raw `julia_state_stream_` fail to
+    # deserialize across processes (PySR warns this is unsupported — sr.py). A chained
+    # template job therefore cannot resume native state; it restarts a fresh search into
+    # the same run directory (the ADR-0002 hall-of-fame fallback). See docs/adr/0006.
+    resumable = hall_of_fame.exists() and expression_spec is None
+    if resumable:  # hall_of_fame created by a previous run, not from anything else here
         print(f"  resuming synthesis from {run_directory}")
         # 1.5.10 forwards **kwargs straight to set_params (no nested pysr_kwargs arg).
         model = PySRRegressor.from_file(
@@ -243,20 +251,24 @@ def run_regression(
             **runtime_kwargs,
         )
     else:
+        if hall_of_fame.exists():
+            print(
+                f"  template-mode synthesis: native warm-start unavailable, "
+                f"restarting a fresh search into {run_directory}"
+            )
         builder_kwargs: dict = {
             "output_directory": str(output_directory),
             "run_id": _RUN_ID,
             "batching": True,
             "parsimony": 1e-3,
             "maxsize": conf.maxsize,
-            "binary_operators": ["*", "/", "+", "-"],
-            "unary_operators": ["sqrt", "exp", "log"],
+            "binary_operators": ["*", "/"],
+            "unary_operators": ["sqrt", "exp"],
+            "denoise": True,
         }
         if expression_spec is not None:
             builder_kwargs["expression_spec"] = expression_spec
-        builder_kwargs["elementwise_loss"] = (
-            "loss(prediction, target) = ((prediction - target) / target)^2"
-        )
+        builder_kwargs["elementwise_loss"] = "loss(prediction, target) = (prediction - target)^2"
         model = PySRRegressor(**builder_kwargs, **runtime_kwargs)
 
     start = time.monotonic()

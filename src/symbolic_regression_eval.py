@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import pickle
+import re
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,19 +67,92 @@ _EPS_POS = 1e-12  # floor for log/ratio of strictly-positive quantities
 @dataclass
 class TargetModel:
     target: str
-    model: object  # PySRRegressor
+    model: object  # PySRRegressor (scalar mode) or _TemplatePredictor (template mode)
     feature_names: list[str]
     equations: pd.DataFrame  # the distilled front (incl. "selected" column)
 
 
+# Operators symbolic_regression.py allows the search (sr.py builder_kwargs); they map
+# 1:1 onto numpy so template equations can be re-evaluated without a Julia backend.
+_TEMPLATE_FUNCS = {"sqrt": np.sqrt, "exp": np.exp, "log": np.log}
+
+
+@dataclass
+class _TemplateEquation:
+    code: object  # compiled Python expression over a0 (step_norm) and a1..aK (constants)
+    param_arrays: dict[int, np.ndarray]  # slot j (= template param pj) → per-condition array
+
+
+def _parse_template_equation(equation: str) -> _TemplateEquation:
+    """Parse one ``f = …; p1 = […]; p2 = […]`` template-equation row into a callable.
+
+    The combine is ``f(step_norm, p1[category], …)``, so in ``f`` the argument
+    refs are ``#1`` = step_norm and ``#k`` = the (k-1)-th template constant. Each
+    ``pj`` array carries that constant for every 1-indexed condition. Maps to
+    Python names ``a0`` (step_norm) and ``aj`` (= ``pj[category]``).
+    """
+    parts = [p.strip() for p in equation.split(";") if p.strip()]
+    expr = parts[0].split("=", 1)[1].strip()
+    param_arrays: dict[int, np.ndarray] = {}
+    for p in parts[1:]:
+        name, rhs = p.split("=", 1)
+        slot = int(name.strip().lstrip("p"))
+        param_arrays[slot] = np.array(
+            [float(x) for x in rhs.strip().strip("[]").split(",")], dtype=float
+        )
+    py_expr = re.sub(r"#(\d+)", lambda m: f"a{int(m.group(1)) - 1}", expr)
+    return _TemplateEquation(compile(py_expr, "<template-eq>", "eval"), param_arrays)
+
+
+class _TemplatePredictor:
+    """Julia-free stand-in for a template-mode ``PySRRegressor`` (predict only).
+
+    Template expressions cannot be reconstructed in a fresh process: the combine
+    is an anonymous Julia closure whose type is gone, so the pickled
+    ``julia_expression`` objects fail to deserialize ("error deserializing this
+    value") and ``from_file`` likewise needs the live ``julia_state_`` (see
+    symbolic_regression.py warm-start note + docs/adr/0006). Predictions are
+    therefore evaluated from the persisted equation strings, which embed both the
+    universal shape ``f`` and the fitted per-condition constants. The ``index``
+    argument mirrors ``PySRRegressor.predict``: row label in ``equations``.
+    """
+
+    def __init__(self, equations: pd.DataFrame, feature_names: list[str]):
+        self.feature_names = list(feature_names)
+        self._eqs = {
+            int(i): _parse_template_equation(row["equation"]) for i, row in equations.iterrows()
+        }
+        sel = equations.index[equations["selected"]]
+        self._selected = int(sel[0]) if len(sel) else int(equations.index[-1])
+
+    def predict(self, X: np.ndarray, index: int | None = None) -> np.ndarray:
+        eq = self._eqs[self._selected if index is None else int(index)]
+        step = np.asarray(X[:, 0], dtype=float)
+        category = np.asarray(X[:, 1]).astype(int)  # 1-indexed condition
+        ns: dict[str, object] = {**_TEMPLATE_FUNCS, "a0": step}
+        for slot, arr in eq.param_arrays.items():
+            ns[f"a{slot}"] = arr[category - 1]
+        with np.errstate(all="ignore"):
+            out = eval(eq.code, {"__builtins__": {}}, ns)
+        return np.broadcast_to(np.asarray(out, dtype=float), step.shape).astype(float)
+
+
 def _load_target(eval_dir: Path, target: str) -> TargetModel | None:
     tdir = eval_dir / target
-    if not (tdir / "model.pkl").exists():
+    eq_path, feat_path = tdir / "equations.csv", tdir / "feature_names.json"
+    if not (eq_path.exists() and feat_path.exists()):
         return None
-    with (tdir / "model.pkl").open("rb") as f:
-        model = pickle.load(f)
-    feature_names = json.loads((tdir / "feature_names.json").read_text())
-    equations = pd.read_csv(tdir / "equations.csv")
+    feature_names = json.loads(feat_path.read_text())
+    equations = pd.read_csv(eq_path)
+    # Template runs (marked by a persisted category_map.json) can't reload the pickled
+    # Julia model; evaluate their equations in pure Python instead. See docs/adr/0006.
+    if (eval_dir / "category_map.json").exists():
+        model: object = _TemplatePredictor(equations, feature_names)
+    else:
+        if not (tdir / "model.pkl").exists():
+            return None
+        with (tdir / "model.pkl").open("rb") as f:
+            model = pickle.load(f)
     return TargetModel(target, model, feature_names, equations)
 
 
@@ -174,10 +248,22 @@ _FLAT_REL_STD = 0.05
 # ---------------------------------------------------------------------------
 
 
+def _safe_mu2(mu_schedule: np.ndarray) -> np.ndarray:
+    """μ² capped at ``_MAX_MU2`` with degenerate steps sanitised to 0.
+
+    A step with C=σ=0 yields μ = 0/0 = NaN; physically it spends zero privacy
+    (no gradient signal survives a zero clip), so μ² → 0. Without this, a single
+    such step poisons the whole-schedule sum/bound with NaN — ``np.clip`` does
+    not strip NaN — and downstream it surfaces as a NaN deep inside the JAX
+    projection solver.
+    """
+    mu2 = np.nan_to_num(mu_schedule**2, nan=0.0, posinf=_MAX_MU2, neginf=0.0)
+    return np.clip(mu2, None, _MAX_MU2)
+
+
 def _expenditure_sq(mu_schedule: np.ndarray) -> float:
     """Σ(exp(μ²) − 1) — proportional to squared privacy expenditure (p² factor)."""
-    mu2 = np.clip(mu_schedule**2, None, _MAX_MU2)
-    return float(np.sum(np.exp(mu2) - 1.0))
+    return float(np.sum(np.exp(_safe_mu2(mu_schedule)) - 1.0))
 
 
 def budget_ratio(mu_pred: np.ndarray, mu_actual: np.ndarray) -> float:
@@ -209,7 +295,9 @@ def projection_distance(
     c = np.clip(clip_pred, _EPS_POS, None)
     if not (np.all(np.isfinite(s)) and np.all(np.isfinite(c))):
         return np.nan
-    B = float(np.sum(np.exp(np.clip(mu_actual**2, None, _MAX_MU2))))
+    B = float(np.sum(np.exp(_safe_mu2(mu_actual))))
+    if not np.isfinite(B) or B <= 0:
+        return np.nan
     try:
         ps, pc = project_sigma_and_clip_given_bound(jnp.asarray(s), jnp.asarray(c), jnp.asarray(B))
         ps, pc = np.asarray(ps), np.asarray(pc)
