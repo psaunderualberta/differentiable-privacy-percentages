@@ -1,10 +1,10 @@
 import equinox as eqx
 import jax.lax as jlax
 import jax.numpy as jnp
+import optimistix as optx
 from jax import jit, vmap
+from jax.scipy.stats import norm as jnorm
 from jaxtyping import Array
-from scipy import optimize
-from scipy.stats import norm as sp_norm
 
 from conf.singleton_conf import SingletonConfig
 from util.util import ensure_valid_pytree, pytree_has_inf
@@ -152,13 +152,28 @@ def approx_to_gdp(eps, delta, tol=1e-12) -> float:
     if eps < 0:
         raise ValueError("epsilon must be non-negative")
 
-    def f(current_mu):
-        current_delta = sp_norm.cdf(-eps / current_mu + current_mu / 2) - jnp.exp(
+    eps = jnp.asarray(eps)
+    delta = jnp.asarray(delta)
+
+    def f(current_mu, args):
+        current_delta = jnorm.cdf(-eps / current_mu + current_mu / 2) - jnp.exp(
             eps,
-        ) * sp_norm.cdf(-eps / current_mu - current_mu / 2)
+        ) * jnorm.cdf(-eps / current_mu - current_mu / 2)
         return current_delta - delta
 
-    return optimize.root_scalar(f, bracket=[tol, 100], method="brentq").root
+    # 1D bracketed root find: f is monotone increasing from f(0+) = -delta < 0
+    # to f(100) ≈ 1 - delta > 0, so the root is bracketed by [tol, 100].
+    lower, upper = float(tol), 100.0
+    solver = optx.Bisection(rtol=1e-6, atol=1e-6)
+    sol = optx.root_find(
+        f,
+        solver,
+        (lower + upper) / 2,
+        options={"lower": lower, "upper": upper},
+        max_steps=256,
+        throw=True,
+    )
+    return float(sol.value)
 
 
 class GDPPrivacyParameters(eqx.Module):
@@ -323,7 +338,6 @@ class GDPPrivacyParameters(eqx.Module):
         )
         return self.mu_schedule_to_weights(C / schedule)
 
-    # TODO: Move projection into the gradient computation
     @eqx.filter_jit
     def project_weights(self, weights: Array, tol: float | Array = 1e-6) -> Array:
         """

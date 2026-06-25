@@ -241,7 +241,7 @@ def _peak_bytes_for(sweep, heuristic_only: bool = False) -> tuple[int, str]:
             return peak, "heuristic"
 
         schedule = make_schedule(sweep.schedule_optimizer.schedule, gdp_params).project()
-        if getattr(schedule, "use_fista", True):
+        if getattr(schedule, "use_fista", False):
             schedule = schedule.fista_extrapolate()
 
         key = jr.PRNGKey(0)

@@ -106,9 +106,9 @@ def _to_run_config(
 # Shared privacy / optimisation budget.
 DELTA: float = 1e-6
 BATCH_SIZE: int = 250  # T=250 ≈ 1 MNIST epoch (N=60 000)
-DATASETS: list[str] = ["cifar-10"]
-NUM_OUTER_STEPS: int = 3000
-SEEDS: tuple[int, ...] = (0, 1, 2)
+DATASETS: list[str] = ["mnist", "fashion-mnist"]
+NUM_OUTER_STEPS: int = 2500
+SEEDS: tuple[int, ...] = (0, 1, 2, 3, 4)
 
 # --- Axis 1: vary T, architecture fixed at the dataset-default CNN ---
 T_SWEEP_EPSILONS: list[float] = [3, 5, 8, 10]
@@ -122,7 +122,7 @@ T_FOR_ARCH_SWEEP: int = 5000
 OPTIMIZERS: list[OptimizerConfig] = [
     SGDConfig(
         learning_rate=dist_config_helper(value=1.0, distribution="constant"),
-        momentum=dist_config_helper(value=0.9, distribution="constant"),
+        momentum=dist_config_helper(value=0.0, distribution="constant"),
     ),
     # AdamConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
     # AdamWConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
@@ -379,18 +379,13 @@ if __name__ == "__main__":
 
     print(f"{total} runs across {len(experiments)} optimizers  →  project '{conf.project}'")
 
-    # GPU-free heuristic memory request per run, written as the mem_per_gpu
-    # column. Refine later on a GPU node with predict_memory.py if desired.
-    print("\nPredicting per-run memory (heuristic, deduped by signature)…")
-    name_to_mem = _mem_per_gpu_by_name(experiments)
-
     if conf.dry_run:
         run_counts = []
         paths = []
         for opt_tag, bucket in experiments.items():
             for _tags, group, name, sweep_conf in bucket:
                 print(f"\n{'─' * 64}")
-                print(f"  {name}  [group={group}]  mem_per_gpu={name_to_mem[name]}")
+                print(f"  {name}  [group={group}]")
                 print(json.dumps(_to_run_config(sweep_conf), indent=2, default=str))
             run_counts.append(len(bucket))
             paths.append(output_paths[opt_tag])
@@ -422,11 +417,9 @@ if __name__ == "__main__":
 
         for opt_tag, results in results_by_opt.items():
             output_path = output_paths[opt_tag]
-            rows = [
-                {"run_id": run_id, "mem_per_gpu": name_to_mem[name]} for run_id, name in results
-            ]
+            rows = [{"run_id": run_id} for run_id, name in results]
             write_sweep_file(output_path, rows)
-            print(f"\nRun IDs + mem_per_gpu ({opt_tag}) → {output_path}")
+            print(f"\nRun IDs ({opt_tag}) → {output_path}")
 
         project_root = os.path.abspath(os.path.join(_CC_ROOT, ".."))
         relative_output_paths = {
@@ -440,7 +433,7 @@ if __name__ == "__main__":
         ]
         submit_cmds = [
             f"parallel --colsep '\\t' --header : -q uv run cc/slurm/run-starter.py"
-            f" --run_id={{run_id}} --mem_per_gpu={{mem_per_gpu}}"
+            f" --run_id={{run_id}}"
             f" --jobname='\"{safe_name}-{opt_tag}\"' :::: {rel_output_path}"
             for opt_tag, rel_output_path in relative_output_paths.items()
         ]
@@ -451,7 +444,7 @@ if __name__ == "__main__":
         )
         for cmd in refine_cmds:
             print(f"  {cmd}")
-        print("\nSubmit to SLURM (reads run_id + mem_per_gpu from the header):")
+        print("\nSubmit to SLURM (reads run_id from the header):")
         for cmd in submit_cmds:
             print(f"  {cmd}")
 

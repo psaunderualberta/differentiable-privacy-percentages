@@ -76,6 +76,7 @@ dependencies = [
     "nvidia-nvshmem-cu12==3.3.20",
     "opt-einsum==3.4.0",
     "optax==0.2.5",
+    "optimistix>=0.1.0",
     "orbax-checkpoint==0.11.23",
     "orjson==3.11.2",
     "packaging==25.0",

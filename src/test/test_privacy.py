@@ -688,6 +688,34 @@ class TestProjectInverseSigmas:
         projected = params.project_inverse_sigmas(sigmas)
         assert _is_constraint(projected) <= _is_budget(params) + 1e-2
 
+    def test_golden_values_uniform_infeasible(self, params):
+        # Characterization test: locks the exact projected output for a fixed
+        # infeasible input so an implementation swap (e.g. Optimistix) that
+        # changes the numeric answer is caught, not just constraint violations.
+        sigmas = jnp.ones(T) * 0.3
+        projected = params.project_inverse_sigmas(sigmas)
+        assert jnp.allclose(projected, 0.4170203, atol=1e-3)
+
+    def test_golden_values_nonuniform_infeasible(self, params):
+        # Characterization test for a non-uniform infeasible input.
+        sigmas = jnp.linspace(0.25, 0.4, T)
+        projected = params.project_inverse_sigmas(sigmas)
+        expected = jnp.array(
+            [
+                0.38489196,
+                0.39147943,
+                0.39849415,
+                0.40595973,
+                0.41389754,
+                0.4223259,
+                0.43125907,
+                0.4407061,
+                0.45067045,
+                0.46114936,
+            ]
+        )
+        assert jnp.allclose(projected, expected, atol=1e-3)
+
     def test_tighter_budget_projects_to_larger_sigmas(self):
         # Tighter budget (smaller mu → smaller B) forces larger sigmas to keep
         # exp(1/σ) terms smaller. Use the same infeasible input for both.
