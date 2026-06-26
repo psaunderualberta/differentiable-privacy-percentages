@@ -17,8 +17,8 @@ _THIS_SCRIPT = os.path.abspath(__file__)
 
 @dataclass
 class Runtime:
-    days: int = 1
-    hours: int = 0
+    days: int = 0
+    hours: int = 12
     minutes: int = 0
     seconds: int = 0
     short: bool = False  # sub-3hr job-chaining preset (2h55m)
@@ -56,9 +56,9 @@ class SlurmConfig:
         "%x.log",
     )
     project_dir: str = os.environ["PROJECT_SOURCE_ROOT"]
-    cpus_per_task: int = 2
+    cpus_per_task: int = 1
     gpus: int = 1
-    mem_per_gpu: str = "24G"
+    mem_per_gpu: str = "12G"
     account: str = "aip-nidhih"
     wandb_proj: str = "Testing Mu-gdp"
     prerequisites: tuple[str, ...] = ()

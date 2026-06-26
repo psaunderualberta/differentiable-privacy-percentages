@@ -433,7 +433,7 @@ if __name__ == "__main__":
         ]
         submit_cmds = [
             f"parallel --colsep '\\t' --header : -q uv run cc/slurm/run-starter.py"
-            f" --run_id={{run_id}}"
+            f" --run_id={{run_id}} --wandb-proj={conf.project} --runtime.medium"
             f" --jobname='\"{safe_name}-{opt_tag}\"' :::: {rel_output_path}"
             for opt_tag, rel_output_path in relative_output_paths.items()
         ]
