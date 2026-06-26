@@ -121,7 +121,7 @@ T_FOR_ARCH_SWEEP: int = 5000
 
 OPTIMIZERS: list[OptimizerConfig] = [
     SGDConfig(
-        learning_rate=dist_config_helper(value=1.0, distribution="constant"),
+        learning_rate=dist_config_helper(value=0.1, distribution="constant"),
         momentum=dist_config_helper(value=0.0, distribution="constant"),
     ),
     # AdamConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
@@ -192,7 +192,7 @@ def _make_sweep_config(
         ),
         schedule_optimizer=ScheduleOptimizerConfig(
             schedule=DecoupledSigmaAndClipScheduleConfig(),
-            lr=dist_config_helper(value=1.0, distribution="constant"),
+            lr=dist_config_helper(value=10.0, distribution="constant"),
         ),
     )
 
