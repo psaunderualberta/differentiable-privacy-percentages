@@ -96,20 +96,20 @@ class ESConfig:
     perturbation_sigma: DistributionConfig = dist_config_helper(value=0.1, distribution="constant")
     """Initial std-dev of Gaussian perturbations on ES-opted-in leaves.
     Treated as the *initial* σ when ``eta_sigma > 0`` (natural-gradient σ
-    update enabled, Wierstra et al. 2014)."""  # noqa: RUF001
+    update enabled, Wierstra et al. 2014)."""
     eta_sigma: DistributionConfig = dist_config_helper(value=0.1, distribution="constant")
     """Learning rate for the natural-gradient log-σ update (sNES, Wierstra et
-    al. 2014). 0 disables the σ update (σ stays at ``perturbation_sigma``)."""  # noqa: RUF001
+    al. 2014). 0 disables the σ update (σ stays at ``perturbation_sigma``)."""
     adaptation_enabled: bool = False
-    """Enable Wierstra et al. (2014) §6.2 adaptation sampling for ``η_σ``."""  # noqa: RUF001
+    """Enable Wierstra et al. (2014) §6.2 adaptation sampling for ``η_σ``."""
     adaptation_c: float = 1.5
-    """Hypothetical-σ multiplier used by adaptation sampling."""  # noqa: RUF001
+    """Hypothetical-σ multiplier used by adaptation sampling."""
     adaptation_rho: float = 0.5
-    """U-statistic threshold above which adaptation sampling grows ``η_σ``."""  # noqa: RUF001
+    """U-statistic threshold above which adaptation sampling grows ``η_σ``."""
     adaptation_step: float = 0.1
-    """Multiplicative step size for the ``η_σ`` update."""  # noqa: RUF001
+    """Multiplicative step size for the ``η_σ`` update."""
     eta_sigma_max: float = 1.0
-    """Upper clamp on ``η_σ`` under adaptation sampling."""  # noqa: RUF001
+    """Upper clamp on ``η_σ`` under adaptation sampling."""
 
 
 @dataclass
@@ -131,6 +131,12 @@ class ScheduleOptimizerConfig:
     # 1.0 is the conventional default; check the logged ``grad-global-norm``
     # metric to confirm it is not throttling normal steps and raise if needed.
     max_grad_norm: float = 1.0
+    # Abort the run if the outer gradient is non-finite for this many *consecutive*
+    # steps. The clip_by_global_norm -> zero_nans chain zeros a corrupt step into a
+    # no-op, which protects against a rare divergent inner run but silently wastes a
+    # run whose inner DP-SGD diverges every step (the schedule never updates). This
+    # guard turns that silent failure into a loud abort. 0 disables the guard.
+    max_consecutive_nonfinite_grads: int = 50
     es: ESConfig = dataclasses.field(default_factory=ESConfig)
     # When non-empty, sweep over these schedule type names rather than fixing
     # _type to the current schedule's class.  Set programmatically before

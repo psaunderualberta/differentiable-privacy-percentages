@@ -20,6 +20,7 @@ from privacy.gdp_privacy import get_privacy_params
 from util.baselines import Baseline
 from util.dataloaders import get_dataset_shapes
 from util.eval import make_dp_psac_ref_cmd
+from util.grad_guard import ConsecutiveNonfiniteGuard
 from util.logger import Loggable, WandbTableLogger
 from util.run_lifecycle import RunLifecycle, TrainingState
 from util.util import (
@@ -195,6 +196,9 @@ def main():
         desc="Training Progress",
         total=num_outer_steps - start_step,
     )
+    nonfinite_guard = ConsecutiveNonfiniteGuard(
+        sweep_config.schedule_optimizer.max_consecutive_nonfinite_grads
+    )
     sharding = NamedSharding(mesh, P("x", None))
     try:
         for t in iterator:
@@ -225,6 +229,7 @@ def main():
                 Loggable(table_name="accuracies", data={"accuracies": statistics.accuracies})
             )
 
+            grad_nonfinite = bool(pytree_has_nan(grads) | pytree_has_inf(grads))
             wandb.log(
                 {
                     "val-loss": loss,
@@ -238,9 +243,13 @@ def main():
                     # steps where the clip_by_global_norm -> zero_nans chain had to
                     # neutralise an Inf/NaN backward (i.e. a divergent inner run).
                     "grad-global-norm": optax.global_norm(grads),
-                    "grad-nonfinite": (pytree_has_nan(grads) | pytree_has_inf(grads)) * 1.0,
+                    "grad-nonfinite": grad_nonfinite * 1.0,
                 },
             )
+            # Abort loudly if the gradient has been non-finite for too many
+            # consecutive steps: the zero_nans chain below would otherwise no-op
+            # every update, silently wasting the whole run (see ConsecutiveNonfiniteGuard).
+            nonfinite_guard.update(grad_nonfinite)
 
             # Validate and apply gradient update. We intentionally do NOT raise on
             # non-finite grads here: the optimizer chain (clip_by_global_norm ->
