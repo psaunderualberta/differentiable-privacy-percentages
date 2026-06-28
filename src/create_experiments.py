@@ -106,7 +106,7 @@ def _to_run_config(
 # Shared privacy / optimisation budget.
 DELTA: float = 1e-6
 BATCH_SIZE: int = 250  # T=250 ≈ 1 MNIST epoch (N=60 000)
-DATASETS: list[str] = ["cifar-10"]
+DATASETS: list[str] = ["mnist", "fashion-mnist"]
 NUM_OUTER_STEPS: int = 2500
 SEEDS: tuple[int, ...] = (0, 1, 2, 3, 4)
 

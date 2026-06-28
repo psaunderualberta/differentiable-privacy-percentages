@@ -15,7 +15,6 @@ import threading
 from typing import Any
 
 import wandb
-
 from conf.config import SweepConfig, WandbConfig
 
 
@@ -106,8 +105,8 @@ def _resolve_wandb_dir(wandb_config: WandbConfig) -> str | None:
     """
     if wandb_config.wandb_dir is not None:
         return wandb_config.wandb_dir
-    if wandb_config.mode == "offline":
-        return None  # -> ./wandb in the (persistent) working directory
+
+    # write in slurm tmpdir if in a SLURM job, o/w write in persistent storage
     return os.environ.get("SLURM_TMPDIR", None)
 
 
