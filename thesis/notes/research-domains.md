@@ -124,6 +124,18 @@ The codebase's `policy/`, `environments/`, "policy loss" terminology is residual
 - **Sutton & Barto (2018).** *Reinforcement Learning: An Introduction* (2nd ed.). MIT Press. — General RL reference; cite only when discussing the legacy framing.
 - **Williams (1992).** *Simple Statistical Gradient-Following Algorithms for Connectionist Reinforcement Learning.* Machine Learning 8. — REINFORCE / policy-gradient origin; cite if explaining why "policy gradient" was the original mental model.
 
+### 3.5 Symbolic regression (the schedule-distillation stage)
+A **post-hoc** stage of the method fits closed-form laws to the learned σ/C/μ schedules so that the result reads as an interpretable schedule equation rather than a black-box array. The implementation uses **PySR** with a `TemplateExpressionSpec` (`src/symbolic_regression.py :: PySRConfig`, `src/sr_category.py`): it learns one **universal shape** `f(t/T)` shared across runs plus a small set of free **per-condition constants** `p1…pK` (default K=3), indexed by the condition `(dataset, ε, T, arch_label)` — see `docs/adr/0006`. Fit quality is assessed with position/scale-aware metrics (NRMSE-by-mean, RMSLE, extremum-location error) and a privacy-budget validity check, deliberately *not* correlation — see `docs/adr/0001`.
+
+- **Koza (1992).** *Genetic Programming: On the Programming of Computers by Means of Natural Selection.* MIT Press. — Foundational tree-based genetic programming; the search paradigm PySR implements. Cite for the GP lineage of the symbolic search.
+- **Schmidt & Lipson (2009).** *Distilling Free-Form Natural Laws from Experimental Data.* Science, 324(5923). — The canonical "discover an equation from data" paper (Eureqa); establishes the **Pareto accuracy-vs-parsimony** framing that motivates reporting an equation at a chosen complexity. The closest spiritual antecedent to distilling a schedule law from learned curves.
+- **Cranmer (2023).** *Interpretable Machine Learning for Science with PySR and SymbolicRegression.jl.* arXiv:2305.01582. — **The tool actually used.** Cite for PySR itself, the multi-population evolutionary search, the complexity/loss Pareto front, and the `TemplateExpressionSpec` mechanism that encodes the shared-shape-plus-constants structure used here.
+- **Kommenda, Burlacu, Kronberger, Affenzeller (2020).** *Parameter identification for symbolic regression using nonlinear least squares.* Genetic Programming and Evolvable Machines, 21. — Optimising the numeric constants embedded in an evolved expression via inner least-squares. Directly relevant: the per-condition constants `p1…pK` are exactly such embedded parameters that PySR must fit, not just discover symbolically.
+- **Udrescu & Tegmark (2020).** *AI Feynman: A physics-inspired method for symbolic regression.* Science Advances, 6(16). — Dimensional-analysis- and symmetry-guided SR; background for how structural priors (here, a fixed template shape) reduce the search space.
+- **Udrescu, Tan, Feng, Neto, Wu, Tegmark (2020).** *AI Feynman 2.0: Pareto-optimal symbolic regression exploiting graph modularity.* NeurIPS 2020. — Pareto-optimal equation selection; reinforces the complexity-vs-accuracy tradeoff used to pick the reported equation. *(verify citation)*
+- **Petersen, Larma, Mundhenk, Santiago, Kim, Kim (2021).** *Deep Symbolic Regression: Recovering Mathematical Expressions from Data via Risk-Seeking Policy Gradients.* ICLR 2021. — Neural/RL-based SR; cite as the contrasting (non-GP) branch of the SR landscape, to justify why an evolutionary tool (PySR) was chosen over an autoregressive generator for a low-dimensional, low-data fitting problem.
+- **La Cava, Orzechowski, Burlacu, de França, Virgolin, Jin, Kommenda, Moore (2021).** *Contemporary Symbolic Regression Methods and their Relative Performance (SRBench).* NeurIPS 2021 Datasets & Benchmarks. — Standard SR benchmark suite; cite when justifying PySR's competitiveness and when situating the fit-metric choices against community practice. *(verify citation)*
+
 ---
 
 ## 4. Directly comparable prior work (adaptive / dynamic DP-SGD schedules)
@@ -154,6 +166,13 @@ This is the most important section for positioning the thesis's contribution: it
 - **McMahan, Moore, Ramage, Hampson, Agüera y Arcas (2017).** *Communication-Efficient Learning of Deep Networks from Decentralized Data.* AISTATS 2017. — FedAvg.
 - **McMahan, Ramage, Talwar, Zhang (2018).** *Learning Differentially Private Recurrent Language Models.* ICLR 2018. — DP-FedAvg; the production setting where this scheduling matters most.
 
+### 4.6 Symbolic distillation of learned schedules into closed-form laws
+The contribution is not only the learned σ/C schedule but its **distillation into a transferable closed-form law** (the SR stage, §3.5). This section positions that against prior work that distils a learned/black-box model into a symbolic surrogate.
+
+- **Cranmer, Sanchez-Gonzalez, Battaglia, Xu, Cranmer, Spergel, Ho (2020).** *Discovering Symbolic Models from Deep Learning with Inductive Biases.* NeurIPS 2020. — **The most direct methodological analogue:** train a flexible model (a GNN), then run symbolic regression on its internal functions to extract a human-readable equation. This thesis does the same one level up — it symbolically distils a *learned hyperparameter schedule* (itself the output of bilevel optimisation) rather than a network's message function. Cite to frame the SR stage as "symbolic distillation of a learned object."
+- **Schmidt & Lipson (2009).** *Distilling Free-Form Natural Laws from Experimental Data.* Science, 324(5923). — Already in §3.5; reaffirm here as the lineage for "recover the law behind observed curves." The contrast is that the curves here are *optimised artefacts under a privacy constraint*, not natural-system measurements, so the distilled law must also satisfy the GDP budget (validity check, `docs/adr/0001`).
+- **Distinguishing claim.** Prior adaptive/dynamic DP-SGD work (§4.1–4.2) produces schedules either by hand-design or by online private statistics; none yields a closed-form, condition-parameterised schedule *law*. The novelty surface for §4.6 is the two-stage pipeline — learn the schedule via the privacy-aware hypergradient (§2.1–2.2), then symbolically distil a `f(t/T)`-plus-per-condition-constants law that is interpretable, transferable, and privacy-budget-valid.
+
 ---
 
 ## How these connect to the thesis's contribution
@@ -163,6 +182,7 @@ This is the most important section for positioning the thesis's contribution: it
 - **Sections 2.1–2.2** are the methodological core: this work is bilevel optimization with hypergradients.
 - **Section 2.4** justifies the alternative ES-based gradient estimator on the `es` branch — used when analytic hypergradients are unreliable (Metz 2021) or when schedule leaves are not amenable to backprop. The implementation specifically borrows the antithetic estimator from Salimans (2017) and NES rank shaping from Wierstra (2014); PES (Vicol 2021) is the unbiased extension if outer-step variance becomes the bottleneck.
 - **Section 2.5** justifies the projection algorithm in `project_weights`.
+- **Sections 3.5 + 4.6** cover the symbolic-distillation stage: §3.5 is the SR tooling/lineage (Koza GP → Schmidt-Lipson/Eureqa → Cranmer/PySR, with Kommenda for constant fitting), and §4.6 positions distilling a *learned schedule* into a closed-form law against Cranmer (2020)'s symbolic distillation of deep models — the part of the contribution that turns a learned array into a transferable, privacy-budget-valid equation.
 - **Sections 3.1–3.3** justify the implementation: AD theory + JAX/Equinox + differentiable programming.
 - **Section 4** is the comparison surface — every paper there should be situated against the thesis's claim that schedules can be **learned end-to-end via the privacy-aware hypergradient**, not approximated by heuristics or estimated online from private statistics.
 
@@ -182,3 +202,7 @@ _Appended 2026-05-18: Extended the ES estimator with two further mechanisms from
 - **Wierstra et al. (2014), §6.2 / Algorithm 7 specifically.** Already cited above for rank shaping; reaffirm here for the **adaptation-sampling rule** that grows η_σ multiplicatively when the U-statistic crosses a threshold ρ and decays it toward an init baseline otherwise. The choice of a single hypothetical direction (σ′ = cσ, c > 1) rather than a two-sided test is taken directly from Algorithm 7; the gradient itself decides the direction of σ-motion, so adaptation sampling only modulates the rate.
 
 **Connection to the thesis:** the σ-update and its meta-adaptation matter mainly when the ES estimator is run for many outer steps with a poorly-chosen initial σ — exactly the regime of long bilevel runs on the schedule. Without sNES, σ is a fixed hyperparameter that the user must tune; with sNES + adaptation sampling, σ is auto-tuned online from the same population draws used for the mean-gradient estimate, at no extra inner-loop cost.
+
+---
+
+_Appended 2026-06-29: Added Section 3.5 (symbolic regression as the schedule-distillation stage — Koza GP, Schmidt-Lipson/Eureqa, Cranmer/PySR + `TemplateExpressionSpec`, Kommenda nonlinear-LSQ constant fitting, Udrescu-Tegmark AI Feynman 1.0/2.0, Petersen Deep SR, La Cava SRBench) and Section 4.6 (symbolic distillation of learned schedules — Cranmer 2020 "Discovering Symbolic Models from Deep Learning", positioned as the closest analogue, with the distinguishing claim against §4.1–4.2). Grounded in `src/symbolic_regression.py`, `src/sr_category.py`, and `docs/adr/0001` & `0006`. Updated the connecting summary with a §3.5/§4.6 bullet._
