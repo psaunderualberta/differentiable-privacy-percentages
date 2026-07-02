@@ -54,6 +54,7 @@ import pandas as pd
 import tyro
 from matplotlib.lines import Line2D
 from matplotlib.transforms import blended_transform_factory
+from scipy.stats import t as t_dist  # aliased: many local `t` vars in this file
 
 # Ladder definitions are the single source of truth for rung ordering and the
 # arch_label of each rung. This couples the plot script to the training code —
@@ -186,17 +187,33 @@ def _stderr(s: pd.Series) -> float:
     return float(s.std(ddof=1) / math.sqrt(n))
 
 
+def _add_ci(agg: pd.DataFrame) -> pd.DataFrame:
+    """Add a 95% CI half-width column: t(0.975, n−1)·SEM, per-row from each cell's n.
+
+    n<2 guard is required: ``t.ppf(·, df=0)`` returns nan and ``nan * stderr(=0)``
+    would break fill_between / forest bars. At n<2 → ci=0.0 (point renders, no
+    shading; matches ``_stderr``'s n<2 → 0.0 behaviour).
+    """
+    agg["ci"] = np.where(
+        agg["n"] < 2,
+        0.0,
+        t_dist.ppf(0.975, agg["n"] - 1) * agg["stderr"],
+    )
+    return agg
+
+
 def aggregate_across_seeds(
     df: pd.DataFrame,
     x_col: str,
     metric: str = "mean_acc",
 ) -> pd.DataFrame:
-    """Collapse seeds to mean ± stderr + min/max per (dataset, eps, schedule, x)."""
-    return (
+    """Collapse seeds to mean ± stderr + 95% CI + min/max per (dataset, eps, schedule, x)."""
+    agg = (
         df.groupby(["dataset", "eps", "schedule", x_col], dropna=False)[metric]
         .agg(mean="mean", stderr=_stderr, lo="min", hi="max", n="count")
         .reset_index()
     )
+    return _add_ci(agg)
 
 
 def paired_delta(
@@ -207,7 +224,7 @@ def paired_delta(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Per-seed Δ = Learned − baseline, aggregated across seeds.
 
-    Returns ``(agg, merged)``: ``agg`` is mean/stderr/lo/hi/n per
+    Returns ``(agg, merged)``: ``agg`` is mean/stderr/ci/lo/hi/n per
     (dataset, eps, x_col); ``merged`` is the pre-aggregation per-seed frame
     (one row per seed, with ``seed`` and ``delta`` columns) so callers that need
     the individual seed points (e.g. forest plots) don't have to re-pair.
@@ -222,7 +239,7 @@ def paired_delta(
         .agg(mean="mean", stderr=_stderr, lo="min", hi="max", n="count")
         .reset_index()
     )
-    return agg, merged
+    return _add_ci(agg), merged
 
 
 # ---------------------------------------------------------------------------
@@ -315,8 +332,8 @@ def plot_main(
                 )
                 ax.fill_between(
                     rows["xpos"],
-                    rows["lo"],
-                    rows["hi"],
+                    rows["mean"] - rows["ci"],
+                    rows["mean"] + rows["ci"],
                     color=SCHEDULE_COLORS[sched],
                     alpha=0.12,
                     linewidth=0,
@@ -332,6 +349,7 @@ def plot_main(
         bbox_to_anchor=(0.5, -0.02),
         frameon=False,
     )
+    fig.text(0.5, 0.005, "shaded = 95% CI (n=5 seeds)", ha="center", fontsize=7, style="italic")
     fig.tight_layout(rect=(0, 0.03, 1, 1))
     _save(fig, out_path_stem)
 
@@ -381,8 +399,8 @@ def plot_delta(
                 )
                 ax.fill_between(
                     cell["xpos"],
-                    cell["lo"],
-                    cell["hi"],
+                    cell["mean"] - cell["ci"],
+                    cell["mean"] + cell["ci"],
                     color="#1f77b4",
                     alpha=0.15,
                     linewidth=0,
@@ -391,7 +409,8 @@ def plot_delta(
             ax.grid(True, alpha=0.3, linewidth=0.5)
 
     _label_facets(axes, datasets, epsilons, xaxis.label, ylabel)
-    fig.tight_layout()
+    fig.text(0.5, 0.005, "shaded = 95% CI (n=5 seeds)", ha="center", fontsize=7, style="italic")
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
     _save(fig, out_path_stem)
 
 
@@ -405,9 +424,10 @@ def plot_delta(
 # and are not comparable on a shared parameter-count axis (ADR 0002), so the
 # param axis is dropped entirely. Instead rungs go on a categorical y-axis,
 # grouped into per-ladder blocks; datasets are columns sharing the row order.
-# Each rung shows its individual seeds as dots, plus a mean marker and a min–max
-# bar — a forest plot, not a box plot, since n=3 seeds is too few for a
-# five-number summary.
+# Each rung shows its individual seeds as dots, plus a mean marker and a 95% CI
+# bar (mean ± t(0.975, n−1)·SEM) — a forest plot, not a box plot: the bar is an
+# inference interval on the mean, and the raw per-seed dots stay visible so the
+# tighter CI is read alongside the honest seed spread.
 
 
 def _param_map(df: pd.DataFrame) -> pd.Series:
@@ -529,7 +549,7 @@ def _forest_marker(
     marker: str = "D",
     filled: bool = True,
 ) -> None:
-    """Draw one rung: min–max bar + individual seed dots + mean marker."""
+    """Draw one rung: 95% CI bar (``lo``/``hi`` = mean±ci) + seed dots + mean marker."""
     n = len(values)
     jit = np.linspace(-0.12, 0.12, n) if n > 1 else np.zeros(1)
     ax.plot([lo, hi], [y, y], color=color, linewidth=1.1, alpha=0.7, zorder=1)
@@ -603,7 +623,16 @@ def plot_forest_delta(
                     & (merged["arch_label"] == lbl)
                 ]["delta"].to_numpy()
                 r = arow.iloc[0]
-                _forest_marker(ax, y, seeds, r["mean"], r["lo"], r["hi"], color, marker="D")
+                _forest_marker(
+                    ax,
+                    y,
+                    seeds,
+                    r["mean"],
+                    r["mean"] - r["ci"],
+                    r["mean"] + r["ci"],
+                    color,
+                    marker="D",
+                )
 
     for ax in row:
         ax.set_xlabel(f"Learned − {SCHEDULE_SHORT[baseline]} (Δ acc, %)")
@@ -611,7 +640,7 @@ def plot_forest_delta(
     handles = [
         Line2D([], [], color=color, marker="D", linestyle="none", label="seed mean"),
         Line2D([], [], color=color, marker="o", linestyle="none", alpha=0.45, label="per seed"),
-        Line2D([], [], color=color, linewidth=1.1, alpha=0.7, label="min–max"),
+        Line2D([], [], color=color, linewidth=1.1, alpha=0.7, label="95% CI"),
         Line2D(
             [],
             [],
@@ -683,8 +712,8 @@ def plot_forest_abs(
                         y + yoff,
                         seeds,
                         r["mean"],
-                        r["lo"],
-                        r["hi"],
+                        r["mean"] - r["ci"],
+                        r["mean"] + r["ci"],
                         SCHEDULE_COLORS[sched],
                         marker=marker,
                         filled=filled,
@@ -712,7 +741,7 @@ def plot_forest_abs(
             label=SCHEDULE_SHORT[CONSTANT],
         ),
         Line2D([], [], color="0.4", marker="o", linestyle="none", alpha=0.45, label="per seed"),
-        Line2D([], [], color="0.4", linewidth=1.1, alpha=0.7, label="min–max"),
+        Line2D([], [], color="0.4", linewidth=1.1, alpha=0.7, label="95% CI"),
     ]
     fig.legend(
         handles=handles, loc="lower center", ncol=4, bbox_to_anchor=(0.5, -0.02), frameon=False
@@ -906,19 +935,19 @@ def plot_shape_variant(
 # ---------------------------------------------------------------------------
 
 
-def _fmt_cell(mean: float | None, stderr: float | None) -> str:
+def _fmt_cell(mean: float | None, ci: float | None) -> str:
     if mean is None or (isinstance(mean, float) and math.isnan(mean)):
         return "—"
-    if stderr is None or (isinstance(stderr, float) and math.isnan(stderr)) or stderr == 0:
+    if ci is None or (isinstance(ci, float) and math.isnan(ci)) or ci == 0:
         return f"{mean:.3f}"
-    return f"{mean:.3f} ± {stderr:.3f}"
+    return f"{mean:.3f} ± {ci:.3f}"
 
 
 def build_table(
     df: pd.DataFrame,
     xaxis: XAxis,
 ) -> pd.DataFrame:
-    """Winner-bolded mean ± stderr table, indexed by (dataset, eps, x) ordered by ``xaxis``."""
+    """Winner-bolded mean ± 95% CI table, indexed by (dataset, eps, x) ordered by ``xaxis``."""
     if df.empty:
         return pd.DataFrame()
 
@@ -930,33 +959,33 @@ def build_table(
         values="mean",
         aggfunc="first",
     )
-    pivot_se = agg.pivot_table(
+    pivot_ci = agg.pivot_table(
         index=["dataset", "eps", x_col],
         columns="schedule",
-        values="stderr",
+        values="ci",
         aggfunc="first",
     )
 
     cols = [s for s in SCHEDULE_ORDER if s in pivot_mean.columns]
     pivot_mean = pivot_mean[cols]
-    pivot_se = pivot_se.reindex(columns=cols)
+    pivot_ci = pivot_ci.reindex(columns=cols)
 
     idx = pivot_mean.reset_index()
     idx["xpos"] = idx[x_col].map(xaxis.to_pos)
     idx = idx.sort_values(["dataset", "eps", "xpos"])
     order = list(zip(idx["dataset"], idx["eps"], idx[x_col]))
     pivot_mean = pivot_mean.loc[order]
-    pivot_se = pivot_se.reindex(pivot_mean.index)
+    pivot_ci = pivot_ci.reindex(pivot_mean.index)
 
-    return _format_table_with_winners(pivot_mean, pivot_se)
+    return _format_table_with_winners(pivot_mean, pivot_ci)
 
 
-def _format_table_with_winners(pivot_mean: pd.DataFrame, pivot_se: pd.DataFrame) -> pd.DataFrame:
+def _format_table_with_winners(pivot_mean: pd.DataFrame, pivot_ci: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame(index=pivot_mean.index, columns=pivot_mean.columns, dtype=object)
     for idx, row in pivot_mean.iterrows():
         winner = row.idxmax(skipna=True) if not row.isna().all() else None
         for col in pivot_mean.columns:
-            cell = _fmt_cell(row[col], pivot_se.loc[idx, col])
+            cell = _fmt_cell(row[col], pivot_ci.loc[idx, col])
             if col == winner and cell != "—":
                 cell = f"**{cell}**"
             out.loc[idx, col] = cell
