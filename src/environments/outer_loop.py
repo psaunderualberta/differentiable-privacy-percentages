@@ -244,7 +244,11 @@ def _make_es_training_loss_fn(
             lambda x: jnp.zeros_like(x) if eqx.is_array(x) else x,
             static,
         )
-        grads = eqx.combine(g_diff, zero_static)
+        # Filter to inexact arrays only so the grad pytree matches the analytic
+        # path's structure (non-array leaves become None). Otherwise the static
+        # non-array leaves (es_filter booleans, GDP params, etc.) reach
+        # optax.global_norm in main.py and it raises on the non-array input.
+        grads = eqx.filter(eqx.combine(g_diff, zero_static), eqx.is_inexact_array)
 
         loss = jnp.mean(statistics.val_loss).squeeze()
         return (loss, statistics), grads, new_es_state
