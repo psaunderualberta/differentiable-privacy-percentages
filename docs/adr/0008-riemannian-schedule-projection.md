@@ -33,15 +33,29 @@ satisfy `∇L ∥ ∇g` = KKT, recovered at scaling-retraction cost.
   what is optimized.
 - **Equality scaling retraction; no interior/slack branch.** The budget always
   binds (spending more budget is always a utility win), so the retraction drives
-  to `g = B` via 1-D bisection on a common noise scale `s` — scaling w up when
-  over-budget, down when under. Exact in the BSpline family
+  to the boundary via 1-D bisection on a common noise scale `s` — scaling σ_mult
+  up when over-budget, down when under. Exact in the BSpline family
   (`s·w = basis @ (s·softplus(θ))`). Every step therefore begins on the boundary,
   the tangent projection is unconditionally valid, and the constraint is treated
   as equality (no KKT multiplier-sign logic, no `where g<B` degrade-to-Euclidean).
-- **Fixed-momentum heavy-ball via projection vector transport.** Momentum buffer
-  is re-tangent-projected each step (`m = β·proj_T(m_prev) + ξ`) so it does not
-  accumulate a normal component and revert to the biased regime. `β` is a config
-  scalar; `β=0` is the no-momentum arm — one code path for both experiment arms.
+  **The retraction targets `ε` itself via the full `min_α` conversion
+  (`rdp_to_epsilon`), not a single fixed order.** A single order's budget
+  `c(α) = ε − log(1/δ)/(α−1)` can be *negative* off-manifold (unreachable by any
+  scaling), so bisecting on the single-α residual has no root; `ε(δ)` is always
+  reachable. The retraction is never differentiated, so the `min_α` kinks are
+  harmless. The single fixed `α*` is needed only for the **tangent-projection
+  normal**, evaluated at the on-budget point where `c(α*) = ρ_total(α*) ≥ 0` by
+  construction — hence `refresh_alpha_star()` runs on the freshly-retracted
+  schedule each step.
+- **No outer-loop momentum ⇒ stateless transform, no vector transport.**
+  Momentum lives only in the *inner* DP-SGD loop; the Riemannian (outer) descent
+  is plain tangent-projected gradient descent. The transform is therefore
+  **stateless** — it only removes the normal component
+  (`ξ = v − ⟨n,v⟩/⟨n,n⟩·n`), with no momentum buffer and no projection vector
+  transport. The outer `optax.sgd` momentum is forced to 0 on this path.
+  *(Supersedes the earlier "fixed-momentum heavy-ball via projection vector
+  transport" decision — vector transport is only needed to keep a momentum
+  buffer on-manifold, and there is no outer momentum buffer.)*
 - **Delivered as a custom `optax.GradientTransformation`, not inlined.** It
   composes with the existing `optax.chain(zero_nans, clip_by_global_norm, …)`
   (ordering: neutralize/clip first, then tangent-project + transport + scale by

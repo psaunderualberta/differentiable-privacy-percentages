@@ -133,9 +133,13 @@ which measures how much of the per-step budget a single step at `max_sigma` cons
 
 ## Riemannian gradient + retraction for the schedule outer loop
 
-*Planned design; see ADR-0007 (accounting model) and ADR-0008 (projection). The
-current code implements the GDP variant of the projection; the derivation below
-is the target once the accountant moves to RDP.*
+*Planned-design derivation (GDP-framed). **The RDP procedure is now built** — for
+the authoritative, as-built formulae and steps see
+[`riemannian-rdp-procedure.md`](riemannian-rdp-procedure.md). Two things below are
+superseded there: (1) the accountant is RDP, not GDP; (2) the "Fixed-momentum
+heavy-ball via projection vector transport" subsection is **not** used — the outer
+loop has no momentum, so the transform is stateless and there is no vector
+transport. See ADR-0007 (accounting model) and ADR-0008 (projection).*
 
 ### Why the projection is allowed to be cheap-but-not-differentiable
 
