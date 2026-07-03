@@ -36,7 +36,6 @@ import numpy as np
 import optax
 import plotille
 import tyro
-from opacus.accountants.utils import get_noise_multiplier
 
 import data
 import wandb
@@ -110,12 +109,14 @@ class Args:
 def _load_schedules(args: Args, n: int, q: float) -> tuple[np.ndarray, np.ndarray]:
     schedule = args.schedule
     if isinstance(schedule, LocalSchedule):
-        noise_multiplier = get_noise_multiplier(
+        # Calibrate under the same WOR + replace-one (2C) model as
+        # accountant.epsilon_spent, so the constant baseline re-accounts back to
+        # args.eps rather than being off by the model gap.
+        noise_multiplier = accountant.calibrate_noise_multiplier(
             target_epsilon=args.eps,
-            target_delta=args.delta,
             sample_rate=q,
+            delta=args.delta,
             steps=schedule.T,
-            accountant="rdp",
         )
         clips = np.full(schedule.T, schedule.clip, dtype=np.float32)
         sigmas = clips * np.full(schedule.T, noise_multiplier, dtype=np.float32)
