@@ -17,15 +17,9 @@ from networks.auto.config import AutoNetworkConfig
 from networks.cnn.config import CNNConfig
 from networks.mlp.config import MLPConfig
 from policy.schedules.config import (
-    AlternatingSigmaAndClipScheduleConfig,
     DecoupledSigmaAndClipScheduleConfig,
     DynamicDPSGDScheduleConfig,
-    ParallelSigmaAndClipScheduleConfig,
-    PolicyAndClipScheduleConfig,
     SigmaAndClipScheduleConfig,
-    WarmupAlternatingSigmaAndClipScheduleConfig,
-    WarmupParallelSigmaAndClipScheduleConfig,
-    WarmupSigmaAndClipScheduleConfig,
 )
 from policy.stateful_schedules.config import StatefulMedianGradientNoiseAndClipConfig
 
@@ -37,35 +31,14 @@ from policy.stateful_schedules.config import StatefulMedianGradientNoiseAndClipC
 
 ScheduleConfig = Union[
     Annotated[
-        AlternatingSigmaAndClipScheduleConfig,
-        tyro.conf.subcommand("alternating-sigma-and-clip"),
-    ],
-    Annotated[SigmaAndClipScheduleConfig, tyro.conf.subcommand("sigma-and-clip")],
-    Annotated[
         DecoupledSigmaAndClipScheduleConfig,
         tyro.conf.subcommand("decoupled-sigma-and-clip"),
     ],
-    Annotated[PolicyAndClipScheduleConfig, tyro.conf.subcommand("policy-and-clip")],
+    Annotated[SigmaAndClipScheduleConfig, tyro.conf.subcommand("sigma-and-clip")],
     Annotated[DynamicDPSGDScheduleConfig, tyro.conf.subcommand("dynamic-dp-sgd")],
     Annotated[
         StatefulMedianGradientNoiseAndClipConfig,
         tyro.conf.subcommand("median-gradient"),
-    ],
-    Annotated[
-        WarmupAlternatingSigmaAndClipScheduleConfig,
-        tyro.conf.subcommand("warmup-alternating"),
-    ],
-    Annotated[
-        WarmupSigmaAndClipScheduleConfig,
-        tyro.conf.subcommand("warmup-sigma-and-clip"),
-    ],
-    Annotated[
-        ParallelSigmaAndClipScheduleConfig,
-        tyro.conf.subcommand("parallel-sigma-and-clip"),
-    ],
-    Annotated[
-        WarmupParallelSigmaAndClipScheduleConfig,
-        tyro.conf.subcommand("warmup-parallel-sigma-and-clip"),
     ],
 ]
 
@@ -115,7 +88,7 @@ class ESConfig:
 @dataclass
 class ScheduleOptimizerConfig:
     schedule: ScheduleConfig = dataclasses.field(
-        default_factory=ParallelSigmaAndClipScheduleConfig,
+        default_factory=DecoupledSigmaAndClipScheduleConfig,
     )
     batch_size: int = 1
     lr: DistributionConfig = dist_config_helper(value=0.05, distribution="constant")
@@ -141,12 +114,7 @@ class ScheduleOptimizerConfig:
     # When non-empty, sweep over these schedule type names rather than fixing
     # _type to the current schedule's class.  Set programmatically before
     # calling to_wandb_sweep(); not exposed as a CLI flag.
-    sweep_schedule_conf_types: Annotated[tuple[str, ...], tyro.conf.Fixed] = (
-        AlternatingSigmaAndClipScheduleConfig.__name__,
-        WarmupAlternatingSigmaAndClipScheduleConfig.__name__,
-        WarmupSigmaAndClipScheduleConfig.__name__,
-        SigmaAndClipScheduleConfig.__name__,
-    )
+    sweep_schedule_conf_types: Annotated[tuple[str, ...], tyro.conf.Fixed] = ()
 
     def to_wandb_sweep(self) -> dict[str, Any]:
         result = to_wandb_sweep_params(self)

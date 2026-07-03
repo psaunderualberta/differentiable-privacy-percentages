@@ -24,9 +24,9 @@ import pytest
 from conf.config import EnvConfig, ScheduleOptimizerConfig, SweepConfig, WandbConfig
 from conf.singleton_conf import _reconstruct_from_dict, get_wandb_run_conf
 from policy.schedules.config import (
-    AlternatingSigmaAndClipScheduleConfig,
+    DecoupledSigmaAndClipScheduleConfig,
+    DynamicDPSGDScheduleConfig,
     SigmaAndClipScheduleConfig,
-    WarmupAlternatingSigmaAndClipScheduleConfig,
 )
 
 # Fire @register decorators so registries are populated (same pattern as test_config.py).
@@ -34,11 +34,9 @@ for _mod in [
     "policy.base_schedules.constant",
     "policy.base_schedules.exponential",
     "policy.base_schedules.clipped",
-    "policy.schedules.alternating",
+    "policy.schedules.decoupled_sigma_and_clip",
     "policy.schedules.sigma_and_clip",
-    "policy.schedules.policy_and_clip",
     "policy.schedules.dynamic_dpsgd",
-    "policy.schedules.warmup_alternating",
     "policy.stateful_schedules.median_gradient",
     "networks.mlp.MLP",
     "networks.cnn.CNN",
@@ -155,7 +153,7 @@ class TestSweepPipeline:
     # --- Round-trip: sweep spec → sampled run config → reconstruction ---
 
     def test_default_schedule_optimizer_round_trip(self, tmp_path):
-        """Default ScheduleOptimizerConfig (3 schedule types) reconstructs to first type."""
+        """Default ScheduleOptimizerConfig fixes _type to the default schedule."""
         sweep = SweepConfig(
             env=EnvConfig(), schedule_optimizer=ScheduleOptimizerConfig(), num_outer_steps=10
         )
@@ -173,29 +171,38 @@ class TestSweepPipeline:
             fetched = get_wandb_run_conf(_mock_wandb_conf(run_id), run_id)
 
         reconstructed = _reconstruct_from_dict(sweep, fetched)
-        # First type in default sweep_schedule_conf_types is AlternatingSigmaAndClip.
+        # Default sweep_schedule_conf_types is empty, so _type is fixed to the
+        # default schedule (DecoupledSigmaAndClip).
         assert isinstance(
-            reconstructed.schedule_optimizer.schedule, AlternatingSigmaAndClipScheduleConfig
+            reconstructed.schedule_optimizer.schedule, DecoupledSigmaAndClipScheduleConfig
         )
 
     @pytest.mark.parametrize(
         "chosen_type, expected_cls",
         [
             (
-                "AlternatingSigmaAndClipScheduleConfig",
-                AlternatingSigmaAndClipScheduleConfig,
+                "DecoupledSigmaAndClipScheduleConfig",
+                DecoupledSigmaAndClipScheduleConfig,
             ),
             ("SigmaAndClipScheduleConfig", SigmaAndClipScheduleConfig),
             (
-                "WarmupAlternatingSigmaAndClipScheduleConfig",
-                WarmupAlternatingSigmaAndClipScheduleConfig,
+                "DynamicDPSGDScheduleConfig",
+                DynamicDPSGDScheduleConfig,
             ),
         ],
     )
     def test_each_schedule_type_reconstructs_correctly(self, tmp_path, chosen_type, expected_cls):
         """Each schedule type sampled by W&B reconstructs to the right class."""
         sweep = SweepConfig(
-            env=EnvConfig(), schedule_optimizer=ScheduleOptimizerConfig(), num_outer_steps=10
+            env=EnvConfig(),
+            schedule_optimizer=ScheduleOptimizerConfig(
+                sweep_schedule_conf_types=(
+                    "DecoupledSigmaAndClipScheduleConfig",
+                    "SigmaAndClipScheduleConfig",
+                    "DynamicDPSGDScheduleConfig",
+                ),
+            ),
+            num_outer_steps=10,
         )
         sweep_spec = sweep.to_wandb_sweep()
         run_conf = _sample_from_sweep_spec(
@@ -221,19 +228,27 @@ class TestSweepPipeline:
     def test_multiple_runs_in_one_sweep(self, tmp_path):
         """A sweep with multiple agent runs writes distinct IDs and each reconstructs."""
         sweep = SweepConfig(
-            env=EnvConfig(), schedule_optimizer=ScheduleOptimizerConfig(), num_outer_steps=10
+            env=EnvConfig(),
+            schedule_optimizer=ScheduleOptimizerConfig(
+                sweep_schedule_conf_types=(
+                    "DecoupledSigmaAndClipScheduleConfig",
+                    "SigmaAndClipScheduleConfig",
+                    "DynamicDPSGDScheduleConfig",
+                ),
+            ),
+            num_outer_steps=10,
         )
         sweep_spec = sweep.to_wandb_sweep()
 
         type_sequence = [
-            "AlternatingSigmaAndClipScheduleConfig",
+            "DecoupledSigmaAndClipScheduleConfig",
             "SigmaAndClipScheduleConfig",
-            "WarmupAlternatingSigmaAndClipScheduleConfig",
+            "DynamicDPSGDScheduleConfig",
         ]
         expected_classes = [
-            AlternatingSigmaAndClipScheduleConfig,
+            DecoupledSigmaAndClipScheduleConfig,
             SigmaAndClipScheduleConfig,
-            WarmupAlternatingSigmaAndClipScheduleConfig,
+            DynamicDPSGDScheduleConfig,
         ]
         run_confs = [
             _sample_from_sweep_spec(

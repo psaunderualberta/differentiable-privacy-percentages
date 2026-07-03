@@ -63,8 +63,6 @@ def main():
     schedule_conf = current().config.sweep.schedule_optimizer.schedule
     schedule = make_schedule(schedule_conf, gdp_params)
     schedule = schedule.project()
-    if getattr(schedule, "use_fista", False):
-        schedule = schedule.fista_extrapolate()
     # Determine the sharded outer-loop axis size:
     #   * Analytic mode → schedule_batch_size (independent vmapped DP-SGD runs)
     #   * ES mode       → population_size // 2 (one CRN key per antithetic pair)
@@ -262,12 +260,7 @@ def main():
             schedule = ensure_valid_pytree(schedule, "schedule in main after updates")
             x_new = schedule.project()
             x_new = ensure_valid_pytree(x_new, "schedule in main after project")
-            if getattr(schedule, "use_fista", False):
-                schedule = schedule.fista_advance(x_new)
-                schedule = schedule.fista_extrapolate()
-            else:
-                schedule = x_new
-            schedule = ensure_valid_pytree(schedule, "schedule in main after fista")
+            schedule = x_new
 
             iterator.set_description(f"Training Progress - Loss: {loss:.4f}")
 

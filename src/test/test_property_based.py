@@ -30,12 +30,9 @@ for _mod in [
     "policy.base_schedules.exponential",
     "policy.base_schedules.clipped",
     "policy.base_schedules.bspline",
-    "policy.schedules.alternating",
+    "policy.schedules.decoupled_sigma_and_clip",
     "policy.schedules.sigma_and_clip",
-    "policy.schedules.policy_and_clip",
     "policy.schedules.dynamic_dpsgd",
-    "policy.schedules.warmup_alternating",
-    "policy.schedules.parallel_sigma_and_clip",
     "policy.stateful_schedules.median_gradient",
     "networks.mlp.MLP",
     "networks.cnn.CNN",
@@ -53,11 +50,7 @@ from policy.base_schedules.config import (  # noqa: E402
 )
 from policy.base_schedules.constant import ConstantSchedule  # noqa: E402
 from policy.base_schedules.exponential import InterpolatedExponentialSchedule  # noqa: E402
-from policy.schedules.config import (  # noqa: E402
-    ParallelSigmaAndClipScheduleConfig,
-)
 from policy.schedules.dynamic_dpsgd import DynamicDPSGDSchedule  # noqa: E402
-from policy.schedules.parallel_sigma_and_clip import ParallelSigmaAndClipSchedule  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Shared Hypothesis strategies
@@ -887,86 +880,6 @@ class TestProjectSigmaAndClipProperties:
         ps, pc = params.project_sigma_and_clip(sigmas, clips)
         _mu_proj = params.compute_expenditure(ps, pc)
         assert jnp.isclose(_mu_proj, params.mu, atol=1e-3)
-
-
-# ===========================================================================
-# ParallelSigmaAndClipSchedule — property tests
-# ===========================================================================
-
-# Fixed privacy params (T=10, same as other schedule tests)
-_PSAC_PARAMS = GDPPrivacyParameters(1.0, 0.126936737507, 0.1, _T_FIXED)
-_PSAC_BUDGET = float((_PSAC_PARAMS.mu / _PSAC_PARAMS.p) ** 2)
-
-# Base feasible schedule used as a template for ratio-based infeasible construction.
-_PSAC_BASE = ParallelSigmaAndClipSchedule.from_config(
-    ParallelSigmaAndClipScheduleConfig(), _PSAC_PARAMS
-)
-
-
-def _make_psac_with_ratio(ratio: float) -> ParallelSigmaAndClipSchedule:
-    """Build a schedule where clip_i / sigma_i == ratio for all i.
-
-    Uses from_projection to inject exact clip values, keeping the base sigma
-    schedule unchanged.  Infeasible when ratio > 1.57 (T=10, B≈100).
-    """
-    sigmas = _PSAC_BASE.get_private_noise_scales()
-    clips = sigmas * ratio
-    new_clip = _PSAC_BASE.clip_schedule.__class__.from_projection(_PSAC_BASE.clip_schedule, clips)
-    return eqx.tree_at(lambda s: s.clip_schedule, _PSAC_BASE, new_clip)
-
-
-# Infeasible ratio range: [1.7, 2.5] guarantees sum > 100 while keeping the
-# Newton solver numerically stable (exp((2.5)^2)=exp(6.25) ≈ 519, well within float32).
-_psac_infeasible_ratio_st = st.floats(
-    min_value=1.7, max_value=2.5, allow_nan=False, allow_infinity=False
-)
-
-# Feasible ratio range: [0.1, 0.5] gives sum < 3 << 100.
-_psac_feasible_ratio_st = st.floats(
-    min_value=0.1, max_value=0.5, allow_nan=False, allow_infinity=False
-)
-
-
-class TestParallelSigmaAndClipScheduleProperties:
-    """Invariants of ParallelSigmaAndClipSchedule.project()."""
-
-    @given(ratio=_psac_infeasible_ratio_st)
-    @_jax_settings
-    def test_project_satisfies_constraint(self, ratio):
-        """After project(), the privacy constraint is satisfied (on the boundary)."""
-        schedule = _make_psac_with_ratio(ratio)
-        projected = schedule.project()
-        sigmas = projected.get_private_noise_scales()
-        clips = projected.get_private_clips()
-        assert _sc_eval(sigmas, clips) == pytest.approx(_PSAC_BUDGET, rel=1e-2)
-
-    @given(ratio=_psac_feasible_ratio_st)
-    @_jax_settings
-    def test_project_feasible_unchanged(self, ratio):
-        """A feasible schedule is unchanged by project()."""
-        schedule = _make_psac_with_ratio(ratio)
-        sigmas_before = schedule.get_private_noise_scales()
-        clips_before = schedule.get_private_clips()
-        projected = schedule.project()
-        assert jnp.allclose(projected.get_private_noise_scales(), sigmas_before, atol=1e-4)
-        assert jnp.allclose(projected.get_private_clips(), clips_before, atol=1e-4)
-
-    @given(ratio=_psac_infeasible_ratio_st)
-    @_jax_settings
-    def test_projected_sigmas_clips_positive(self, ratio):
-        """Projected sigmas and clips are always strictly positive."""
-        schedule = _make_psac_with_ratio(ratio)
-        projected = schedule.project()
-        assert jnp.all(projected.get_private_noise_scales() > 0)
-        assert jnp.all(projected.get_private_clips() > 0)
-
-    @given(ratio=st.floats(min_value=0.5, max_value=1.5, allow_nan=False, allow_infinity=False))
-    @_jax_settings
-    def test_output_shapes_independent_of_ratio(self, ratio):
-        """get_private_noise_scales/clips always return length-T arrays for any clip/sigma ratio."""
-        schedule = _make_psac_with_ratio(ratio)
-        assert schedule.get_private_noise_scales().shape == (_T_FIXED,)
-        assert schedule.get_private_clips().shape == (_T_FIXED,)
 
 
 # ===========================================================================

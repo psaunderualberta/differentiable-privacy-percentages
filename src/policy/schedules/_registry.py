@@ -16,8 +16,8 @@ def register(config_cls: type):
 
     Usage::
 
-        @register(AlternatingSigmaAndClipScheduleConfig)
-        class AlternatingSigmaAndClipSchedule(AbstractNoiseAndClipSchedule): ...
+        @register(DecoupledSigmaAndClipScheduleConfig)
+        class DecoupledSigmaAndClipSchedule(AbstractNoiseAndClipSchedule): ...
     """
 
     def decorator(schedule_cls: type) -> type:

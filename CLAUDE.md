@@ -109,14 +109,13 @@ All schedules implement `AbstractNoiseAndClipSchedule` (an `eqx.Module`):
 - `es_filter()` — return a same-shape filter spec marking which leaves Evolutionary Strategies should perturb. Default on `AbstractNoiseAndClipSchedule` is all-False except that nested `AbstractSchedule` fields' own `es_filter()` is spliced in (base-first composition). Override on base schedules to opt specific learnable arrays in (e.g. `BSplineSchedule` opts in `control_points` only).
 - `get_loggables()` / `get_logging_schemas()` — W&B logging hooks.
 
-**Schedule types** (selected by `--sweep.policy.schedule_type`):
-| Type | Description |
+**Schedule types** (selected by the `--sweep.schedule_optimizer.schedule <subcommand>` tyro subcommand):
+| Subcommand | Description |
 |---|---|
-| `alternating_schedule` | Optimizes σ and clip alternately; each `project()` call flips which is differentiated. Default. |
-| `sigma_and_clip_schedule` | Jointly optimizes σ and clip. |
-| `policy_and_clip_schedule` | A policy network generates weights → σ. |
-| `dynamic_dpsgd_schedule` | Dynamic DP-SGD variant. |
-| `stateful_median_schedule` | Stateful schedule that updates based on gradient medians at runtime. |
+| `decoupled-sigma-and-clip` | σ = C·(1/w) with C fully decoupled from the privacy budget. Default; used by `create_experiments.py`. |
+| `sigma-and-clip` | Jointly optimizes σ and clip. |
+| `dynamic-dp-sgd` | Dynamic DP-SGD variant. |
+| `median-gradient` | Stateful schedule that updates σ/clip based on gradient medians at runtime. |
 
 **Base schedules** (`policy/base_schedules/`) are the parametric forms underlying σ and clip:
 - `ConstantSchedule` — single learnable scalar broadcast to T steps.

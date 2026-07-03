@@ -1,101 +1,17 @@
 """Property-based tests for policy/schedules/.
 
-Covers: ParallelSigmaAndClipSchedule.project(),
-DynamicDPSGDSchedule (positivity, shape, budget, monotonicity, clamping).
+Covers: DynamicDPSGDSchedule (positivity, shape, budget, monotonicity, clamping).
 """
 
-import equinox as eqx
 import jax.numpy as jnp
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from policy.schedules.config import (
-    ParallelSigmaAndClipScheduleConfig,
-)
 from policy.schedules.dynamic_dpsgd import DynamicDPSGDSchedule
-from policy.schedules.parallel_sigma_and_clip import ParallelSigmaAndClipSchedule
 from privacy.gdp_privacy import GDPPrivacyParameters
 
 from ._shared import _T_FIXED, _jax_settings
-
-# ---------------------------------------------------------------------------
-# Shared helper
-# ---------------------------------------------------------------------------
-
-
-def _sc_eval(sigmas, clips):
-    return float(jnp.sum(jnp.exp((clips / sigmas) ** 2) - 1.0))
-
-
-# ---------------------------------------------------------------------------
-# ParallelSigmaAndClipSchedule
-# ---------------------------------------------------------------------------
-
-_PSAC_PARAMS = GDPPrivacyParameters(1.0, 0.126936737507, 0.1, _T_FIXED)
-_PSAC_BUDGET = float((_PSAC_PARAMS.mu / _PSAC_PARAMS.p) ** 2)
-_PSAC_BASE = ParallelSigmaAndClipSchedule.from_config(
-    ParallelSigmaAndClipScheduleConfig(), _PSAC_PARAMS
-)
-
-
-def _make_psac_with_ratio(ratio: float) -> ParallelSigmaAndClipSchedule:
-    """Build a schedule where clip_i / sigma_i == ratio for all i."""
-    sigmas = _PSAC_BASE.get_private_noise_scales()
-    clips = sigmas * ratio
-    new_clip = _PSAC_BASE.clip_schedule.__class__.from_projection(_PSAC_BASE.clip_schedule, clips)
-    return eqx.tree_at(lambda s: s.clip_schedule, _PSAC_BASE, new_clip)
-
-
-_psac_infeasible_ratio_st = st.floats(
-    min_value=1.7, max_value=2.5, allow_nan=False, allow_infinity=False
-)
-_psac_feasible_ratio_st = st.floats(
-    min_value=0.1, max_value=0.5, allow_nan=False, allow_infinity=False
-)
-
-
-class TestParallelSigmaAndClipScheduleProperties:
-    """Invariants of ParallelSigmaAndClipSchedule.project()."""
-
-    @given(ratio=_psac_infeasible_ratio_st)
-    @_jax_settings
-    def test_project_satisfies_constraint(self, ratio):
-        """After project(), the privacy constraint is satisfied (on the boundary)."""
-        schedule = _make_psac_with_ratio(ratio)
-        projected = schedule.project()
-        sigmas = projected.get_private_noise_scales()
-        clips = projected.get_private_clips()
-        assert _sc_eval(sigmas, clips) == pytest.approx(_PSAC_BUDGET, rel=1e-2)
-
-    @given(ratio=_psac_feasible_ratio_st)
-    @_jax_settings
-    def test_project_feasible_unchanged(self, ratio):
-        """A feasible schedule is unchanged by project()."""
-        schedule = _make_psac_with_ratio(ratio)
-        sigmas_before = schedule.get_private_noise_scales()
-        clips_before = schedule.get_private_clips()
-        projected = schedule.project()
-        assert jnp.allclose(projected.get_private_noise_scales(), sigmas_before, atol=1e-4)
-        assert jnp.allclose(projected.get_private_clips(), clips_before, atol=1e-4)
-
-    @given(ratio=_psac_infeasible_ratio_st)
-    @_jax_settings
-    def test_projected_sigmas_clips_positive(self, ratio):
-        """Projected sigmas and clips are always strictly positive."""
-        schedule = _make_psac_with_ratio(ratio)
-        projected = schedule.project()
-        assert jnp.all(projected.get_private_noise_scales() > 0)
-        assert jnp.all(projected.get_private_clips() > 0)
-
-    @given(ratio=st.floats(min_value=0.5, max_value=1.5, allow_nan=False, allow_infinity=False))
-    @_jax_settings
-    def test_output_shapes_independent_of_ratio(self, ratio):
-        """get_private_noise_scales/clips always return length-T arrays for any clip/sigma ratio."""
-        schedule = _make_psac_with_ratio(ratio)
-        assert schedule.get_private_noise_scales().shape == (_T_FIXED,)
-        assert schedule.get_private_clips().shape == (_T_FIXED,)
-
 
 # ---------------------------------------------------------------------------
 # DynamicDPSGDSchedule

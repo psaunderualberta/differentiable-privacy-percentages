@@ -36,17 +36,15 @@ from networks.auto.config import AutoNetworkConfig
 from networks.cnn.config import CNNConfig
 from networks.mlp.config import MLPConfig
 from policy.base_schedules.config import (
+    BSplineScheduleConfig,
     ConstantScheduleConfig,
     InterpolatedClippedScheduleConfig,
     InterpolatedExponentialScheduleConfig,
 )
 from policy.schedules.config import (
-    AlternatingSigmaAndClipScheduleConfig,
+    DecoupledSigmaAndClipScheduleConfig,
     DynamicDPSGDScheduleConfig,
-    ParallelSigmaAndClipScheduleConfig,
-    PolicyAndClipScheduleConfig,
     SigmaAndClipScheduleConfig,
-    WarmupAlternatingSigmaAndClipScheduleConfig,
 )
 from policy.stateful_schedules.config import StatefulMedianGradientNoiseAndClipConfig
 
@@ -55,11 +53,9 @@ for _mod in [
     "policy.base_schedules.constant",
     "policy.base_schedules.exponential",
     "policy.base_schedules.clipped",
-    "policy.schedules.alternating",
+    "policy.schedules.decoupled_sigma_and_clip",
     "policy.schedules.sigma_and_clip",
-    "policy.schedules.policy_and_clip",
     "policy.schedules.dynamic_dpsgd",
-    "policy.schedules.warmup_alternating",
     "policy.stateful_schedules.median_gradient",
     "networks.mlp.MLP",
     "networks.cnn.CNN",
@@ -181,9 +177,9 @@ class TestIsUnionField:
         assert _is_union_field(EnvConfig, "network") is True
 
     def test_base_schedule_noise_field_is_union(self):
-        # AlternatingSigmaAndClipScheduleConfig.noise: BaseScheduleConfig = Union[...]
-        assert _is_union_field(AlternatingSigmaAndClipScheduleConfig, "noise") is True
-        assert _is_union_field(AlternatingSigmaAndClipScheduleConfig, "clip") is True
+        # SigmaAndClipScheduleConfig.noise: BaseScheduleConfig = Union[...]
+        assert _is_union_field(SigmaAndClipScheduleConfig, "noise") is True
+        assert _is_union_field(SigmaAndClipScheduleConfig, "clip") is True
 
     def test_primitive_field_not_union(self):
         assert _is_union_field(ScheduleOptimizerConfig, "batch_size") is False
@@ -242,12 +238,12 @@ class TestToWandbSweepParams:
 
     def test_union_field_gets_type_discriminator(self):
         # schedule is a Union-typed field; _type must be injected.
-        conf = ScheduleOptimizerConfig()  # default: WarmupParallelSigmaAndClipScheduleConfig
+        conf = ScheduleOptimizerConfig()  # default: DecoupledSigmaAndClipScheduleConfig
         result = to_wandb_sweep_params(conf)
         schedule_params = result["parameters"]["schedule"]["parameters"]
         assert "_type" in schedule_params
         assert schedule_params["_type"] == {
-            "value": "ParallelSigmaAndClipScheduleConfig",
+            "value": "DecoupledSigmaAndClipScheduleConfig",
         }
 
     def test_non_union_nested_no_type_discriminator(self):
@@ -298,18 +294,18 @@ class TestToWandbSweepParams:
 
 class TestMergeWandbSweepUnion:
     def test_type_names_emitted_as_values(self):
-        instances = [AlternatingSigmaAndClipScheduleConfig(), SigmaAndClipScheduleConfig()]
+        instances = [DecoupledSigmaAndClipScheduleConfig(), SigmaAndClipScheduleConfig()]
         result = merge_wandb_sweep_union(instances)
         assert result["parameters"]["_type"] == {
             "values": [
-                "AlternatingSigmaAndClipScheduleConfig",
+                "DecoupledSigmaAndClipScheduleConfig",
                 "SigmaAndClipScheduleConfig",
             ]
         }
 
     def test_shared_param_uses_first_seen(self):
         # Both types have a 'noise' field; value from first instance wins.
-        first = AlternatingSigmaAndClipScheduleConfig(noise=ConstantScheduleConfig(init_value=99.0))
+        first = SigmaAndClipScheduleConfig(noise=ConstantScheduleConfig(init_value=99.0))
         second = SigmaAndClipScheduleConfig(
             noise=InterpolatedExponentialScheduleConfig(init_value=1.0)
         )
@@ -318,17 +314,15 @@ class TestMergeWandbSweepUnion:
         assert noise_type == {"value": "ConstantScheduleConfig"}
 
     def test_unique_param_from_second_variant_included(self):
-        # AlternatingSigmaAndClipScheduleConfig has diff_clips_first; SigmaAndClip does not.
-        instances = [SigmaAndClipScheduleConfig(), AlternatingSigmaAndClipScheduleConfig()]
+        # DynamicDPSGDScheduleConfig has c_0; SigmaAndClip does not.
+        instances = [SigmaAndClipScheduleConfig(), DynamicDPSGDScheduleConfig()]
         result = merge_wandb_sweep_union(instances)
-        assert "diff_clips_first" in result["parameters"]
+        assert "c_0" in result["parameters"]
 
     def test_single_instance_produces_values_list(self):
-        instances = [AlternatingSigmaAndClipScheduleConfig()]
+        instances = [DecoupledSigmaAndClipScheduleConfig()]
         result = merge_wandb_sweep_union(instances)
-        assert result["parameters"]["_type"] == {
-            "values": ["AlternatingSigmaAndClipScheduleConfig"]
-        }
+        assert result["parameters"]["_type"] == {"values": ["DecoupledSigmaAndClipScheduleConfig"]}
 
 
 # ---------------------------------------------------------------------------
@@ -337,30 +331,28 @@ class TestMergeWandbSweepUnion:
 
 
 class TestScheduleOptimizerConfigSweepScheduleTypes:
-    def test_default_sweep_schedule_conf_types_is_nonempty(self):
+    def test_default_sweep_schedule_conf_types_is_empty(self):
         conf = ScheduleOptimizerConfig()
-        assert len(conf.sweep_schedule_conf_types) > 0
-        assert "AlternatingSigmaAndClipScheduleConfig" in conf.sweep_schedule_conf_types
+        assert conf.sweep_schedule_conf_types == ()
 
     def test_sweep_schedule_conf_types_excluded_from_wandb_params(self):
         conf = ScheduleOptimizerConfig(
-            sweep_schedule_conf_types=("AlternatingSigmaAndClipScheduleConfig",)
+            sweep_schedule_conf_types=("DecoupledSigmaAndClipScheduleConfig",)
         )
         result = to_wandb_sweep_params(conf)
         assert "sweep_schedule_conf_types" not in result["parameters"]
 
-    def test_to_wandb_sweep_default_emits_values_list(self):
+    def test_to_wandb_sweep_default_fixes_type_to_current_schedule(self):
         conf = ScheduleOptimizerConfig()
         result = conf.to_wandb_sweep()
         schedule_params = result["parameters"]["schedule"]["parameters"]
-        # Default has multiple types, so _type must be a "values" list.
-        assert "values" in schedule_params["_type"]
-        assert "AlternatingSigmaAndClipScheduleConfig" in schedule_params["_type"]["values"]
+        # Empty sweep_schedule_conf_types fixes _type to the current schedule.
+        assert schedule_params["_type"] == {"value": "DecoupledSigmaAndClipScheduleConfig"}
 
     def test_to_wandb_sweep_overrides_type_when_set(self):
         conf = ScheduleOptimizerConfig(
             sweep_schedule_conf_types=(
-                "AlternatingSigmaAndClipScheduleConfig",
+                "DecoupledSigmaAndClipScheduleConfig",
                 "SigmaAndClipScheduleConfig",
             )
         )
@@ -368,7 +360,7 @@ class TestScheduleOptimizerConfigSweepScheduleTypes:
         schedule_params = result["parameters"]["schedule"]["parameters"]
         assert schedule_params["_type"] == {
             "values": [
-                "AlternatingSigmaAndClipScheduleConfig",
+                "DecoupledSigmaAndClipScheduleConfig",
                 "SigmaAndClipScheduleConfig",
             ]
         }
@@ -379,24 +371,24 @@ class TestScheduleOptimizerConfigSweepScheduleTypes:
             conf.to_wandb_sweep()
 
     def test_to_wandb_sweep_merged_params_contain_all_fields(self):
-        # diff_clips_first is only in Alternating; verify it appears when sweeping both
+        # c_0 is only in DynamicDPSGD; verify it appears when sweeping both
         conf = ScheduleOptimizerConfig(
             sweep_schedule_conf_types=(
                 "SigmaAndClipScheduleConfig",
-                "AlternatingSigmaAndClipScheduleConfig",
+                "DynamicDPSGDScheduleConfig",
             )
         )
         result = conf.to_wandb_sweep()
         schedule_params = result["parameters"]["schedule"]["parameters"]
         assert "noise" in schedule_params
         assert "clip" in schedule_params
-        assert "diff_clips_first" in schedule_params
+        assert "c_0" in schedule_params
 
     def test_reconstruct_picks_correct_variant_after_sweep(self):
         # Simulate what happens when W&B assigns _type=SigmaAndClipScheduleConfig
         conf = ScheduleOptimizerConfig(
             sweep_schedule_conf_types=(
-                "AlternatingSigmaAndClipScheduleConfig",
+                "DecoupledSigmaAndClipScheduleConfig",
                 "SigmaAndClipScheduleConfig",
             )
         )
@@ -406,8 +398,6 @@ class TestScheduleOptimizerConfigSweepScheduleTypes:
                 "_type": "SigmaAndClipScheduleConfig",
                 "noise": {"_type": "ConstantScheduleConfig", "init_value": 2.0},
                 "clip": {"_type": "ConstantScheduleConfig", "init_value": 1.5},
-                # diff_clips_first would also be present but irrelevant
-                "diff_clips_first": False,
             }
         }
         result = _reconstruct_from_dict(conf, run_conf)
@@ -428,11 +418,9 @@ class TestGetConfigClasses:
             "ConstantScheduleConfig",
             "InterpolatedExponentialScheduleConfig",
             "InterpolatedClippedScheduleConfig",
-            "AlternatingSigmaAndClipScheduleConfig",
+            "DecoupledSigmaAndClipScheduleConfig",
             "SigmaAndClipScheduleConfig",
-            "PolicyAndClipScheduleConfig",
             "DynamicDPSGDScheduleConfig",
-            "WarmupAlternatingSigmaAndClipScheduleConfig",
             "StatefulMedianGradientNoiseAndClipConfig",
             "MLPConfig",
             "CNNConfig",
@@ -492,19 +480,19 @@ class TestReconstructFromDict:
         assert _reconstruct_from_dict("hello", {}) == "hello"
 
     def test_union_field_same_variant_reconstructed(self):
-        conf = ScheduleOptimizerConfig()
+        conf = ScheduleOptimizerConfig(schedule=DynamicDPSGDScheduleConfig())
         run_conf = {
             "schedule": {
-                "_type": "AlternatingSigmaAndClipScheduleConfig",
-                "diff_clips_first": True,
+                "_type": "DynamicDPSGDScheduleConfig",
+                "c_0": 2.5,
             },
         }
         result = _reconstruct_from_dict(conf, run_conf)
-        assert isinstance(result.schedule, AlternatingSigmaAndClipScheduleConfig)
-        assert result.schedule.diff_clips_first is True
+        assert isinstance(result.schedule, DynamicDPSGDScheduleConfig)
+        assert result.schedule.c_0 == pytest.approx(2.5)
 
     def test_union_field_different_variant_reconstructed(self):
-        # Default schedule is AlternatingSigmaAndClipScheduleConfig; run_conf
+        # Default schedule is DecoupledSigmaAndClipScheduleConfig; run_conf
         # specifies SigmaAndClipScheduleConfig — must switch variant.
         conf = ScheduleOptimizerConfig()
         run_conf = {
@@ -621,7 +609,7 @@ class TestReconstructFromDict:
             env=EnvConfig(eps=1.5, batch_size=128),
             schedule_optimizer=ScheduleOptimizerConfig(
                 schedule=SigmaAndClipScheduleConfig(),
-                sweep_schedule_conf_types=(AlternatingSigmaAndClipScheduleConfig.__name__,),
+                sweep_schedule_conf_types=(DynamicDPSGDScheduleConfig.__name__,),
                 batch_size=4,
                 max_sigma=20.0,
             ),
@@ -661,9 +649,7 @@ class TestReconstructFromDict:
         assert reconstructed.num_outer_steps == 300
         assert reconstructed.env.eps == pytest.approx(1.5)
         assert reconstructed.env.batch_size == 128
-        assert isinstance(
-            reconstructed.schedule_optimizer.schedule, AlternatingSigmaAndClipScheduleConfig
-        )
+        assert isinstance(reconstructed.schedule_optimizer.schedule, DynamicDPSGDScheduleConfig)
         assert reconstructed.schedule_optimizer.max_sigma == pytest.approx(20.0)
 
 
@@ -760,36 +746,21 @@ class TestConfigDefaults:
         assert conf.num_keypoints == 50
         assert conf.init_value == pytest.approx(1.0)
 
-    def test_alternating_schedule_config_defaults(self):
-        conf = AlternatingSigmaAndClipScheduleConfig()
-        assert isinstance(conf.noise, InterpolatedExponentialScheduleConfig)
-        assert isinstance(conf.clip, InterpolatedExponentialScheduleConfig)
-        assert conf.diff_clips_first is False
-
     def test_sigma_and_clip_schedule_config_defaults(self):
         conf = SigmaAndClipScheduleConfig()
         assert isinstance(conf.noise, InterpolatedExponentialScheduleConfig)
         assert isinstance(conf.clip, InterpolatedExponentialScheduleConfig)
 
-    def test_policy_and_clip_schedule_config_defaults(self):
-        conf = PolicyAndClipScheduleConfig()
-        assert isinstance(conf.policy, InterpolatedExponentialScheduleConfig)
-        assert isinstance(conf.clip, InterpolatedExponentialScheduleConfig)
+    def test_decoupled_sigma_and_clip_schedule_config_defaults(self):
+        conf = DecoupledSigmaAndClipScheduleConfig()
+        assert isinstance(conf.noise, BSplineScheduleConfig)
+        assert isinstance(conf.clip, BSplineScheduleConfig)
 
     def test_dynamic_dpsgd_config_defaults(self):
         conf = DynamicDPSGDScheduleConfig()
         assert conf.rho_mu == pytest.approx(0.5)
         assert conf.rho_c == pytest.approx(0.5)
         assert conf.c_0 == pytest.approx(1.5)
-
-    def test_warmup_alternating_schedule_config_defaults(self):
-        conf = WarmupAlternatingSigmaAndClipScheduleConfig()
-        assert isinstance(conf.noise_tail, InterpolatedExponentialScheduleConfig)
-        assert isinstance(conf.clip_tail, InterpolatedExponentialScheduleConfig)
-        assert conf.warmup_noise_init == pytest.approx(1.0)
-        assert conf.warmup_clip_init == pytest.approx(1.0)
-        assert conf.warmup_pct == pytest.approx(0.3)
-        assert conf.diff_clips_first is False
 
     def test_stateful_median_gradient_config_defaults(self):
         conf = StatefulMedianGradientNoiseAndClipConfig()
@@ -822,6 +793,6 @@ class TestConfigDefaults:
 
     def test_policy_config_defaults(self):
         conf = ScheduleOptimizerConfig()
-        assert isinstance(conf.schedule, ParallelSigmaAndClipScheduleConfig)
+        assert isinstance(conf.schedule, DecoupledSigmaAndClipScheduleConfig)
         assert conf.batch_size == 1
         assert conf.max_sigma == pytest.approx(10.0)
