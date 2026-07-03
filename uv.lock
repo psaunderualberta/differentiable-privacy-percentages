@@ -146,6 +146,18 @@ wheels = [
 ]
 
 [[package]]
+name = "autodp"
+version = "0.2.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "absl-py" },
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9f/50/55fe94f155dc3f68d1bfa92f0b3a9201b05fb9a00c616b90265c9c802466/autodp-0.2.3.1.tar.gz", hash = "sha256:18638b6b51eef77b728adcf05bfe6817546fbe1a26548b1326a9c9ad23f3ea10", size = 56268, upload-time = "2023-11-15T06:42:19.165Z" }
+
+[[package]]
 name = "bleach"
 version = "6.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -491,6 +503,11 @@ dependencies = [
     { name = "zipp" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "autodp" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "absl-py", specifier = "==2.3.1" },
@@ -611,6 +628,9 @@ requires-dist = [
     { name = "yarl", specifier = "==1.20.1" },
     { name = "zipp", specifier = "==3.23.0" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "autodp", specifier = ">=0.2.3.1" }]
 
 [[package]]
 name = "dill"
