@@ -16,8 +16,6 @@ from environments.dp import get_private_model_training_schemas
 from environments.dp_params import DPTrainingParams
 from environments.outer_loop import make_initial_es_state, make_training_loss_fn
 from policy.factory import make_schedule
-from policy.riemannian import riemannian_tangent_projection
-from policy.schedules.decoupled_sigma_and_clip import DecoupledSigmaAndClipSchedule
 from privacy.gdp_privacy import get_privacy_params
 from util.baselines import Baseline
 from util.dataloaders import get_dataset_shapes
@@ -65,12 +63,6 @@ def main():
     schedule_conf = current().config.sweep.schedule_optimizer.schedule
     schedule = make_schedule(schedule_conf, gdp_params)
     schedule = schedule.project()
-    # The decoupled (DP-PSAC) schedule optimises on the RDP budget manifold: the
-    # outer loop is Riemannian (tangent-project the gradient, retract via project()),
-    # and the binding order α* is refreshed on the on-budget schedule each step.
-    use_riemannian = isinstance(schedule, DecoupledSigmaAndClipSchedule)
-    if use_riemannian:
-        schedule = schedule.refresh_alpha_star()
     if getattr(schedule, "use_fista", False):
         schedule = schedule.fista_extrapolate()
     # Determine the sharded outer-loop axis size:
@@ -117,27 +109,14 @@ def main():
     # the corrupt step into a no-op instead of crashing the run. Finite steps
     # are simply clipped to max_grad_norm. zero_nans must precede sgd so the
     # momentum trace never ingests a NaN.
-    lr = sweep_config.schedule_optimizer.lr.sample()
-    if use_riemannian:
-        # Riemannian outer loop: neutralise/clip first (they preserve direction),
-        # then tangent-project onto the budget manifold, then scale by lr. No
-        # outer-loop momentum — momentum lives only in the inner DP-SGD loop, so
-        # no projection vector transport is needed (the transform is stateless).
-        optimizer = optax.chain(
-            optax.clip_by_global_norm(sweep_config.schedule_optimizer.max_grad_norm),
-            optax.zero_nans(),
-            riemannian_tangent_projection(),
-            optax.scale_by_learning_rate(lr),
-        )
-    else:
-        optimizer = optax.chain(
-            optax.clip_by_global_norm(sweep_config.schedule_optimizer.max_grad_norm),
-            optax.zero_nans(),
-            optax.sgd(
-                learning_rate=lr,
-                momentum=sweep_config.schedule_optimizer.momentum.sample(),
-            ),
-        )
+    optimizer = optax.chain(
+        optax.clip_by_global_norm(sweep_config.schedule_optimizer.max_grad_norm),
+        optax.zero_nans(),
+        optax.sgd(
+            learning_rate=sweep_config.schedule_optimizer.lr.sample(),
+            momentum=sweep_config.schedule_optimizer.momentum.sample(),
+        ),
+    )
     opt_state = optimizer.init(schedule)  # type: ignore
 
     key, init_key, _ = jr.split(key, 3)
@@ -289,10 +268,6 @@ def main():
             else:
                 schedule = x_new
             schedule = ensure_valid_pytree(schedule, "schedule in main after fista")
-            # Re-select the binding order α* on the freshly-retracted (on-budget)
-            # schedule so the next step's tangent projection uses a single fixed order.
-            if use_riemannian:
-                schedule = schedule.refresh_alpha_star()
 
             iterator.set_description(f"Training Progress - Loss: {loss:.4f}")
 

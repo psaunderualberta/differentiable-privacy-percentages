@@ -205,8 +205,3 @@ ignore = [
 quote-style = "double"
 indent-style = "space"
 docstring-code-format = true
-
-[dependency-groups]
-dev = [
-    "autodp>=0.2.3.1",
-]
