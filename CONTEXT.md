@@ -83,3 +83,60 @@ and `arch_forest_abs` (paired Constant/Learned absolute acc, independent x per d
 Each rung shows its 3 seeds as individual dots plus a mean marker and a min–max bar — no
 box plot, since n=3 is too few for a five-number summary.
 _Avoid_: combined plot, lumped plot, arch-sweep plot, param-count overlay.
+
+### Policy transfer
+
+**Policy transfer** (a.k.a. **generalization**):
+Instantiating a policy learned on a *source* dataset onto a different *target*
+dataset's DP-SGD run — matched to the target's own privacy budget — and measuring
+downstream accuracy. Distinct from re-running the outer loop on the target.
+_Avoid_: porting, migration, domain adaptation.
+
+**Source dataset / Target dataset**:
+The source is where a policy was learned; the target is the held-out dataset the
+policy is transferred to (EyePACS, CheXpert, ImageNet).
+
+**Transferred object**:
+What actually gets instantiated on the target. Two independently-runnable kinds,
+compared only when both exist:
+- **Equation transfer**: evaluate the SR-distilled closed-form σ/C(step, privacy)
+  at the target's own T and sampling rate.
+- **Curve transfer**: resample a source run's raw length-T schedule onto the
+  target's T. Under DP-PSAC the noise-multiplier (σ) curve alone carries the
+  privacy budget and is projected onto the target's; the clip curve is a
+  privacy-neutral per-step learning-rate multiplier that is linearly
+  interpolated and carried across as-is. Run as a source-policy × target-dataset
+  sweep on SLURM.
+_Avoid_: policy porting.
+
+**Regime**:
+The tuple characterizing where/how a policy was trained or evaluated — privacy
+budget (ε, δ), inner step count T, network architecture, and dataset. Used to
+annotate each transfer-matrix cell with which source curve was trained in the
+regime closest to the target's, separating "transfers because the regime matched"
+from "transfers despite regime mismatch."
+
+**Transfer matrix**:
+The full descriptive source-policy × target-dataset grid of matched-privacy
+downstream accuracies. Read off, not selected from; no per-target winner is picked
+by target accuracy. **Every** source policy is transferred — there is no best-of-regime
+selection step (selecting on a source accuracy number would bias toward source-overfit
+shapes that transfer worst). Rows are grouped by regime; the spread of transfer
+accuracies *within* a regime is itself a reported signal — the **generalization
+consistency** of that regime's learned shape.
+_Avoid_: transfer grid, results table.
+
+**Source policy**:
+The row unit of the transfer matrix: one learned run's final length-T σ/clip
+schedule, identified by its W&B `run_id`. Distinct from a regime, which groups the
+several source policies (one per seed) that share a `(dataset, ε, T, arch)`.
+_Avoid_: source run (reserve for the W&B object), representative.
+
+**Transfer reference** (a.k.a. **baseline**):
+The three schedules a transferred cell is judged against, each run natively on the
+target at the target budget. They are distinct and must not be conflated:
+- **Constant** — best flat σ/clip found by a sweep.
+- **DynamicDPSGD** (arXiv:2111.00173) — a *prescribed, closed-form* dynamic
+  schedule; deterministic given its params, **not** data-adaptive at runtime.
+- **StatefulMedianGradient** (NeurIPS 2021) — a *runtime-adaptive* schedule that
+  sets σ/C from per-step gradient-median statistics.

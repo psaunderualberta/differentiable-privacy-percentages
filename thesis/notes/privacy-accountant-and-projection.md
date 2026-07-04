@@ -130,3 +130,113 @@ f1 = b - y - t1                     # stationarity for Y
 $$\frac{e^{1/\sigma_{\max}^2} - 1}{e^{\mu_0^2} - 1},$$
 
 which measures how much of the per-step budget a single step at `max_sigma` consumes relative to the uniform baseline `μ₀`. Used as a logged metric, not as a constraint.
+
+## Sampling: reconciling the accountant with the implementation
+
+### The gap
+
+The accountant above assumes **Poisson subsampling**: each of the `N` training
+records is included in a step's minibatch independently with probability
+`p = batch_size / N`. This is what the `μ/p` amplification and the master
+constraint `∑ e^{(Cᵢ/σᵢ)²} ≤ (μ/p)² + T` encode.
+
+The sampler in `environments/dp.py` does *not* do this. `_gen_indices`
+(L250–253) draws a uniform vector over `N` and takes its top-`batch_size` via
+`approx_max_k`, i.e. it selects **exactly `batch_size` records without
+replacement** — *fixed-size sampling without replacement (WOR)*, not Poisson.
+Fixed-size WOR and Poisson subsampling have genuinely different amplification,
+so the code as written is accounted under the wrong subsampling scheme (the
+in-code comment claiming it "matches Poisson semantics" is incorrect).
+
+Two ways to close the gap: (A) re-account under fixed-size WOR, or (B) make the
+sampler truly Poisson. We take **(B)** — it leaves the trusted GDP accountant
+byte-for-byte unchanged, keeps all baselines and literature comparisons inside
+the GDP framework we have already built up, and avoids introducing an RDP/WOR
+re-accounting so close to the defense.
+
+### Why "true" Poisson needs a truncation
+
+Under static-shape JAX we cannot materialize a variable-size batch. The fix is a
+**fixed-size buffer** of size `B`: draw the realized batch size
+`m ~ Binomial(N, p)`, load `m` records into the buffer, zero-pad the remaining
+`B − m` rows, forward/backward-pass all `B`, and **mask (zero) the padded rows'
+per-sample gradients** before summing. Only the buffer is ever passed through the
+model — the `N` Bernoulli coin-flips are cheap index generation, so the naive
+"run the whole dataset through the model" concern never actually arises.
+
+The one thing a size-`B` buffer *cannot* represent is the (astronomically
+unlikely) event `{m > B}`. So the realized mechanism is not Poisson but
+**Poisson subsampling truncated at `B`**: on overflow we keep the first `B`
+sampled records and drop the rest. This is a deliberate, quantified
+approximation, and the point of the analysis below is to certify it costs
+negligible privacy.
+
+**Invariants that must not change** when moving to the buffer:
+- `batch_size` remains the Poisson *expected* batch `L = pN`; it stays the
+  accountant's `p·N`. The buffer size `B > L` is a *separate* quantity.
+- The summed clipped gradients are divided by the public constant `L`
+  (`= batch_size`), **never** by the buffer size `B` nor the realized `m`. The
+  Gaussian sensitivity is still `C` (one record moves the sum by `≤ C`) and the
+  noise scale is unchanged, so σ, clip, and the entire constraint set are
+  untouched.
+
+### Privacy cost of the truncation
+
+Let `q = P(\mathrm{Binom}(N, p) > B)` be the per-step overflow probability.
+Couple the truncated run to a true-Poisson run on shared coin-flips: they emit
+identical outputs unless some step overflows, so the total-variation distance
+between the two length-`T` runs is `≤ T q`.
+
+Feeding TV-closeness through the standard approximate-DP lemma, for neighbours
+`x, x'` and any measurable `S` (with `M'` the true-Poisson mechanism, which is
+`(ε, δ)`-DP by the GDP guarantee):
+
+$$
+\begin{aligned}
+\Pr[M(x)\in S]
+  &\le \Pr[M'(x)\in S] + Tq \\
+  &\le e^{\varepsilon}\Pr[M'(x')\in S] + \delta + Tq \\
+  &\le e^{\varepsilon}\Pr[M(x')\in S] + \delta + (1 + e^{\varepsilon})\,Tq.
+\end{aligned}
+$$
+
+So the truncated mechanism is
+
+$$
+\bigl(\varepsilon,\; \delta_\mu(\varepsilon) + (1 + e^{\varepsilon})\,T\,q\bigr)\text{-DP}
+\quad\text{for every }\varepsilon,
+$$
+
+i.e. truncation costs a purely **additive** `δ`-inflation of
+`(1 + e^{ε}) T q` at the operating point, and nothing else about the GDP
+guarantee changes. The `(1 + e^{ε})` factor — easy to overlook — arises because
+the comparison is made at fixed `ε`; at `ε = 10` it is `≈ 2.2×10⁴`, so it is not
+negligible and must be carried.
+
+### Sizing the buffer `B`
+
+Choose the smallest integer `B` satisfying
+
+$$
+(1 + e^{\varepsilon})\, T \cdot P\!\bigl(\mathrm{Binom}(N, p) > B\bigr) \;\le\; c\,\delta,
+$$
+
+with a margin `c = 10^{-3}` (added `δ` three orders below the target). The tail
+is an **exact Binomial upper tail**, computed once per run on the host — the same
+"solve a scalar at startup, freeze it" pattern as `approx_to_gdp`. Both `B` and
+the realized added-`δ` are logged to W&B so each run *certifies* its own
+truncation is negligible, rather than arguing it by hand.
+
+For the current experiment ranges (`N = 60000`, `batch_size = L = 250`,
+`p = 1/240`, so `\mathrm{std} = \sqrt{Np(1-p)} \approx 15.8`) the binding worst
+case is `ε = 10, T = 7000, δ = 10^{-6}`, which needs `q \lesssim 6×10^{-18}` and
+lands at `B ≈ L + 8.6\,\mathrm{std} \approx 390` (≈ `1.6 L`). Note this is *below*
+the naïve `2 p N = 500`: because inner-loop compute is **linear in `B`** (paid
+`T` × outer-steps × `schedule_batch_size` × any ES population), a fixed `2pN`
+would roughly double the sweep's GPU-hours to buy an added `δ ≈ 10^{-48}` — far
+past the point of diminishing returns. Per-run `δ`-certified sizing spends
+compute only where the tail bound demands it.
+
+**Status:** planned change. The accountant already assumes Poisson; the sampler
+and the buffer/masking path in `train_with_noise` still need to be updated to
+realize it.
