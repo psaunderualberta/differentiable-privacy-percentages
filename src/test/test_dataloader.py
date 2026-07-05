@@ -5,7 +5,14 @@ import tempfile
 import numpy as np
 import pytest
 
-from util.dataloaders import DatasetLoader, _preprocess
+from util.dataloaders import (
+    DatasetLoader,
+    _chexpert_binary_onehot,
+    _chexpert_frontal_mask,
+    _get_sample_shape,
+    _imagenet100_select,
+    _preprocess,
+)
 
 
 @contextlib.contextmanager
@@ -63,6 +70,63 @@ def loader(datasets):
             dataset_name="mnist",
             val_chunk_size=5,
         )
+
+
+class TestNewTargetPreprocessing:
+    """CheXpert (grayscale CHW) and ImageNet-32 (HWC→CHW) surrogate targets."""
+
+    def test_chexpert_preprocess_keeps_chw_and_normalizes(self):
+        # CheXpert mirrors eyepacs: cached channels-first uint8, 1 grayscale channel.
+        x_raw = np.full((3, 1, 64, 64), 255, dtype=np.uint8)
+        y_raw = np.eye(2, dtype=np.float32)[[0, 1, 0]]
+        x, _ = _preprocess(x_raw, y_raw, "chexpert")
+        assert x.shape == (3, 1, 64, 64)
+        assert x.dtype == np.float32
+        assert np.allclose(x, 1.0)
+
+    def test_imagenet_preprocess_transposes_hwc_to_chw(self):
+        # ImageNet-32 cached HWC uint8 like cifar-10.
+        x_raw = np.zeros((3, 32, 32, 3), dtype=np.uint8)
+        y_raw = np.eye(100, dtype=np.float32)[[0, 1, 2]]
+        x, _ = _preprocess(x_raw, y_raw, "imagenet")
+        assert x.shape == (3, 3, 32, 32)
+        assert x.dtype == np.float32
+
+    def test_chexpert_sample_shape_unchanged(self):
+        assert _get_sample_shape((1, 64, 64), "chexpert") == (1, 64, 64)
+
+    def test_imagenet_sample_shape_hwc_to_chw(self):
+        assert _get_sample_shape((32, 32, 3), "imagenet") == (3, 32, 32)
+
+
+class TestChexpertLabels:
+    """U-Zeros convention: only an explicit positive (1.0) counts as positive."""
+
+    def test_u_zeros_maps_positive_only(self):
+        # Values: positive, negative, uncertain(-1), blank(NaN)
+        col = np.array([1.0, 0.0, -1.0, np.nan])
+        onehot = _chexpert_binary_onehot(col)
+        # column 1 is the positive class
+        assert onehot.shape == (4, 2)
+        assert onehot.dtype == np.float32
+        np.testing.assert_array_equal(onehot[:, 1], [1.0, 0.0, 0.0, 0.0])
+        np.testing.assert_array_equal(onehot[:, 0], [0.0, 1.0, 1.0, 1.0])
+
+    def test_frontal_mask_selects_frontal_only(self):
+        col = np.array(["Frontal", "Lateral", "Frontal"])
+        np.testing.assert_array_equal(_chexpert_frontal_mask(col), [True, False, True])
+
+
+class TestImagenet100Subset:
+    """Filter the 1000-class source to the published 100-wnid subset and remap labels."""
+
+    def test_select_masks_and_remaps_to_subset_order(self):
+        sample_ids = np.array(["a", "c", "b", "d", "a"])
+        subset = ["a", "b", "c"]  # labels remap to this order: a→0, b→1, c→2
+        mask, labels = _imagenet100_select(sample_ids, subset)
+        np.testing.assert_array_equal(mask, [True, True, True, False, True])
+        # labels are given only for the selected rows, in original order
+        np.testing.assert_array_equal(labels, [0, 2, 1, 0])
 
 
 class TestDataloaderTestChunks:

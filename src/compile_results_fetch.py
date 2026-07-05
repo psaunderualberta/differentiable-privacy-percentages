@@ -87,8 +87,30 @@ DATASET_SHAPES: dict[str, tuple[tuple[int, ...], int]] = {
     "fashion-mnist": ((1, 28, 28), 10),
     "cifar-10": ((3, 32, 32), 10),
     "california": ((8,), 2),
-    "eyepacs": ((3, 224, 224), 2),
+    "eyepacs": ((3, 256, 256), 5),
+    # Surrogate transfer targets (targets only; see ADR 0007).
+    "chexpert": ((1, 64, 64), 2),
+    "imagenet": ((3, 32, 32), 100),
 }
+
+
+def assert_shapes_consistent() -> None:
+    """Guard the fetch-side DATASET_SHAPES mirror against drifting from the dataloader.
+
+    The eyepacs entry silently disagreed with the cache once (224x224/2-class here
+    vs the dataloader's 256x256/5-class), so its shape is tied to the dataloader's
+    own image-size / class-count constants rather than a hand-copied literal.
+    """
+    from util.dataloaders import _EYEPACS_IMG_SIZE
+
+    expected_eyepacs = ((3, _EYEPACS_IMG_SIZE, _EYEPACS_IMG_SIZE), 5)
+    got = DATASET_SHAPES["eyepacs"]
+    if got != expected_eyepacs:
+        raise AssertionError(
+            f"DATASET_SHAPES['eyepacs']={got} drifted from the dataloader cache "
+            f"layout {expected_eyepacs}"
+        )
+
 
 _AUTO_CNN: dict[str, dict] = {
     "mnist": {
@@ -123,6 +145,22 @@ _AUTO_CNN: dict[str, dict] = {
         "pool_kernel_size": 2,
         "mlp": {"hidden_sizes": [32]},
     },
+    "chexpert": {
+        "channels": [16, 32],
+        "kernel_sizes": [8, 4],
+        "paddings": [2, 0],
+        "strides": [2, 2],
+        "pool_kernel_size": 2,
+        "mlp": {"hidden_sizes": [32]},
+    },
+    "imagenet": {
+        "channels": [32, 64],
+        "kernel_sizes": [3, 3],
+        "paddings": [1, 1],
+        "strides": [1, 1],
+        "pool_kernel_size": 2,
+        "mlp": {"hidden_sizes": [256]},
+    },
 }
 _AUTO_MLP: dict[str, dict] = {"california": {"hidden_sizes": [64, 32]}}
 
@@ -138,7 +176,7 @@ _OPTIMIZER_TYPE_TO_NAME: dict[str, str] = {
 }
 
 _BASELINE_SCHEDULES: tuple[str, ...] = (
-    "Constant σ/clip",  # noqa: RUF001
+    "Constant σ/clip",
     "Clip to Median Gradient Norm",
     "Dynamic-DPSGD",
 )

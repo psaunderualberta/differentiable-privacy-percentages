@@ -41,6 +41,23 @@ DATASET_NETWORK_DEFAULTS = {
         pool_kernel_size=2,
         mlp=MLPConfig(hidden_sizes=(32,)),
     ),
+    # Surrogate transfer targets (targets only; see ADR 0007).
+    "chexpert": CNNConfig(
+        channels=(16, 32),
+        kernel_sizes=(8, 4),
+        paddings=(2, 0),
+        strides=(2, 2),
+        pool_kernel_size=2,
+        mlp=MLPConfig(hidden_sizes=(32,)),
+    ),
+    "imagenet": CNNConfig(
+        channels=(32, 64),
+        kernel_sizes=(3, 3),
+        paddings=(1, 1),
+        strides=(1, 1),
+        pool_kernel_size=2,
+        mlp=MLPConfig(hidden_sizes=(256,)),
+    ),
 }
 
 

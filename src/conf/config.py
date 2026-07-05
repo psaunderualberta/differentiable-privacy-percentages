@@ -207,7 +207,9 @@ class SweepConfig:
     # Only used when with_baselines=True. Evaluate and log baselines every this
     # many outer steps (0 = only log at the end of training, i.e. old behaviour).
     baseline_log_interval: int = 0
-    dataset: Literal["mnist", "cifar-10", "fashion-mnist", "eyepacs"] = "mnist"
+    dataset: Literal["mnist", "cifar-10", "fashion-mnist", "eyepacs", "chexpert", "imagenet"] = (
+        "mnist"
+    )
     val_test_split: float = 0.8  # Percentage of validation set to use for validation (i.e. evaluating policy), rest for test
     dataset_poly_d: int | None = None
     num_outer_steps: int = 100
