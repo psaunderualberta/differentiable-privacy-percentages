@@ -1,10 +1,12 @@
 import equinox as eqx
 import jax.lax as jlax
 import jax.numpy as jnp
+import numpy as np
 import optimistix as optx
 from jax import jit, vmap
 from jax.scipy.stats import norm as jnorm
 from jaxtyping import Array
+from scipy.stats import binom
 
 from conf.singleton_conf import SingletonConfig
 from util.util import ensure_valid_pytree, pytree_has_inf
@@ -174,6 +176,48 @@ def approx_to_gdp(eps, delta, tol=1e-12) -> float:
         throw=True,
     )
     return float(sol.value)
+
+
+def compute_poisson_buffer_size(
+    N: int,
+    batch_size: int,
+    T: int,
+    eps: float,
+    delta: float,
+    c: float = 1e-3,
+) -> int:
+    """Size the truncated-Poisson buffer B (ADR 0009).
+
+    Returns the smallest integer B for which truncating Poisson subsampling at B
+    costs negligible privacy, i.e. the added delta ``(1 + e^eps) * T * P(Binom(N, p) > B)``
+    (with ``p = batch_size / N``) is at most ``c * delta``. The Binomial upper tail
+    is exact (scipy, host-side, computed once per run like ``approx_to_gdp``). B is
+    capped at N (``P(Binom > N) = 0`` always satisfies the bound).
+
+    Args:
+        N: Number of training records.
+        batch_size: Expected Poisson batch L = pN (the accountant's batch size).
+        T: Number of DP-SGD steps.
+        eps: Target epsilon (the (1 + e^eps) factor is evaluated at this eps).
+        delta: Target delta; the truncation is allowed to add at most c * delta.
+        c: Margin — added delta stays this many orders below the target.
+
+    Returns:
+        The certified buffer size B, an integer in [0, N].
+    """
+    p = batch_size / N
+    # Largest per-step overflow probability the certificate permits.
+    thr = c * delta / ((1.0 + np.exp(eps)) * T)
+
+    # sf(B) = P(Binom(N, p) > B) is non-increasing in B; find the smallest B in
+    # [0, N] with sf(B) <= thr. isf gives a starting guess; the loops make the
+    # answer exact and minimal regardless of isf's rounding.
+    B = int(np.clip(binom.isf(min(thr, 1.0), N, p), 0, N))
+    while B < N and binom.sf(B, N, p) > thr:
+        B += 1
+    while B > 0 and binom.sf(B - 1, N, p) <= thr:
+        B -= 1
+    return B
 
 
 class GDPPrivacyParameters(eqx.Module):

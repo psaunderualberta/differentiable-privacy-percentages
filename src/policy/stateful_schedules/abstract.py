@@ -34,6 +34,7 @@ class AbstractStatefulNoiseAndClipSchedule(eqx.Module):
         iter: Array,
         batch_x: Array,
         batch_y: Array,
+        valid: Array,
     ) -> AbstractScheduleState:
         raise NotImplementedError("Subclasses must implement update_state method.")
 

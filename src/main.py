@@ -149,6 +149,23 @@ def main():
     )
     print(f"dp_psac_ref eval command:\n  {_dp_psac_ref_cmd}")
 
+    # Truncated-Poisson buffer certificate (ADR 0009): log the buffer size B and
+    # the analytic per-step overflow probability q = P(Binom(N, p) > B) so each run
+    # records that its truncation cost (1 + e^eps)*T*q is negligible vs delta.
+    from scipy.stats import binom as _binom
+
+    _N = env_params.loader.n_train
+    _p = sweep_config.env.batch_size / _N
+    _q = float(_binom.sf(env_params.buffer_size, _N, _p))
+    _added_delta = (1.0 + np.exp(sweep_config.env.eps)) * env_params.num_training_steps * _q
+    run.summary["poisson_buffer_size"] = env_params.buffer_size
+    run.summary["poisson_overflow_q"] = _q
+    run.summary["poisson_added_delta"] = _added_delta
+    print(
+        f"Truncated-Poisson buffer: B={env_params.buffer_size} (L={sweep_config.env.batch_size}), "
+        f"q={_q:.3e}, added_delta={_added_delta:.3e} (target delta={sweep_config.env.delta:.1e})"
+    )
+
     # ---
     # Baseline setup
     # ---

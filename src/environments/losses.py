@@ -81,6 +81,26 @@ def loss(model: Callable[[Array], jnp.ndarray], x: Array, y: Array):
 
 
 @eqx.filter_jit
+def per_example_loss_and_grads(
+    model: Callable[[Array], jnp.ndarray],
+    x: Array,
+    y: Array,
+):
+    """Compute *per-example* losses and gradients via vmap across the model.
+
+    Unlike ``vmapped_loss`` this keeps the losses per-example (no mean) so callers
+    can mask individual rows — needed by the truncated-Poisson buffer (ADR 0009),
+    where invalid buffer slots must be excluded from both the summed gradient and
+    the reported train loss.
+
+    Returns:
+        A tuple ``(losses, grads)`` with ``losses`` of shape (batch,) and per-example
+        gradients carrying the same leading batch dimension.
+    """
+    return jax.vmap(__loss_helper, in_axes=(None, 0, 0, None))(model, x, y, False)
+
+
+@eqx.filter_jit
 def vmapped_loss(
     model: Callable[[Array], jnp.ndarray],
     x: Array,
@@ -97,11 +117,5 @@ def vmapped_loss(
         A tuple containing the mean loss and the per-example gradients.
 
     """
-    # model = eqx.error_if(model, jnp.logical_not(pytree_has_nan(model)), "Model has NaN values")
-    losses, grads = jax.vmap(__loss_helper, in_axes=(None, 0, 0, None))(
-        model,
-        x,
-        y,
-        False,
-    )
+    losses, grads = per_example_loss_and_grads(model, x, y)
     return losses.mean(), grads

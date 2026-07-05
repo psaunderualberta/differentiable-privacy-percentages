@@ -83,10 +83,14 @@ class StatefulMedianGradientNoiseAndClipSchedule(AbstractStatefulNoiseAndClipSch
         iter: Array,
         batch_x: Array,
         batch_y: Array,
+        valid: Array,
     ) -> MedianGradientScheduleState:
         current_C = state.get_clip()
         norms = vmap(optax.tree.norm)(grads)
-        b_bar = (norms <= current_C).mean()
+        # Fraction of within-clip gradients over the m genuinely-included buffer
+        # rows only (truncated-Poisson buffer, ADR 0009); invalid slots excluded.
+        within = (norms <= current_C) & valid
+        b_bar = within.sum() / jnp.maximum(valid.sum(), 1.0)
 
         new_C = current_C * jnp.exp(-self.eta_c * (b_bar - self.gamma))
         new_sigma = new_C / self.privacy_params.mu_0

@@ -53,3 +53,27 @@ the reverse.
   must be pinned and documented so the numbers are reproducible.
 - ImageNet is the riskiest target for a floor effect; validate the pipeline end-to-end on
   EyePACS first, then ImageNet-32, then CheXpert.
+
+## Pinned surrogate specifications
+
+The reproducibility pins this ADR requires, settled during the transfer-branch grilling:
+
+- **CheXpert** — single finding **Pleural Effusion** (highest-prevalence, most salient
+  competition finding), **U-Zeros** uncertainty convention (uncertain `-1` → negative,
+  blank/NaN → negative), binary one-hot. **Frontal view only**, **grayscale (1 channel)**,
+  resized to **64×64**. Source: **Kaggle CheXpert-v1.0-small** via the Kaggle API,
+  mirroring `_eyepacs_download_and_cache`. Surrogate net reuses the EyePACS/MNIST conv
+  block (`channels=(16,32)`, k=8/4, s=2, pool=2, head `(32,)`) → `arch_label`
+  `cnn-16x32-head32`. The tiny official `valid.csv` (234 rows) is unused; the val/test pool
+  is carved out of `train.csv` and permuted via `split_seed` (like `california`), so
+  `δ ≤ 1/N` uses the reduced `N_train`.
+- **ImageNet-32** — source is a **Hugging Face downsampled-ImageNet-32 mirror** (Chrabaszcz
+  32×32); subset is the **published ImageNet-100 wnid list (Tian et al. 2019, CMC)** — a
+  fixed, citable 100-class set. Shape `(3, 32, 32)`, 100-class. Surrogate net reuses the
+  **cifar-10** default CNN (`channels=(32,64)`, 3×3, s=1, pool=2, head `(256,)`).
+  **64×64 fallback trigger**: stay at 32×32; after the EyePACS-validated pipeline runs on
+  ImageNet-32, escalate to ImageNet-64 @ 64×64 **only if** the Constant reference's mean
+  top-1 fails to clear ≈2× chance (<2%), i.e. paired Δacc is within seed noise. The cifar
+  CNN adapts to 64×64 (larger flattened head) without a config change.
+
+All three targets are **targets only**, never sources.

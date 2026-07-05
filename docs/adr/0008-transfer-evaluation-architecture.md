@@ -9,8 +9,11 @@ it independently:
 - **Curve transfer** — resample a source run's raw μ-weight curve to the target T by
   linear interpolation over normalized step, then project. Runs as a source × target
   sweep on SLURM.
-- **Equation transfer** — evaluate the SR-distilled closed-form σ/C at the target's T,
-  then project.
+- **Equation transfer** — evaluate the SR-distilled universal shape `f(step_norm)` on the
+  target's step grid, then seat on the target budget. Because the template's per-condition
+  constants are indexed by `(dataset, ε, T, arch)` and are *not* a function of ε/T, this
+  runs only at a target `(ε, T)` that exactly matches a trained source condition (borrowing
+  that condition's constants). See the equation-transfer consequence below.
 
 Each producer, plus the three native references (Constant, DynamicDPSGD,
 StatefulMedianGradient), writes result records under a shared schema — `(path, source_id,
@@ -18,7 +21,9 @@ target, regime, per-seed accuracies)` — to a parquet store under `cache/transf
 `transfer_plot.py` assembler reads whatever is present, builds the descriptive
 source × target matrix (annotated with the nearest-`(ε, T)` source per column), and draws
 the curve-vs-equation overlay for a cell **only when both records exist**, rendering each
-alone otherwise. The unit of a SLURM job is one cell (seeds vmapped inside).
+alone otherwise. The unit of a SLURM job is one cell (seeds evaluated **sequentially**
+inside, reusing `Baseline`'s existing per-rep `for` loop — chosen over a vmap so the eval
+harness has no chance of OOM on the large targets, at the cost of wall-clock).
 
 ## Status
 
@@ -45,9 +50,24 @@ the available Compute Canada fan-out, and the fetch/plot split mirrors the exist
 
 ## Consequences
 
-- This realizes the **stage-2 generalisation** deferred in ADR 0006: equation transfer is
-  how the fitted template shape is finally exercised on unseen conditions. The two ADRs
-  share the "universal shape, re-instantiated elsewhere" premise.
+- The two ADRs share the "universal shape, re-instantiated elsewhere" premise, but this
+  ADR does **not** realise ADR 0006's stage-2 generalisation. Read-back is now known to be
+  fully possible cross-process — `symbolic_regression_eval._TemplatePredictor` reconstructs
+  the closed form (shape `f` + inlined per-condition constants) from `equations.csv` +
+  `category_map.json` in pure numpy, so the pickled-Julia-closure limitation blocks only
+  warm-start, not evaluation. **But** the template constants are indexed by discrete
+  condition `(dataset, ε, T, arch)` and are not a function of ε/T, so the closed form is
+  undefined at an unseen `(ε, T)`. Equation transfer therefore runs **only at a target
+  `(ε, T)` that exactly matches a trained source condition**, borrowing that condition's
+  constants; every source condition present at that `(ε, T)` is transferred (read off, not
+  selected), instantiating the single `selected` Pareto equation `f` with each condition's
+  constant vector. The within-`(ε, T)` spread across conditions is the equation analog of
+  generalization consistency. Genuinely off-grid equation transfer still needs the deferred
+  stage-2 regression `p[condition] ~ g(ε, T, arch)` composed into `f` (ADR 0006); the
+  pooled-scalar fit (which *does* take ε/T as inputs) was rejected there as not a clean
+  transferable law. Because `f` is closed-form over `step_norm`, the producer *evaluates* it
+  on the target step grid rather than resampling a length-T array, but otherwise feeds the
+  identical `seat_on_budget` + eval core as curve transfer.
 - Matched privacy is exact by construction, but requires an explicit **scale-to-boundary**
   step, not just `project()`. Under DP-PSAC the σ curve alone carries the budget; the
   resampled σ shape is scaled so `∑ᵢ exp(1/σᵢ)` *binds* the target's `(μ/p)² + T` exactly
@@ -55,8 +75,13 @@ the available Compute Canada fan-out, and the fetch/plot split mirrors the exist
   and passes an already-feasible curve through untouched — which would let a stricter
   source regime's absolute noise level leak in. Only the dimensionless shape crosses the
   target boundary; its magnitude is 100% set by the target ε.
-- The descriptive matrix is **read off, not selected from**; no per-target winner is picked
-  by target accuracy, avoiding test-set selection bias. A "best transfer" headline, if
-  wanted, must come from a held-out target split.
+- The descriptive matrix is **read off, not selected from** — at *both* ends. No per-target
+  winner is picked by target accuracy, and no per-regime source *representative* is picked by
+  source accuracy: **every** source policy (all seeds) is transferred. Selecting a source by
+  its accuracy would bias toward source-overfit shapes that transfer worst, so instead the
+  spread of transfer accuracies within a regime is reported as its **generalization
+  consistency**. A best/median/worst-transferred-policy triple per target column is
+  permitted for *shape inspection* only; any "best transfer" headline still requires a
+  held-out target split.
 - The result schema is the integration contract between producers and assembler; adding a
   new producer (e.g. a fourth reference) is just another writer of the same schema.

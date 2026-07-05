@@ -94,13 +94,22 @@ _Avoid_: porting, migration, domain adaptation.
 
 **Source dataset / Target dataset**:
 The source is where a policy was learned; the target is the held-out dataset the
-policy is transferred to (EyePACS, CheXpert, ImageNet).
+policy is transferred to. Each target name denotes a **surrogate**, not the
+canonical dataset (see ADR 0007): **EyePACS** (used as-is), **CheXpert** = a binary
+Pleural-Effusion probe (not the multi-label dataset), **ImageNet** = the 100-class
+ImageNet-100 subset at 32×32 (not 1000-class full-resolution).
 
 **Transferred object**:
 What actually gets instantiated on the target. Two independently-runnable kinds,
 compared only when both exist:
-- **Equation transfer**: evaluate the SR-distilled closed-form σ/C(step, privacy)
-  at the target's own T and sampling rate.
+- **Equation transfer**: evaluate the SR-distilled universal shape `f(step_norm)`
+  on the target's step grid. The template's per-condition constants are *not* a
+  function of ε/T, so equation transfer runs only at a target `(ε, T)` that
+  **exactly matches** a trained source condition, borrowing that condition's
+  fitted constants; every source condition at that `(ε, T)` is transferred (read
+  off, not selected), and the σ shape is seated on the target budget the same way
+  curve transfer is. Off-grid `(ε, T)` is not equation-transferable without the
+  deferred stage-2 constant regression.
 - **Curve transfer**: resample a source run's raw length-T schedule onto the
   target's T. Under DP-PSAC the noise-multiplier (σ) curve alone carries the
   privacy budget and is projected onto the target's; the clip curve is a
@@ -131,6 +140,16 @@ The row unit of the transfer matrix: one learned run's final length-T σ/clip
 schedule, identified by its W&B `run_id`. Distinct from a regime, which groups the
 several source policies (one per seed) that share a `(dataset, ε, T, arch)`.
 _Avoid_: source run (reserve for the W&B object), representative.
+
+**Best / median / worst transferred policy**:
+A descriptive triple summarising a target column of the transfer matrix — the source
+policies at the max, median, and min of per-policy mean target accuracy *across all
+regimes*. Purely diagnostic: its purpose is **shape inspection** (plotting the three
+actual σ/clip curves and their source regimes, the direct analog of inspecting the
+best/median/worst SR equation), never a "best transfer" headline — that still requires a
+held-out target split (ADR 0008). Chosen per target column, not per cell, because within
+a single regime the seeds share a near-duplicate shape.
+_Avoid_: winner, selected policy.
 
 **Transfer reference** (a.k.a. **baseline**):
 The three schedules a transferred cell is judged against, each run natively on the

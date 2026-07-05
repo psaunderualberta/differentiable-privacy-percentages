@@ -5,6 +5,7 @@ from conf.config import EnvConfig
 from conf.singleton_conf import SingletonConfig
 from networks.net_factory import net_factory_from_config
 from networks.util import Network
+from privacy.gdp_privacy import compute_poisson_buffer_size
 from util.dataloaders import DatasetLoader, get_dataset_loader
 
 
@@ -15,6 +16,11 @@ class DPTrainingParams(eqx.Module):
     network: Network = Network()
     num_training_steps: int = 500
     scan_segments: int = 1
+    buffer_size: int = 250
+    """Truncated-Poisson buffer size B (ADR 0009). Derived in ``create`` from the
+    dataset size and (eps, delta, T); B > batch_size so the buffer holds the rare
+    over-expected Poisson draw. Physical index/microbatch shapes use B; the
+    gradient-mean and noise divisor stay at ``batch_size`` (= L = pN)."""
 
     @classmethod
     def create(
@@ -31,6 +37,13 @@ class DPTrainingParams(eqx.Module):
         # from the now-constant config so the logged LR matches the one used.
         resolved_opt = conf.optimizer.resolve()
         optimizer = resolved_opt.build()
+        buffer_size = compute_poisson_buffer_size(
+            N=loader.n_train,
+            batch_size=conf.batch_size,
+            T=conf.num_training_steps,
+            eps=conf.eps,
+            delta=conf.delta,
+        )
         return DPTrainingParams(
             loader=loader,
             optimizer=optimizer,
@@ -38,6 +51,7 @@ class DPTrainingParams(eqx.Module):
             network=network_arch,
             num_training_steps=conf.num_training_steps,
             scan_segments=conf.scan_segments_derived,
+            buffer_size=buffer_size,
         )
 
     @classmethod

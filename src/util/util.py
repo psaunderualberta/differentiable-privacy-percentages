@@ -44,8 +44,45 @@ def sample_batch_uniform(
     return x[subsample_idxs], y[subsample_idxs]  # type: ignore
 
 
+def poisson_buffer_indices(
+    key: PRNGKeyArray,
+    N: int,
+    p: float,
+    B: int,
+) -> tuple[Array, Array]:
+    """Draw a truncated-Poisson minibatch into a fixed-size buffer of B slots (ADR 0009).
+
+    Each record is included independently with probability ``p`` (true Poisson
+    subsampling) via ``mask = (u < p)`` on a uniform vector ``u``. Included records
+    are pulled into the buffer with an **exact** ``lax.top_k`` over the ``{0, 1}``
+    mask, which places every included record above every excluded one; index-order
+    tie-breaking makes the rare overflow (``m > B``) deterministically keep the
+    first ``B`` included records. Unused slots hold real (excluded) records and are
+    marked invalid so their gradient contributions can be masked to zero.
+
+    Args:
+        key: PRNG key for the per-record Bernoulli draws.
+        N: Number of training records.
+        p: Poisson inclusion probability (batch_size / N).
+        B: Buffer size (number of slots), B > pN.
+
+    Returns:
+        Tuple ``(idxs, valid)``: ``idxs`` are the B selected record indices (int),
+        ``valid`` is a bool mask of which slots hold genuinely-included records.
+    """
+    u = jr.uniform(key, (N,))
+    mask = (u < p).astype(jnp.float32)
+    top_scores, idxs = jax.lax.top_k(mask, B)
+    valid = top_scores > 0.5
+    return idxs, valid
+
+
 @eqx.filter_jit
-def sum_clipped_per_example_grads(grads: eqx.Module, C: Array) -> eqx.Module:
+def sum_clipped_per_example_grads(
+    grads: eqx.Module,
+    C: Array,
+    valid: Array | None = None,
+) -> eqx.Module:
     """Return the *sum* of Abadi-clipped per-example gradients (no 1/B factor).
 
     Each example's clip multiplier depends only on that example's own global
@@ -60,6 +97,9 @@ def sum_clipped_per_example_grads(grads: eqx.Module, C: Array) -> eqx.Module:
     Args:
         grads: Per-example gradient pytree with a leading batch dimension.
         C: Clipping threshold.
+        valid: Optional bool mask over the leading batch dimension (truncated-Poisson
+            buffer, ADR 0009). Invalid slots hold real records whose contribution is
+            zeroed by scaling their clip multiplier to 0, so they drop out of the sum.
 
     Returns:
         Summed clipped gradient pytree (batch dimension removed).
@@ -73,6 +113,8 @@ def sum_clipped_per_example_grads(grads: eqx.Module, C: Array) -> eqx.Module:
 
     grads_flat, grads_treedef = jax.tree.flatten(grads)
     multipliers = jax.vmap(get_multiplier)(grads)
+    if valid is not None:
+        multipliers = multipliers * valid.astype(multipliers.dtype)
     summed = jax.tree.map(
         lambda g: jnp.tensordot(multipliers, g, axes=1),
         grads_flat,
@@ -80,21 +122,25 @@ def sum_clipped_per_example_grads(grads: eqx.Module, C: Array) -> eqx.Module:
     return jax.tree.unflatten(grads_treedef, summed)
 
 
-def clip_grads_abadi(grads: eqx.Module, C: Array) -> eqx.Module:
+def clip_grads_abadi(grads: eqx.Module, C: Array, valid: Array | None = None) -> eqx.Module:
     """Clip per-example gradients using the Abadi smooth global-norm clipping rule.
 
     Returns the *mean* clipped gradient (sum of clipped per-example gradients
-    divided by the batch size).
+    divided by the batch size). The divisor is the expected batch ``L = batch_size``
+    — never the buffer size nor the realized count — so the Gaussian sensitivity and
+    noise calibration are unchanged (ADR 0009).
 
     Args:
         grads: Per-example gradient pytree with a leading batch dimension.
         C: Clipping threshold.
+        valid: Optional bool mask over the leading batch dimension; invalid
+            truncated-Poisson buffer slots are zeroed out of the sum.
 
     Returns:
         Mean clipped gradient pytree (batch dimension removed).
     """
     batch_size = SingletonConfig.get_environment_config_instance().batch_size
-    summed = sum_clipped_per_example_grads(grads, C)
+    summed = sum_clipped_per_example_grads(grads, C, valid)
     return jax.tree.map(lambda g: g / batch_size, summed)
 
 
