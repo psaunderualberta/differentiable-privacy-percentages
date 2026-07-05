@@ -257,6 +257,8 @@ def _eyepacs_download_and_cache(datadir: str) -> None:
         eyepacs-labels-val.npy    (N_val,   5) float32
     """
     import csv
+    import re
+    import shutil
     import zipfile
 
     from PIL import Image
@@ -279,11 +281,22 @@ def _eyepacs_download_and_cache(datadir: str) -> None:
     # --- Extract zip ---
     if not os.path.exists(train_img_dir):
         print("Extracting EyePACS zip...")
+        train_zip_path = os.path.join(datadir, "train.zip")
         with zipfile.ZipFile(zip_path, "r") as zf:
-            # The competition zip contains nested zips; extract the train one
-            train_zip_name = next(n for n in zf.namelist() if "train" in n and n.endswith(".zip"))
-            zf.extract(train_zip_name, datadir)
-        train_zip_path = os.path.join(datadir, train_zip_name)
+            # The competition zip ships the train images as a multipart split
+            # archive (train.zip.001, .002, …) — a raw byte-split of a single
+            # train.zip, NOT a standalone zip. (trainLabels.csv.zip also contains
+            # "train" and ends in ".zip", so match only the numbered parts.)
+            part_names = sorted(n for n in zf.namelist() if re.search(r"train\.zip\.\d+$", n))
+            if not part_names:
+                raise RuntimeError("no train.zip.NNN split parts found in competition zip")
+            for n in part_names:
+                zf.extract(n, datadir)
+        # Concatenate the split parts back into one zip, then extract the images.
+        with open(train_zip_path, "wb") as out:
+            for n in part_names:
+                with open(os.path.join(datadir, n), "rb") as part:
+                    shutil.copyfileobj(part, out)
         with zipfile.ZipFile(train_zip_path, "r") as zf:
             zf.extractall(datadir)
 
