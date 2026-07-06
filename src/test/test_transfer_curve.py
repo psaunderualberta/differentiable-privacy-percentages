@@ -124,7 +124,7 @@ class TestBuildCurveSchedule:
         assert len(clips) == pp.T
         # Matched privacy: the seated sigma curve binds the target DP-PSAC boundary.
         bound = float((pp.mu / pp.p) ** 2 + pp.T)
-        used = float(jnp.sum(jnp.exp(1.0 / jnp.asarray(sigmas))))
+        used = float(jnp.sum(jnp.exp(1.0 / jnp.asarray(sigmas) ** 2)))
         np.testing.assert_allclose(used, bound, rtol=1e-4)
         # Clip is privacy-neutral: carried across as the plain resample, untouched by seating.
         np.testing.assert_allclose(clips, resample_curve(source_clips, pp.T), rtol=1e-6)

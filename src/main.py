@@ -275,9 +275,8 @@ def main():
             updates, opt_state = optimizer.update(grads, opt_state, schedule)
             schedule = schedule.apply_updates(updates)
             schedule = ensure_valid_pytree(schedule, "schedule in main after updates")
-            x_new = schedule.project()
-            x_new = ensure_valid_pytree(x_new, "schedule in main after project")
-            schedule = x_new
+            schedule = schedule.project()
+            schedule = ensure_valid_pytree(schedule, "schedule in main after project")
 
             iterator.set_description(f"Training Progress - Loss: {loss:.4f}")
 

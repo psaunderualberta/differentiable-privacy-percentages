@@ -614,11 +614,13 @@ class TestProjectSigmaAndClip:
 # ---------------------------------------------------------------------------
 # project_inverse_sigmas
 #
-# The constraint is sum_i exp(1 / sigma_i) <= B where B = (mu/p)^2 + T.
+# sigmas is the per-step noise multiplier s = sigma_noise / clip; the GDP budget
+# uses exp((clip/sigma_noise)^2) = exp(1/s^2) per step (w = 1/s, sum exp(w^2)).
+# The constraint is sum_i exp(1 / sigma_i^2) <= B where B = (mu/p)^2 + T.
 # For EPS=1, DELTA≈0.127, P=0.1, T=10 → mu≈1.0, B≈110.
 #
 # Feasible baseline:   sigmas = 1.0 → sum = T·exp(1) ≈ 27.18 (< 110)
-# Infeasible baseline: sigmas = 0.3 → sum = T·exp(1/0.3) ≈ 280  (> 110)
+# Infeasible baseline: sigmas = 0.3 → sum = T·exp(1/0.09) ≈ 6.7e5  (>> 110)
 # ---------------------------------------------------------------------------
 
 
@@ -628,8 +630,8 @@ def _is_budget(params: GDPPrivacyParameters) -> float:
 
 
 def _is_constraint(sigmas: jnp.ndarray) -> float:
-    """Evaluate sum_i exp(1 / sigma_i)."""
-    return float(jnp.sum(jnp.exp(1.0 / sigmas)))
+    """Evaluate sum_i exp(1 / sigma_i^2)."""
+    return float(jnp.sum(jnp.exp(1.0 / sigmas**2)))
 
 
 class TestProjectInverseSigmas:
@@ -675,7 +677,7 @@ class TestProjectInverseSigmas:
         assert jnp.allclose(projected, projected[0], atol=1e-3)
 
     def test_projection_increases_sigmas(self, params):
-        # Infeasibility comes from sigmas being too small (sum of exp(1/σ) too
+        # Infeasibility comes from sigmas being too small (sum of exp(1/σ²) too
         # large), so the projection must push sigmas upward.
         sigmas = jnp.ones(T) * 0.3
         projected = params.project_inverse_sigmas(sigmas)
@@ -694,7 +696,7 @@ class TestProjectInverseSigmas:
         # changes the numeric answer is caught, not just constraint violations.
         sigmas = jnp.ones(T) * 0.3
         projected = params.project_inverse_sigmas(sigmas)
-        assert jnp.allclose(projected, 0.4170203, atol=1e-3)
+        assert jnp.allclose(projected, 0.6457805, atol=1e-3)
 
     def test_golden_values_nonuniform_infeasible(self, params):
         # Characterization test for a non-uniform infeasible input.
@@ -702,26 +704,27 @@ class TestProjectInverseSigmas:
         projected = params.project_inverse_sigmas(sigmas)
         expected = jnp.array(
             [
-                0.38489196,
-                0.39147943,
-                0.39849415,
-                0.40595973,
-                0.41389754,
-                0.4223259,
-                0.43125907,
-                0.4407061,
-                0.45067045,
-                0.46114936,
+                0.63171083,
+                0.63462007,
+                0.63764578,
+                0.64079517,
+                0.64407617,
+                0.64749712,
+                0.6510672,
+                0.65479594,
+                0.65869385,
+                0.66277212,
             ]
         )
         assert jnp.allclose(projected, expected, atol=1e-3)
 
     def test_tighter_budget_projects_to_larger_sigmas(self):
         # Tighter budget (smaller mu → smaller B) forces larger sigmas to keep
-        # exp(1/σ) terms smaller. Use the same infeasible input for both.
+        # exp(1/σ²) terms smaller. Use the same infeasible input for both.
         p_tight = GDPPrivacyParameters(0.5, 0.0524403232877, P, T)  # mu≈0.5, B≈35
         p_loose = GDPPrivacyParameters(3.0, 0.566737999092, P, T)  # mu≈3.0, B≈910
-        sigmas = jnp.ones(T) * 0.3  # sum ≈ 280 — infeasible for tight, feasible for loose
+        # sum = T·exp(1/0.6²) ≈ 161 — infeasible for tight (35), feasible for loose (910).
+        sigmas = jnp.ones(T) * 0.6
         proj_tight = p_tight.project_inverse_sigmas(sigmas)
         proj_loose = p_loose.project_inverse_sigmas(sigmas)
         # p_loose is feasible — projection is identity.

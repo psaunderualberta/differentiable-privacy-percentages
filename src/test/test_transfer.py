@@ -55,7 +55,7 @@ def _bound(pp: GDPPrivacyParameters) -> float:
 
 
 def _budget_use(sigmas) -> float:
-    return float(jnp.sum(jnp.exp(1.0 / jnp.asarray(sigmas))))
+    return float(jnp.sum(jnp.exp(1.0 / jnp.asarray(sigmas) ** 2)))
 
 
 class TestRawArraySchedule:
@@ -85,7 +85,7 @@ class TestSeatOnBudget:
         np.testing.assert_allclose(pp.project_inverse_sigmas(sigmas), sigmas)
 
         seated = seat_on_budget(sigmas, pp)
-        # Seating spends the full budget: sum exp(1/sigma) binds the boundary.
+        # Seating spends the full budget: sum exp(1/sigma²) binds the boundary.
         np.testing.assert_allclose(_budget_use(seated), _bound(pp), rtol=1e-4)
 
     def test_seating_is_invariant_to_input_scale(self):

@@ -143,10 +143,10 @@ def seat_on_budget(sigmas: Array, privacy_params: GDPPrivacyParameters) -> Array
     """Scale a sigma curve onto the target DP-PSAC budget, then project.
 
     ``project_inverse_sigmas`` enforces only the *inequality*
-    ``sum_i exp(1/sigma_i) <= (mu/p)^2 + T`` — a feasible-but-slack (over-noised)
+    ``sum_i exp(1/sigma_i^2) <= (mu/p)^2 + T`` — a feasible-but-slack (over-noised)
     source curve passes through untouched, under-spending the target budget. So we
     first bind the boundary by a single monotonic scale factor ``c`` solving
-    ``sum_i exp(1/(c*sigma_i)) = (mu/p)^2 + T`` (the sum is strictly decreasing in
+    ``sum_i exp(1/(c*sigma_i)^2) = (mu/p)^2 + T`` (the sum is strictly decreasing in
     ``c``), which preserves the curve's shape, then apply ``project_inverse_sigmas``
     to land exactly on the feasible boundary.
     """
@@ -154,7 +154,7 @@ def seat_on_budget(sigmas: Array, privacy_params: GDPPrivacyParameters) -> Array
     bound = (privacy_params.mu / privacy_params.p) ** 2 + privacy_params.T
 
     def residual(c, args):
-        return jnp.sum(jnp.exp(1.0 / (c * sigmas))) - bound
+        return jnp.sum(jnp.exp(1.0 / (c * sigmas) ** 2)) - bound
 
     # residual is strictly decreasing in c (flip=True); expand the bracket if the
     # root lies beyond the initial guess.

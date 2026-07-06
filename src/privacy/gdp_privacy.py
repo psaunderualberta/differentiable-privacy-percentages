@@ -459,7 +459,11 @@ class GDPPrivacyParameters(eqx.Module):
 
     @eqx.filter_jit
     def project_inverse_sigmas(self, sigmas: Array, tol: float | Array = 1e-6) -> Array:
-        """Project sigmas onto the constraint sum_i exp(1 / sigma_i) <= (mu/p)^2 + T.
+        """Project sigmas onto the constraint sum_i exp(1 / sigma_i^2) <= (mu/p)^2 + T.
+
+        ``sigmas`` is the per-step noise multiplier s = sigma_noise / clip, so the
+        GDP budget uses exp((clip/sigma_noise)^2) = exp(1/s^2) per step (this mirrors
+        ``compute_expenditure`` and the weight constraint sum exp(w^2), w = 1/s).
 
         An outer Optimistix Bisection on the dual variable lambda wraps a
         per-component Optimistix Newton solve of the proximal subproblem
@@ -467,28 +471,56 @@ class GDPPrivacyParameters(eqx.Module):
         solvers. Feasible inputs are returned unchanged.
         """
         sigmas = jnp.asarray(sigmas)
-        bound = (self.mu / self.p) ** 2 + self.T  # == sum_{i=1}^{T} e^(1 / sigmas_i)
+        bound = (self.mu / self.p) ** 2 + self.T  # == sum_{i=1}^{T} e^(1 / sigmas_i^2)
 
-        # Inner proximal subproblem (per component): find sigma_tilde solving
-        #   g(y) = y - sigma - lam * exp(1/y) / y^2 = 0.
+        # exp(1/s^2) overflows float32 for small s (s~0.09 -> exp(129)=inf), which
+        # arises transiently when an aggressive gradient step lands a tiny multiplier
+        # just before project(). Two guards keep the solve finite AND consistent:
+        #   * exp_inv_sq caps the exponent (exp(80)~5.5e34, ~10^4x below float32 max);
+        #   * the inner root-find is bracketed at y_floor = 1/sqrt(exp_cap), the
+        #     smallest s that does not overflow, so no iterate ever reaches the
+        #     overflow region. The feasible root always has 1/s^2 <= ln(bound) (each
+        #     term <= bound), i.e. s >= 1/sqrt(ln bound) >= y_floor for any realistic
+        #     budget, so the bracket never excludes the true solution.
+        exp_cap = 80.0
+        y_floor = 1.0 / jnp.sqrt(exp_cap)
+
+        def exp_inv_sq(y: Array) -> Array:
+            return jnp.exp(jnp.minimum(1 / y**2, exp_cap))
+
+        # Inner proximal subproblem (per component): the projection stationarity
+        # condition for minimising 1/2 (y - sigma)^2 s.t. sum exp(1/y^2) <= bound.
+        # Since d/dy exp(1/y^2) = -2 exp(1/y^2) / y^3, this is
+        #   g(y) = y - sigma - 2 * lam * exp(1/y^2) / y^3 = 0.
+        # g is monotone increasing in y over [y_floor, inf), so a bracketed Bisection
+        # is robust where Newton (started at the possibly-tiny input) diverges/stalls:
+        # for lam > 0, g(y_floor) < 0 (the huge exp term dominates) and g grows to +inf.
         def g(y, args):
             sigma, lam = args
-            return y - sigma - lam * jnp.exp(1 / y) / y**2
+            return y - sigma - 2 * lam * exp_inv_sq(y) / y**3
 
-        newton = optx.Newton(rtol=tol, atol=tol)
+        inner = optx.Bisection(rtol=tol, atol=tol, expand_if_necessary=True)
 
         def get_sigmas_tilde(lam: Array) -> Array:
             return vmap(
                 lambda s: (
-                    optx.root_find(g, newton, s, args=(s, lam), max_steps=50, throw=False).value
-                ),
+                    optx.root_find(
+                        g,
+                        inner,
+                        jnp.maximum(s, y_floor),
+                        args=(s, lam),
+                        options={"lower": y_floor, "upper": jnp.maximum(s, 1.0) + 1.0},
+                        max_steps=100,
+                        throw=False,
+                    ).value
+                )
             )(sigmas)
 
-        # Outer dual: find lam >= 0 with h(lam) = sum exp(1/sigma_tilde) - bound = 0.
+        # Outer dual: find lam >= 0 with h(lam) = sum exp(1/sigma_tilde^2) - bound = 0.
         # h is decreasing in lam (flip=True); expand the bracket if the root lies
         # beyond the initial upper guess.
         def h(lam, args):
-            return jnp.sum(jnp.exp(1 / get_sigmas_tilde(lam))) - bound
+            return jnp.sum(exp_inv_sq(get_sigmas_tilde(lam))) - bound
 
         bisection = optx.Bisection(rtol=tol, atol=tol, flip=True, expand_if_necessary=True)
         lam = optx.root_find(
@@ -496,12 +528,12 @@ class GDPPrivacyParameters(eqx.Module):
             bisection,
             0.5,
             options={"lower": 1e-6, "upper": 10.0},
-            max_steps=50,
+            max_steps=100,
             throw=False,
         ).value
 
         # If already feasible, return originals unchanged.
-        cur = jnp.sum(jnp.exp(1 / sigmas))
+        cur = jnp.sum(exp_inv_sq(sigmas))
         feasible = jnp.logical_and(jnp.isfinite(cur), cur <= bound)
         return jnp.where(feasible, sigmas, get_sigmas_tilde(lam))
 
