@@ -738,7 +738,7 @@ class TestConfigDefaults:
 
     def test_interpolated_exp_schedule_config_defaults(self):
         conf = InterpolatedExponentialScheduleConfig()
-        assert conf.num_keypoints == 50
+        assert conf.num_keypoints == 10
         assert conf.init_value == pytest.approx(1.0)
 
     def test_interpolated_clipped_schedule_config_defaults(self):
