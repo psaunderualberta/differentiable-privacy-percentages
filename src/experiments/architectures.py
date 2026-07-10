@@ -132,7 +132,6 @@ _CNN_DEPTHS: list[int] = [1, 2, 3, 4]
 LADDERS: dict[str, list[MLPConfig | CNNConfig]] = {
     "mlp-width": width_ladder([64, 128, 256, 512]),
     "mlp-depth": depth_ladder(_ANCHOR_WIDTH, _MLP_DEPTHS),
-    "mlp-depth-pm": param_matched_depth_ladder(_ANCHOR_PARAMS, _MLP_DEPTHS),
     # cnn-width: existing aggressive-downsampling block, fixed (64,) head.
     "cnn-width": [
         CNNConfig(
@@ -145,5 +144,5 @@ LADDERS: dict[str, list[MLPConfig | CNNConfig]] = {
         )
         for ch in [(8, 16), (16, 32), (32, 64), (64, 128)]
     ],
-    "cnn-depth": cnn_depth_ladder(32, _CNN_DEPTHS),
+    "cnn-depth": cnn_depth_ladder(16, _CNN_DEPTHS),
 }
