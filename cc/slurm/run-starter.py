@@ -64,6 +64,21 @@ class SlurmConfig:
     prerequisites: tuple[str, ...] = ()
 
     @property
+    def slurm_job_name(self) -> str:
+        """SLURM job name, guaranteed to contain the run_id.
+
+        ``--dependency=singleton`` (see below) limits execution to one job per
+        (name, user) at a time, so the name MUST encode the run_id for that
+        scoping to be per-run_id.  This is idempotent: the initial submit already
+        carries the run_id in ``--jobname`` (create_experiments.py), and chain
+        continuations inherit this exact name via ``CHAIN_JOBNAME`` — so we only
+        append when it is missing (e.g. a manual submit with a generic name).
+        """
+        if self.run_id in self.jobname:
+            return self.jobname
+        return f"{self.jobname}-{self.run_id}"
+
+    @property
     def main_args(self) -> str:
         return (
             f' --wandb_conf.project="{self.wandb_proj}"'
@@ -83,14 +98,17 @@ class SlurmConfig:
 #SBATCH --mem-per-gpu={self.mem_per_gpu}
 #SBATCH --time={self.runtime.slurm_timestamp}
 #SBATCH --output={self.logfile}
-#SBATCH --job-name={self.jobname}
+#SBATCH --job-name={self.slurm_job_name}
 #SBATCH --chdir={self.project_dir}
 #SBATCH --account={self.account}
 
-# Job-chaining context (read by main.py to resubmit on graceful shutdown)
+# Job-chaining context (read by main.py to resubmit on graceful shutdown).
+# CHAIN_JOBNAME carries the run_id-bearing name unchanged so every continuation
+# resubmits under the SAME --job-name, keeping the singleton dependency scoped
+# to this run_id across the whole chain.
 export CHAIN_RESUBMIT_SCRIPT="{_THIS_SCRIPT}"
 export CHAIN_WANDB_PROJ="{self.wandb_proj}"
-export CHAIN_JOBNAME="{self.jobname}"
+export CHAIN_JOBNAME="{self.slurm_job_name}"
 export CHAIN_ACCOUNT="{self.account}"
 
 # Startup printing
@@ -120,8 +138,18 @@ if __name__ == "__main__":
         f.flush()
 
         cmd_list = ["sbatch"]
+        # `singleton`: at most one job with this name (which encodes the run_id)
+        # per user runs/suspends at a time.  This serializes chain continuations
+        # AND blocks accidental concurrent submissions for the same run_id — the
+        # fork that let a second job restart from step 0 and clobber the run in
+        # NoMomentumSweep.  `afterany` (predecessor must terminate, any exit
+        # status) is kept for explicit ordering; unlike the old `after` (which is
+        # satisfied the moment the predecessor merely *starts*) it does not allow
+        # the continuation to run alongside a still-live / requeued predecessor.
+        deps = ["singleton"]
         if len(conf.prerequisites) > 0:
-            cmd_list.append("-d after:" + ",".join(jobid for jobid in conf.prerequisites))
+            deps.append("afterany:" + ",".join(jobid for jobid in conf.prerequisites))
+        cmd_list += ["-d", ",".join(deps)]
         cmd_list.append(f"{f.name}")
         cmd = " ".join(cmd_list)
 

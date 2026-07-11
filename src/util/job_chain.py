@@ -57,6 +57,18 @@ def shutdown_requested() -> bool:
     return _shutdown_requested.is_set()
 
 
+def request_shutdown() -> None:
+    """Set the graceful-shutdown event programmatically.
+
+    Called when the RunLifecycle wall-clock deadline latches so that
+    ``resubmit_if_requested`` (which re-checks this event) fires on the
+    wall-clock path too — not only on SIGUSR1.  Without this, a stop latched by
+    the adaptive deadline could be refused a resubmit by the module-level
+    ``time_limit_approaching`` static check, silently ending the job chain.
+    """
+    _shutdown_requested.set()
+
+
 def time_limit_approaching() -> bool:
     """Return True if SLURM wall time will expire within the configured buffer window.
 

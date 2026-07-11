@@ -74,6 +74,12 @@ class RunLifecycle:
         self._run = None
         self._wandb = SingletonConfig.get_wandb_config_instance()
         self._sweep = SingletonConfig.get_sweep_config_instance()
+        # Wall-clock of the previous should_stop() call and the resulting
+        # measured per-step duration.  should_stop is invoked once per outer
+        # step, so their delta estimates how long one step takes — used to widen
+        # the shutdown buffer for slow (deep-CNN) steps.
+        self._prev_check_time: float | None = None
+        self._last_step_secs: float = 0.0
 
     # ---- startup (before wandb.init) ----
     def restore(self, template: TrainingState) -> tuple[TrainingState | None, int]:
@@ -125,10 +131,23 @@ class RunLifecycle:
         """Latch + report whether a job-chain stop is in effect.  Latches
         JOB_CHAIN the first time SIGUSR1 / wall-clock fires, so the decision
         can't flip mid-finalize (removes the triple-eval race)."""
+        # Measure per-step wall time (this is called once per outer step) so the
+        # deadline can reserve room for the NEXT step: a deep-CNN step can take
+        # 10-15 min, far longer than the static buffer, so a fixed buffer would
+        # sail past SLURM_JOB_END_TIME mid-step and be SIGKILLed before it could
+        # checkpoint + resubmit — a silently dead job chain.
+        now = self._now() if self._now is not None else time.time()
+        if self._prev_check_time is not None:
+            self._last_step_secs = now - self._prev_check_time
+        self._prev_check_time = now
+
         if self._reason is StopReason.RUNNING and (
-            job_chain.shutdown_requested() or self._time_limit_approaching()
+            job_chain.shutdown_requested() or self._time_limit_approaching(now)
         ):
             self._reason = StopReason.JOB_CHAIN
+            # Arm the module-level event so resubmit_if_requested fires on the
+            # wall-clock path, keeping the stop and resubmit decisions in sync.
+            job_chain.request_shutdown()
         return self._reason is StopReason.JOB_CHAIN
 
     @property
@@ -147,15 +166,22 @@ class RunLifecycle:
         if self._reason is StopReason.JOB_CHAIN:
             resubmit_if_requested(self._run.id)
 
-    def _time_limit_approaching(self) -> bool:
-        """True iff SLURM wall time expires within ``shutdown_buffer_secs``.
-        Uses the injected ``now`` seam (default = real clock).  False when
-        ``SLURM_JOB_END_TIME`` is absent (local / non-SLURM runs)."""
+    def _time_limit_approaching(self, now: float | None = None) -> bool:
+        """True iff SLURM wall time expires within the shutdown window.
+
+        The window is ``shutdown_buffer_secs`` (teardown/resubmit margin) plus
+        1.5x the measured per-step duration, because should_stop only re-checks
+        once per step: we must stop while at least one more step *and* teardown
+        still fit before ``SLURM_JOB_END_TIME``.  Uses the injected ``now`` seam
+        (default = real clock).  False when ``SLURM_JOB_END_TIME`` is absent
+        (local / non-SLURM runs)."""
         job_end = os.environ.get("SLURM_JOB_END_TIME", None)
         if job_end is None:
             return False
         try:
-            now = self._now() if self._now is not None else time.time()
-            return now >= int(job_end) - self._sweep.shutdown_buffer_secs
+            if now is None:
+                now = self._now() if self._now is not None else time.time()
+            window = self._sweep.shutdown_buffer_secs + 1.5 * self._last_step_secs
+            return now >= int(job_end) - window
         except ValueError:
             return False
