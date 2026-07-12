@@ -139,6 +139,31 @@ def assemble_transfer(producer: str, cache_root: Path | str) -> pd.DataFrame:
     return combined.sort_values(_ASSEMBLE_SORT_KEYS).reset_index(drop=True)
 
 
+def build_target_config(target: "TargetSpec", batch_size: int):
+    """A minimal singleton Config pinned to the target regime.
+
+    ``get_privacy_params`` / ``DPTrainingParams.create_direct_from_config`` /
+    ``get_dataset_shapes`` all read the singleton, so a producer wraps this config
+    around them to build the target's env/GDP params. The network arch is left to
+    ``AutoNetworkConfig``, which derives the surrogate arch from the dataset
+    (ADR 0007), matching the target's ``arch`` label.
+    """
+    from conf.config import Config, EnvConfig, ScheduleOptimizerConfig, SweepConfig, WandbConfig
+
+    env = EnvConfig(
+        eps=target.eps,
+        delta=target.delta,
+        batch_size=batch_size,
+        num_training_steps=target.T,
+    )
+    sweep = SweepConfig(
+        env=env,
+        schedule_optimizer=ScheduleOptimizerConfig(),
+        dataset=target.name,
+    )
+    return Config(wandb_conf=WandbConfig(), sweep=sweep)
+
+
 def seat_on_budget(sigmas: Array, privacy_params: GDPPrivacyParameters) -> Array:
     """Scale a sigma curve onto the target DP-PSAC budget, then project.
 
