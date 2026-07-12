@@ -349,7 +349,7 @@ def plot_main(
         bbox_to_anchor=(0.5, -0.02),
         frameon=False,
     )
-    fig.text(0.5, 0.005, "shaded = 95% CI (n=5 seeds)", ha="center", fontsize=7, style="italic")
+    fig.text(0.5, 0.005, "shaded = 95% CI (n=8 seeds)", ha="center", fontsize=7, style="italic")
     fig.tight_layout(rect=(0, 0.03, 1, 1))
     _save(fig, out_path_stem)
 
