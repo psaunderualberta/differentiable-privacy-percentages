@@ -68,11 +68,11 @@ def _remote_checkpoint_exists(entity: str, project: str, run_id: str) -> bool:
     the in-progress run's history).  Any lookup error is treated as "does not
     exist" so a genuine first run is never blocked.
     """
-    collection = f"{entity}/{project}/{_artifact_name(run_id)}"
     try:
         return any(True for _ in wandb.Api().artifacts("checkpoint", collection))
     except Exception:
-        return False
+        # Fail closed: if we can't verify absence, assume a remote checkpoint exists to avoid clobbering.
+        return True
 
 
 def _find_local_checkpoint(run_id: str, step: int | None) -> pathlib.Path | None:
