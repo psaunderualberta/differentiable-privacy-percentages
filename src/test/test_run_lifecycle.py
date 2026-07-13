@@ -211,6 +211,36 @@ class TestShouldStop:
         lifecycle = RunLifecycle(now=lambda: 1e18)
         assert lifecycle.should_stop() is False
 
+    def test_slow_step_widens_buffer_and_stops_earlier(self, seed_config, monkeypatch):
+        # A step that takes 400s must reserve >> the static 180s buffer: with
+        # SLURM_JOB_END_TIME=10000 and buffer 180, a fixed window would only
+        # stop at >=9820; but one more 400s step (1.5x = 600s) would overrun the
+        # deadline, so the run must latch a stop well before 9820.
+        seed_config()  # shutdown_buffer_secs default = 180
+        monkeypatch.setenv("SLURM_JOB_END_TIME", "10000")
+
+        clock = {"t": 9000.0}
+        lifecycle = RunLifecycle(now=lambda: clock["t"])
+
+        assert lifecycle.should_stop() is False  # first call: no step measured yet
+        clock["t"] = 9400.0  # one 400s step elapsed -> window = 180 + 600 = 780
+        # 9400 >= 10000 - 780 = 9220 -> stop, even though 9400 < 9820 (static).
+        assert lifecycle.should_stop() is True
+        assert lifecycle.stopped_for_chain is True
+
+    def test_wall_clock_latch_arms_resubmit_event(self, seed_config, monkeypatch):
+        # A stop latched by the wall-clock deadline must set the module-level
+        # shutdown event so resubmit_if_requested fires on this path too.
+        seed_config()
+        monkeypatch.setenv("SLURM_JOB_END_TIME", "1000")
+        clock = {"t": 0.0}
+        lifecycle = RunLifecycle(now=lambda: clock["t"])
+
+        lifecycle.should_stop()  # measure baseline
+        clock["t"] = 990.0  # past the deadline window
+        assert lifecycle.should_stop() is True
+        assert job_chain._shutdown_requested.is_set()
+
 
 # ---------------------------------------------------------------------------
 # checkpoint — periodic vs forced cadence

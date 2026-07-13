@@ -58,6 +58,23 @@ def _artifact_name(run_id: str) -> str:
     return f"checkpoint-{run_id}"
 
 
+def _remote_checkpoint_exists(entity: str, project: str, run_id: str) -> bool:
+    """True iff at least one checkpoint artifact version exists on W&B for ``run_id``.
+
+    Used to tell apart two cases that both surface as "the W&B download failed":
+    the *first job of a chain* (nothing has been saved yet — safe to start
+    fresh) versus a *continuation whose checkpoint exists but couldn't be
+    fetched* (must abort rather than silently restart from step 0 and clobber
+    the in-progress run's history).  Any lookup error is treated as "does not
+    exist" so a genuine first run is never blocked.
+    """
+    try:
+        return any(True for _ in wandb.Api().artifacts("checkpoint", collection))
+    except Exception:
+        # Fail closed: if we can't verify absence, assume a remote checkpoint exists to avoid clobbering.
+        return True
+
+
 def _find_local_checkpoint(run_id: str, step: int | None) -> pathlib.Path | None:
     """Return the local checkpoint directory for a run and step.
 
@@ -185,5 +202,22 @@ def load_checkpoint(
         return restored, start_step
 
     except Exception as e:
-        print(f"Warning: could not load checkpoint {artifact_path}: {e}")
+        # A missing artifact means this is the first job of a chain (nothing
+        # saved yet), so starting fresh — return None — is correct.  But if a
+        # checkpoint DOES exist and we merely failed to fetch it, restarting
+        # from step 0 would resume the SAME W&B run and clobber the in-progress
+        # chain's history (steps re-logged from scratch, summary reset).  This
+        # is exactly what corrupted the NoMomentumSweep runs.  Refuse: raise so
+        # the duplicate / re-launched job dies here (before wandb.init) instead
+        # of silently overwriting good data.
+        if _remote_checkpoint_exists(entity, project, checkpoint_run_id):
+            raise RuntimeError(
+                f"Checkpoint '{artifact_path}' exists on W&B but could not be "
+                f"restored ({e!r}). Refusing to restart from step 0, which would "
+                f"clobber the in-progress run. Resolve the fetch failure and retry."
+            ) from e
+        print(
+            f"No checkpoint found for run '{checkpoint_run_id}' "
+            f"(first job of chain) — starting fresh: {e}"
+        )
         return None

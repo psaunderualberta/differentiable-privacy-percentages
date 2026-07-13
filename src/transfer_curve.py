@@ -19,6 +19,7 @@ from util.transfer import (
     RawArraySchedule,
     SourcePolicy,
     TargetSpec,
+    build_target_config,
     seat_on_budget,
     transfer_rows,
     write_transfer_cell,
@@ -104,31 +105,6 @@ def resample_curve(values: Array, target_T: int) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def _build_target_config(target: TargetSpec, batch_size: int):
-    """A minimal singleton Config pinned to the target regime.
-
-    ``get_privacy_params`` / ``DPTrainingParams.create_direct_from_config`` /
-    ``get_dataset_shapes`` all read the singleton, so the cell wraps this config
-    around them to build the target's env/GDP params. The network arch is left to
-    ``AutoNetworkConfig``, which derives the surrogate arch from the dataset
-    (ADR 0007), matching the target's ``arch`` label.
-    """
-    from conf.config import Config, EnvConfig, ScheduleOptimizerConfig, SweepConfig, WandbConfig
-
-    env = EnvConfig(
-        eps=target.eps,
-        delta=target.delta,
-        batch_size=batch_size,
-        num_training_steps=target.T,
-    )
-    sweep = SweepConfig(
-        env=env,
-        schedule_optimizer=ScheduleOptimizerConfig(),
-        dataset=target.name,
-    )
-    return Config(wandb_conf=WandbConfig(), sweep=sweep)
-
-
 def run_curve_cell(
     source: SourcePolicy,
     source_sigmas: Array,
@@ -152,7 +128,7 @@ def run_curve_cell(
     from util.baselines import Baseline
     from util.dataloaders import get_dataset_shapes
 
-    config = _build_target_config(target, batch_size)
+    config = build_target_config(target, batch_size)
     # The inner DP-SGD path also reads the singleton / RunContext, so the whole
     # eval (not just param construction) must stay inside both scopes — otherwise
     # a training-time singleton read finds it reset and re-parses sys.argv.

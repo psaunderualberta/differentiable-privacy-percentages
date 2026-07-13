@@ -293,3 +293,42 @@ class TestLoadCheckpointNoneReturns:
         # If it did, an exception would propagate instead of returning None.
         result = load_checkpoint("any-run", None, full_state, None, None)
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# load_checkpoint — W&B fetch failure must not silently restart from step 0
+# ---------------------------------------------------------------------------
+
+
+class _FakeApi:
+    """Fake wandb.Api: artifact() always fails to download; artifacts() reports
+    whether the checkpoint collection exists (i.e. whether any checkpoint was
+    ever saved for the run)."""
+
+    def __init__(self, collection_exists: bool):
+        self._collection_exists = collection_exists
+
+    def artifact(self, path):
+        raise RuntimeError("simulated download failure")
+
+    def artifacts(self, type_, collection):
+        if self._collection_exists:
+            return [object()]  # one existing version
+        raise RuntimeError("collection not found")
+
+
+class TestLoadCheckpointFetchFailure:
+    def test_raises_when_checkpoint_exists_but_download_fails(self, full_state, monkeypatch):
+        # No local checkpoint for this run + a checkpoint DOES exist remotely,
+        # but the download fails: restarting from step 0 would clobber the run,
+        # so load_checkpoint must raise rather than return None.
+        monkeypatch.setattr(ckpt.wandb, "Api", lambda: _FakeApi(collection_exists=True))
+        with pytest.raises(RuntimeError, match="clobber"):
+            load_checkpoint("some-run", None, full_state, "entity", "project")
+
+    def test_returns_none_when_no_remote_checkpoint_exists(self, full_state, monkeypatch):
+        # First job of a chain: no local checkpoint and no remote collection.
+        # Starting fresh (None) is correct; must not raise.
+        monkeypatch.setattr(ckpt.wandb, "Api", lambda: _FakeApi(collection_exists=False))
+        result = load_checkpoint("first-run", None, full_state, "entity", "project")
+        assert result is None

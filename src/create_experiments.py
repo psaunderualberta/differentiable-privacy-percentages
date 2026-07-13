@@ -107,12 +107,12 @@ def _to_run_config(
 DELTA: float = 1e-6
 BATCH_SIZE: int = 250  # T=250 ≈ 1 MNIST epoch (N=60 000)
 DATASETS: list[str] = ["mnist", "fashion-mnist"]
-NUM_OUTER_STEPS: int = 2500
-SEEDS: tuple[int, ...] = (0, 1, 2, 3, 4)
+NUM_OUTER_STEPS: int = 3000
+SEEDS: tuple[int, ...] = tuple(range(8))
 
 # --- Axis 1: vary T, architecture fixed at the dataset-default CNN ---
 T_SWEEP_EPSILONS: list[float] = [3, 5, 8, 10]
-T_VALUES: list[int] = [1500, 2000, 3000, 5000, 7000]
+T_VALUES: list[int] = [2000, 3000, 5000, 7000]
 
 # --- Axis 2: architecture ladders (experiments/architectures.py), T fixed at ~20 epochs ---
 # Exploratory first look — single (loose) privacy budget; T-sweep keeps full eps breadth.
@@ -122,7 +122,7 @@ T_FOR_ARCH_SWEEP: int = 5000
 OPTIMIZERS: list[OptimizerConfig] = [
     SGDConfig(
         learning_rate=dist_config_helper(value=0.1, distribution="constant"),
-        momentum=dist_config_helper(value=0.0, distribution="constant"),
+        momentum=dist_config_helper(value=0.9, distribution="constant"),
     ),
     # AdamConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
     # AdamWConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
@@ -192,7 +192,7 @@ def _make_sweep_config(
         ),
         schedule_optimizer=ScheduleOptimizerConfig(
             schedule=DecoupledSigmaAndClipScheduleConfig(),
-            lr=dist_config_helper(value=10.0, distribution="constant"),
+            lr=dist_config_helper(value=5.0, distribution="constant"),
         ),
     )
 
@@ -434,7 +434,7 @@ if __name__ == "__main__":
         submit_cmds = [
             f"parallel --colsep '\\t' --header : -q uv run cc/slurm/run-starter.py"
             f" --run_id={{run_id}} --wandb-proj={conf.project} --runtime.medium"
-            f" --jobname='\"{safe_name}-{opt_tag}\"' :::: {rel_output_path}"
+            f" --jobname='\"{safe_name}-{opt_tag}-{{run_id}}\"' :::: {rel_output_path}"
             for opt_tag, rel_output_path in relative_output_paths.items()
         ]
 

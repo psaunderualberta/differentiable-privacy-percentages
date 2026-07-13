@@ -17,7 +17,11 @@ Usage (from src/):
 
 from __future__ import annotations
 
+import json
+import shutil
+import tempfile
 import threading
+import zipfile
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
@@ -316,6 +320,257 @@ def _ladder_memberships(tags: list[str]) -> dict[str, bool]:
 
 
 # ---------------------------------------------------------------------------
+# Full-run dump (lossless archive)
+# ---------------------------------------------------------------------------
+
+
+def build_run_manifest(run: Any) -> dict:
+    """Serialize the non-artifact state of a run into a JSON-able manifest.
+
+    Captures the *complete* config, summary, run metadata, and the full history
+    across every logged key — unlike ``_history``/``_fetch_one_run``, which keep
+    only the handful of fields the plots need. This is the config/scalar half of
+    a lossless archive; artifact files are captured separately.
+    """
+    return {
+        "config": dict(run.config),
+        "summary": dict(run.summary),
+        "meta": {
+            "id": run.id,
+            "name": run.name,
+            "tags": list(run.tags or []),
+            "state": getattr(run, "state", None),
+            "notes": getattr(run, "notes", None),
+            "group": getattr(run, "group", None),
+            "job_type": getattr(run, "job_type", None),
+            "created_at": getattr(run, "created_at", None),
+            "url": getattr(run, "url", None),
+        },
+        "history": [dict(r) for r in run.scan_history(keys=None)],
+    }
+
+
+@dataclass
+class _LocalTable:
+    """Minimal wandb.Table stand-in: exposes ``.columns`` and ``.data``."""
+
+    columns: list
+    data: list
+
+
+class LocalArtifact:
+    """A wandb.Artifact stand-in backed by a directory of downloaded files.
+
+    Serves the read surface the fetch code uses: ``.name``, ``.get(table)`` (for
+    the sigmas/clips W&B tables) and ``.download(root)`` (for the baseline pkl).
+    """
+
+    def __init__(self, name: str, directory: Path):
+        self.name = name
+        self._directory = Path(directory)
+
+    def get(self, table_name: str) -> _LocalTable:
+        path = self._directory / f"{table_name}.table.json"
+        payload = json.loads(path.read_text())
+        return _LocalTable(columns=payload["columns"], data=payload["data"])
+
+    def download(self, root: str | None = None) -> str:
+        if root is None or Path(root) == self._directory:
+            return str(self._directory)
+        shutil.copytree(self._directory, root, dirs_exist_ok=True)
+        return str(root)
+
+
+class LocalRun:
+    """A wandb.Run stand-in backed by a dumped manifest (+ artifact dir).
+
+    Exposes the same read surface the fetch code uses against a live run, so an
+    archived run can be replayed through ``_fetch_one_run`` after the original is
+    deleted from W&B.
+    """
+
+    def __init__(self, manifest: dict, artifact_root: Path | None):
+        self._manifest = manifest
+        self._artifact_root = artifact_root
+        meta = manifest["meta"]
+        self.id = meta["id"]
+        self.name = meta["name"]
+        self.tags = list(meta.get("tags") or [])
+        self.state = meta.get("state")
+        self.notes = meta.get("notes")
+        self.group = meta.get("group")
+        self.job_type = meta.get("job_type")
+        self.created_at = meta.get("created_at")
+        self.url = meta.get("url")
+        self.config = manifest["config"]
+        self.summary = manifest["summary"]
+
+    def scan_history(self, keys: list[str] | None = None) -> Generator[dict]:
+        for row in self._manifest["history"]:
+            yield dict(row) if keys is None else {k: row[k] for k in keys}
+
+    def logged_artifacts(self) -> list[LocalArtifact]:
+        out: list[LocalArtifact] = []
+        for entry in self._manifest.get("artifacts", []):
+            if entry.get("kind") != "logged":
+                continue
+            directory = Path(self._artifact_root) / entry["dir"]
+            out.append(LocalArtifact(name=entry["name"], directory=directory))
+        return out
+
+
+def _safe_dir_name(name: str) -> str:
+    """Filesystem-safe subdir name for an artifact (``sigmas:v1`` → ``sigmas-v1``)."""
+    return name.replace(":", "-").replace("/", "-")
+
+
+# ---------------------------------------------------------------------------
+# Archive writer / reader
+# ---------------------------------------------------------------------------
+
+_MANIFESTS_SUBDIR = "manifests"
+_ARTIFACTS_SUBDIR = "artifacts"
+
+
+def _dump_run_to_dir(run: Any, api: Any, entity: str, project: str, run_dir: Path) -> dict:
+    """Download a run's manifest + every artifact it touches under ``run_dir``.
+
+    Returns the manifest, augmented with an ``artifacts`` index recording each
+    downloaded artifact's name, on-disk subdir, and kind (``logged`` for the
+    sigmas/clips tables, ``referenced`` for the baseline pulled by run id).
+    """
+    manifest = build_run_manifest(run)
+    artifacts_root = run_dir / _ARTIFACTS_SUBDIR
+    index: list[dict] = []
+
+    for art in run.logged_artifacts():
+        sub = _safe_dir_name(art.name)
+        art.download(root=str(artifacts_root / sub))
+        index.append({"name": art.name, "dir": sub, "kind": "logged"})
+
+    baseline_name = f"baseline-{run.id}:latest"
+    baseline = api.artifact(f"{entity}/{project}/{baseline_name}")
+    sub = _safe_dir_name(baseline_name)
+    baseline.download(root=str(artifacts_root / sub))
+    index.append({"name": baseline_name, "dir": sub, "kind": "referenced"})
+
+    manifest["artifacts"] = index
+    return manifest
+
+
+def _dump_one_run(
+    entity: str, project: str, run_id: str, staging_dir: Path, api: Any = None
+) -> dict:
+    """Worker: fetch one run and dump its manifest + artifacts under staging.
+
+    Builds its own per-thread ``wandb.Api`` (via ``_get_api``) so no client state
+    is shared across worker threads — exactly like ``_fetch_one_run``. Tests and
+    the archive round-trip inject their own api instead. Each run's files land in
+    ``staging/<run_id>/`` (unique per run), so concurrent workers never collide.
+    """
+    if api is None:
+        api = _get_api()
+    run = api.run(f"{entity}/{project}/{run_id}")
+    run_dir = Path(staging_dir) / run_id
+    return _dump_run_to_dir(run, api, entity, project, run_dir)
+
+
+def write_full_archive(
+    run_ids: list[str],
+    api: Any,
+    entity: str,
+    project: str,
+    zip_path: str | Path,
+    num_workers: int = 8,
+) -> list[dict]:
+    """Write a lossless, zipped archive of the given runs.
+
+    Layout inside the zip:
+
+        manifests/<run_id>.json                     full config/summary/meta/history
+        artifacts/<run_id>/<artifact>/<files...>    every logged + referenced artifact
+
+    The archive is self-describing and can be reopened with ``open_full_archive``
+    to replay each run through ``_fetch_one_run`` after the originals are deleted.
+
+    Runs are downloaded concurrently across ``num_workers`` threads (each worker
+    uses its own ``wandb.Api``; pass ``api=None`` for that). Downloads stage to a
+    temp dir, then the archive is zipped once serially (``zipfile`` is not
+    thread-safe). A run that fails to download is collected into the returned
+    skip-list rather than aborting the whole archive.
+    """
+    zip_path = Path(zip_path)
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    missing: list[dict] = []
+    workers = max(1, num_workers)
+    with tempfile.TemporaryDirectory() as staging:
+        staging_dir = Path(staging)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(_dump_one_run, entity, project, run_id, staging_dir, api): run_id
+                for run_id in run_ids
+            }
+            for fut in as_completed(futures):
+                run_id = futures[fut]
+                try:
+                    manifest = fut.result()
+                except Exception as exc:
+                    missing.append({"run_id": run_id, "reason": str(exc)})
+                    continue
+                # Manifests are written from this single thread (after the worker
+                # returns), so no concurrent writers touch the manifests dir.
+                manifest_path = staging_dir / _MANIFESTS_SUBDIR / f"{run_id}.json"
+                manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                manifest_path.write_text(json.dumps(manifest))
+
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for path in sorted(staging_dir.rglob("*")):
+                if path.is_file():
+                    zf.write(path, path.relative_to(staging_dir).as_posix())
+    return missing
+
+
+class LocalApi:
+    """A wandb.Api stand-in that replays runs from a full-config archive."""
+
+    def __init__(self, root: Path):
+        self._root = Path(root)
+        # Map every referenced artifact's qualified name → its extracted dir, so
+        # api.artifact("e/p/baseline-<id>:latest") resolves without a network.
+        self._referenced: dict[str, Path] = {}
+        for manifest_path in (self._root / _MANIFESTS_SUBDIR).glob("*.json"):
+            manifest = json.loads(manifest_path.read_text())
+            run_id = manifest["meta"]["id"]
+            arts_root = self._root / run_id / _ARTIFACTS_SUBDIR
+            for entry in manifest.get("artifacts", []):
+                if entry.get("kind") == "referenced":
+                    self._referenced[entry["name"]] = arts_root / entry["dir"]
+
+    def run(self, path: str) -> LocalRun:
+        run_id = path.split("/")[-1]
+        manifest = json.loads((self._root / _MANIFESTS_SUBDIR / f"{run_id}.json").read_text())
+        return LocalRun(manifest, artifact_root=self._root / run_id / _ARTIFACTS_SUBDIR)
+
+    def artifact(self, path: str) -> LocalArtifact:
+        name = path.split("/")[-1]
+        directory = self._referenced[name]
+        return LocalArtifact(name=name, directory=directory)
+
+
+def open_full_archive(zip_path: str | Path) -> LocalApi:
+    """Extract a full-config archive and return a LocalApi over its contents."""
+    extract_dir = Path(tempfile.mkdtemp(prefix="full-config-"))
+    root = extract_dir.resolve()
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for member in zf.infolist():
+            dest = (extract_dir / member.filename).resolve()
+            if not dest.is_relative_to(root):
+                raise RuntimeError(f"unsafe path in archive: {member.filename!r}")
+        zf.extractall(extract_dir)
+    return LocalApi(extract_dir)
+
+
+# ---------------------------------------------------------------------------
 # Per-run fetch
 # ---------------------------------------------------------------------------
 
@@ -344,7 +599,7 @@ def _baseline_means(api: wandb.Api, entity: str, project: str, run_id: str) -> p
     artifact = api.artifact(f"{entity}/{project}/{name}")
     # Explicit per-artifact root: known before the download starts so the claim
     # guard covers the actual write window (see _claim_download_dir).
-    root = str(ARTIFACT_ROOT / name.replace(":", "-").replace("/", "-"))
+    root = str(ARTIFACT_ROOT / _safe_dir_name(name))
     with _claim_download_dir(root, owner=name):
         local = Path(artifact.download(root=root))
     pkls = list(local.glob("*.pkl"))
@@ -381,11 +636,13 @@ def _final_schedule_arrays(run: Any) -> tuple[list[float], list[float]]:
 
 
 def _fetch_one_run(
-    entity: str, project: str, run_id: str
+    entity: str, project: str, run_id: str, api: Any = None
 ) -> tuple[list[dict], list[dict], list[dict]]:
     # Use a per-thread Api so the run object and its client are never shared
     # across threads (see _get_api). Re-fetching by id is one cheap GraphQL call.
-    api = _get_api()
+    # A caller may inject an api (e.g. a LocalApi replaying an archive).
+    if api is None:
+        api = _get_api()
     run = api.run(f"{entity}/{project}/{run_id}")
     cfg = run.config
     env = cfg.get("env", {}) or {}
@@ -484,6 +741,9 @@ class FetchConfig:
     """If >0, fetch only this many runs (debugging)."""
     num_workers: int = 8
     """Number of parallel threads used to fetch runs. 1 = sequential."""
+    full_config: bool = False
+    """Also write full_config.zip — a lossless archive (full config/summary/meta/
+    history + every artifact) so the W&B runs can be deleted and later replayed."""
 
 
 def main(conf: FetchConfig) -> None:
@@ -540,6 +800,19 @@ def main(conf: FetchConfig) -> None:
     print(f"  schedules.parquet: {len(schedules_df)} rows")
     print(f"  histories.parquet: {len(histories_df)} rows")
     print(f"  missing.csv:       {len(missing_df)} runs")
+
+    if conf.full_config:
+        zip_path = out_dir / "full_config.zip"
+        run_ids = [run_id for run_id, _ in run_meta]
+        # Pass api=None: workers build their own per-thread Api (see _dump_one_run)
+        # rather than sharing this main-thread client across threads.
+        archive_missing = write_full_archive(
+            run_ids, None, conf.entity, conf.project, zip_path, conf.num_workers
+        )
+        archived = len(run_ids) - len(archive_missing)
+        print(f"  full_config.zip:   {archived} runs archived (lossless)")
+        for m in archive_missing:
+            print(f"    archive-skipped {m['run_id']}: {m['reason']}")
 
 
 if __name__ == "__main__":

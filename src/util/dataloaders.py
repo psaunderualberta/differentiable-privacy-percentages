@@ -247,8 +247,9 @@ def _eyepacs_download_and_cache(datadir: str) -> None:
     """Download EyePACS from Kaggle, resize images to 256x256 RGB, and save as .npy.
 
     Requires the Kaggle API token at ~/.kaggle/kaggle.json and the kaggle
-    package to be installed. Images are written one-by-one via np.memmap so
-    the full dataset is never held in RAM simultaneously.
+    package to be installed. Images are written one-by-one via a memory-mapped
+    .npy (np.lib.format.open_memmap) so the full dataset is never held in RAM
+    simultaneously.
 
     Produces four files:
         eyepacs-train.npy         (N_train, 3, 256, 256) uint8
@@ -328,7 +329,11 @@ def _eyepacs_download_and_cache(datadir: str) -> None:
         lbl_file = os.path.join(datadir, f"eyepacs-labels-{split_name}.npy")
 
         print(f"Processing {split_name} split ({n} images)...")
-        mmap = np.memmap(img_file + ".tmp", dtype=np.uint8, mode="w+", shape=(n, 3, size, size))
+        # open_memmap (not np.memmap) so the file carries a real .npy header —
+        # a raw memmap is headerless and np.load(mmap_mode="r") later rejects it.
+        mmap = np.lib.format.open_memmap(
+            img_file + ".tmp", mode="w+", dtype=np.uint8, shape=(n, 3, size, size)
+        )
         labels_arr = np.zeros((n, n_classes), dtype=np.float32)
 
         for i, row in enumerate(split_rows):
@@ -612,7 +617,11 @@ def _chexpert_download_and_cache(datadir: str) -> None:
         lbl_file = os.path.join(datadir, f"chexpert-labels-{split_name}.npy")
 
         print(f"Processing {split_name} split ({n} images)...")
-        mmap = np.memmap(img_file + ".tmp", dtype=np.uint8, mode="w+", shape=(n, 1, size, size))
+        # open_memmap (not np.memmap) so the file carries a real .npy header —
+        # a raw memmap is headerless and np.load(mmap_mode="r") later rejects it.
+        mmap = np.lib.format.open_memmap(
+            img_file + ".tmp", mode="w+", dtype=np.uint8, shape=(n, 1, size, size)
+        )
         for i, rel_path in enumerate(rows["Path"]):
             img_path = os.path.join(datadir, rel_path)
             with Image.open(img_path) as img:
