@@ -125,7 +125,20 @@ def _reconstruct_from_dict(obj, d: dict):
 
 
 def _get_config():
-    """Parse CLI args into SingletonConfig, merging a prior W&B run's config if requested."""
+    """Parse CLI args into SingletonConfig, merging a prior W&B run's config if requested.
+
+    When ``restart_run_id``/``checkpoint_run_id`` is set, the source run's saved
+    ``sweep`` config is fetched from the W&B *server* and reconstructed *on top
+    of* the CLI args, so it wins: CLI ``--sweep.*`` overrides (e.g.
+    ``--sweep.num_outer_steps``) are silently ignored on resume, and the source
+    run must exist on W&B (a ``disabled``-mode run cannot be resumed).  A
+    consequence: resuming an already-completed run yields
+    ``range(start_step, num_outer_steps)`` empty → zero new outer steps → empty
+    logging tables, which then crash ``logger.bulk_line_plots``/``logger.finish``
+    with ``pandas.errors.EmptyDataError`` at teardown (the checkpoint data is
+    already safe; only the final plotting fails).  A genuine job-chain resubmit
+    always has at least one new step and does not hit this.
+    """
     SingletonConfig.config = tyro.cli(
         Config,
         config=(tyro.conf.SuppressFixed, tyro.conf.CascadeSubcommandArgs),

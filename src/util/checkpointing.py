@@ -21,9 +21,15 @@ Restoring
 ---------
 `load_checkpoint` first looks for the checkpoint on disk (local saves from
 prior runs on this machine).  Only if nothing is found locally does it attempt
-to download from W&B, so it works fully offline as long as the local checkpoint
-directory exists.  Returns ``(restored_state, start_step)`` where
+to download from W&B.  Returns ``(restored_state, start_step)`` where
 ``start_step = saved_step + 1``, or ``None`` if neither source is available.
+
+Note that `load_checkpoint` *in isolation* can restore from local disk with no
+network.  End-to-end resume via ``main.py`` is NOT offline-capable, however:
+when ``checkpoint_run_id`` is set, ``conf/singleton_conf.py`` fetches the source
+run's config from the W&B *server* (``wandb.Api().run(...)``) before this
+function is ever called, so the source run must exist on W&B.  A run created in
+``disabled`` mode was never uploaded and cannot be resumed.
 
 W&B branching
 -------------
@@ -173,6 +179,13 @@ def load_checkpoint(
     -------
     ``(restored_state, start_step)`` where ``start_step = saved_step + 1``,
     or ``None`` if the checkpoint cannot be found or restored from either source.
+
+    Note
+    ----
+    This function restores from local disk without a network, but resuming
+    through ``main.py`` is not offline-capable: ``conf/singleton_conf.py``
+    fetches the source run's config from the W&B server before this is called
+    (see the module docstring).
     """
     checkpointer = ocp.StandardCheckpointer()
 
