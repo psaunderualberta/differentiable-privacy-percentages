@@ -68,10 +68,15 @@ def _remote_checkpoint_exists(entity: str, project: str, run_id: str) -> bool:
     the in-progress run's history).  Any lookup error is treated as "does not
     exist" so a genuine first run is never blocked.
     """
+    collection = f"{entity}/{project}/{_artifact_name(run_id)}"
     try:
-        return any(True for _ in wandb.Api().artifacts("checkpoint", collection))
-    except Exception:
-        # Fail closed: if we can't verify absence, assume a remote checkpoint exists to avoid clobbering.
+        return wandb.Api().artifact_collection_exists(collection, "checkpoint")
+    except Exception as e:
+        print(e.args[0])
+        # Fail closed: if we can't verify absence (auth/network error), assume a
+        # remote checkpoint exists so we never restart from step 0 and clobber an
+        # in-progress run.  A genuinely-missing collection returns False cleanly
+        # (no exception), so a real first run is not blocked.
         return True
 
 
