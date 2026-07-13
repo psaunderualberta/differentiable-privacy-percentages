@@ -560,7 +560,12 @@ class LocalApi:
 def open_full_archive(zip_path: str | Path) -> LocalApi:
     """Extract a full-config archive and return a LocalApi over its contents."""
     extract_dir = Path(tempfile.mkdtemp(prefix="full-config-"))
+    root = extract_dir.resolve()
     with zipfile.ZipFile(zip_path, "r") as zf:
+        for member in zf.infolist():
+            dest = (extract_dir / member.filename).resolve()
+            if not dest.is_relative_to(root):
+                raise RuntimeError(f"unsafe path in archive: {member.filename!r}")
         zf.extractall(extract_dir)
     return LocalApi(extract_dir)
 
