@@ -23,7 +23,7 @@ from policy.stateful_schedules.abstract import (
 from util.logger import LoggingSchema
 from util.util import (
     classification_accuracy,
-    clip_grads_abadi,
+    clip_grads_psac,
     get_spherical_noise,
     poisson_buffer_indices,
     reinit_model,
@@ -479,7 +479,7 @@ def train_with_stateful_noise(
         noise = new_schedule_state.get_noise()
 
         # Clip gradients (masking invalid buffer rows; divisor stays L)
-        clipped_grads = clip_grads_abadi(grads, clip, valid_t)
+        clipped_grads = clip_grads_psac(grads, clip, valid_t)
 
         # Add spherical noise to gradients
         noise_key, _key = jr.split(noise_key)

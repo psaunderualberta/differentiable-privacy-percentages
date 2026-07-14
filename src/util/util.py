@@ -122,7 +122,7 @@ def sum_clipped_per_example_grads(
     return jax.tree.unflatten(grads_treedef, summed)
 
 
-def clip_grads_abadi(grads: eqx.Module, C: Array, valid: Array | None = None) -> eqx.Module:
+def clip_grads_psac(grads: eqx.Module, C: Array, valid: Array | None = None) -> eqx.Module:
     """Clip per-example gradients using the Abadi smooth global-norm clipping rule.
 
     Returns the *mean* clipped gradient (sum of clipped per-example gradients
