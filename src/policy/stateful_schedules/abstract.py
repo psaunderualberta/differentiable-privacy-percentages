@@ -1,7 +1,7 @@
 from abc import abstractmethod
 
 import equinox as eqx
-from jaxtyping import Array
+from jaxtyping import Array, PyTree
 
 from util.logger import Loggable, LoggableArray, LoggingSchema
 
@@ -37,6 +37,20 @@ class AbstractStatefulNoiseAndClipSchedule(eqx.Module):
         valid: Array,
     ) -> AbstractScheduleState:
         raise NotImplementedError("Subclasses must implement update_state method.")
+
+    def postprocess_update(
+        self,
+        noised_grads: PyTree,
+        state: AbstractScheduleState,
+    ) -> PyTree:
+        """Post-process the noised gradient before the optimiser step.
+
+        Default is the identity. Subclasses may override to decouple the effective
+        step size from the clip threshold — this acts on the *already-privatised*
+        (clipped + noised) gradient, so it is pure post-processing and consumes no
+        additional privacy budget.
+        """
+        return noised_grads
 
     @abstractmethod
     def get_logging_schemas(self) -> list[LoggingSchema]:

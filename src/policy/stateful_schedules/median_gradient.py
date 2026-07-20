@@ -1,7 +1,8 @@
+import jax
 import jax.numpy as jnp
 import optax
 from jax import vmap
-from jaxtyping import Array, ArrayLike
+from jaxtyping import Array, ArrayLike, PyTree
 
 from conf.singleton_conf import SingletonConfig
 from policy.stateful_schedules._registry import register
@@ -58,6 +59,13 @@ class StatefulMedianGradientNoiseAndClipSchedule(AbstractStatefulNoiseAndClipSch
             c_0: Initial gradient clipping threshold.
             eta_c: Learning rate for the exponential clip update rule.
             privacy_params: GDP privacy parameters used to derive σ from C and μ₀.
+
+        The noised update is normalised by ``C_t`` before the optimiser step (see
+        :meth:`postprocess_update`), decoupling the effective step size from the
+        absolute clip magnitude so the model no longer freezes as ``C_t`` tracks the
+        shrinking median gradient norm toward zero — the Andrew-et-al.-faithful fix
+        (their server learning rate plays the same decoupling role). This is
+        privacy-neutral: it post-processes the already-privatised gradient.
         """
         self.c_0 = jnp.asarray(c_0)
         self.eta_c = jnp.asarray(eta_c)
@@ -96,6 +104,22 @@ class StatefulMedianGradientNoiseAndClipSchedule(AbstractStatefulNoiseAndClipSch
         new_sigma = new_C / self.privacy_params.mu_0
 
         return self.MedianGradientScheduleState(C=new_C, sigma=new_sigma)
+
+    def postprocess_update(
+        self,
+        noised_grads: PyTree,
+        state: AbstractScheduleState,
+    ) -> PyTree:
+        """Divide the noised clipped gradient by ``C_t``.
+
+        The optimiser sees ``(ḡ_clip + noise) / C_t``.
+        The signal ``ḡ_clip / C_t`` is an O(1) direction and the noise term becomes
+        ``z / (μ₀·L)`` — constant in ``C_t`` — so the effective step no longer
+        collapses as ``C_t`` decays toward zero. Pure post-processing of the already
+        privatised gradient, so the privacy calibration is unchanged.
+        """
+        C = state.get_clip()
+        return jax.tree.map(lambda g: g / C, noised_grads)
 
     def get_logging_schemas(self) -> list[LoggingSchema]:
         plot_interval = SingletonConfig.get_sweep_config_instance().plotting_interval

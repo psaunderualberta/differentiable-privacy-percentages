@@ -486,6 +486,11 @@ def train_with_stateful_noise(
         noises = get_spherical_noise(clipped_grads, noise, clip, _key)
         noised_grads = eqx.apply_updates(clipped_grads, noises)
 
+        # Privacy-neutral post-processing of the already-privatised gradient (the
+        # median schedule normalises the update by C_t to decouple the effective
+        # step size from the clip magnitude). Default is a no-op.
+        noised_grads = schedule.postprocess_update(noised_grads, new_schedule_state)
+
         # Update model
         updates, new_opt_state = optimizer.update(noised_grads, opt_state, model)
         new_model = eqx.apply_updates(model, updates)
