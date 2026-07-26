@@ -21,6 +21,7 @@ import tyro
 from jax import random as jr
 
 from sr_category import CategoryMap
+from transfer_launch import condition_source_id
 from util.transfer import SourcePolicy, TargetSpec
 
 
@@ -28,13 +29,14 @@ def equation_source(category: int, condition: dict) -> SourcePolicy:
     """The ``SourcePolicy`` for a distilled condition transferred as an equation.
 
     A condition is not a single learned run, so its provenance IS the condition
-    ``(dataset, eps, T, arch)``, tagged by an fs-safe id (it becomes part of the
-    cell filename). ``delta`` and ``p`` are NaN: a category map carries neither.
+    ``(dataset, eps, T, arch)``, tagged by an fs-safe id from
+    ``transfer_launch.condition_source_id`` — shared with the SLURM launcher, whose
+    skip filter must predict the cell filename this id becomes part of. ``delta``
+    and ``p`` are NaN: a category map carries neither.
     """
     dataset, arch = condition["dataset"], condition["arch_label"]
-    run_id = f"{dataset}_eps{condition['eps']:g}_T{int(condition['T'])}_{arch}_cat{category}"
     return SourcePolicy(
-        run_id=run_id,
+        run_id=condition_source_id(category, condition),
         dataset=str(dataset),
         eps=float(condition["eps"]),
         delta=float("nan"),

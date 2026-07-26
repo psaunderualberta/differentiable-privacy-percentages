@@ -8,6 +8,8 @@ budget before it is evaluated.
 """
 
 import dataclasses
+import os
+import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Self
@@ -114,17 +116,35 @@ def write_transfer_cell(df: pd.DataFrame, cache_root: Path | str) -> Path:
 
     The cell filename embeds the (source_id, target, target_eps, target_T) key so
     each SLURM cell owns a distinct file; the assembler later globs them together.
+    The name comes from ``transfer_launch.cell_filename`` — the launcher's skip
+    filter looks for exactly this path, so the two must not drift apart.
+
+    The write is atomic (temp file in the same directory + ``os.replace``): array
+    tasks are killed at the wall clock, and a half-written parquet would be
+    indistinguishable from a finished cell to both the assembler and the skip filter.
     """
+    from transfer_launch import Target, cell_filename
+
     producer = df["producer"].iloc[0]
-    src_id = df["source_id"].iloc[0]
-    target = df["target"].iloc[0]
-    t_eps = df["target_eps"].iloc[0]
-    t_T = df["target_T"].iloc[0]
+    src_id = str(df["source_id"].iloc[0])
+    target = Target(
+        dataset=str(df["target"].iloc[0]),
+        eps=float(df["target_eps"].iloc[0]),
+        T=int(df["target_T"].iloc[0]),
+    )
 
     out_dir = Path(cache_root) / "transfer" / str(producer)
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{src_id}__{target}__eps{t_eps}_T{t_T}.parquet"
-    df.to_parquet(out_path, index=False)
+    out_path = out_dir / cell_filename(src_id, target)
+
+    with tempfile.NamedTemporaryFile(dir=out_dir, suffix=".parquet", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        df.to_parquet(tmp_path, index=False)
+        os.replace(tmp_path, out_path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
     return out_path
 
 
