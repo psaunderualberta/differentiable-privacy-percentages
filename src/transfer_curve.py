@@ -6,6 +6,7 @@ carry the (privacy-neutral) clip curve across, and run the shared eval core.
 """
 
 import dataclasses
+import math
 from pathlib import Path
 
 import numpy as np
@@ -54,6 +55,43 @@ def load_source_policies(
         clips = group["clip"].to_numpy(dtype=float)
         records.append((source, sigmas, clips))
     return records
+
+
+def select_sources(
+    records: list[tuple[SourcePolicy, np.ndarray, np.ndarray]],
+    dataset: str = "",
+    eps: float = float("nan"),
+    T: int = 0,
+    arch: str = "",
+    run_id: str = "",
+) -> list[tuple[SourcePolicy, np.ndarray, np.ndarray]]:
+    """Select the source policies one invocation transfers.
+
+    The job unit is a source *regime*: an unset field is simply not filtered on, so
+    a full regime filter keeps every seed-policy learned under that
+    ``(dataset, eps, T, arch)`` and no filter at all keeps the whole parquet.
+    ``run_id`` is the debug escape hatch and overrides the regime entirely.
+
+    An empty selection raises rather than returning ``[]``: a job that writes no
+    cell is indistinguishable from a crashed one, and under the launcher's skip
+    filter it would be silently retried forever.
+    """
+    if run_id:
+        selected = [r for r in records if r[0].run_id == run_id]
+        criteria = f"source_run_id={run_id!r}"
+    else:
+        selected = [
+            r
+            for r in records
+            if (not dataset or r[0].dataset == dataset)
+            and (math.isnan(eps) or r[0].eps == eps)
+            and (not T or r[0].T == T)
+            and (not arch or r[0].arch == arch)
+        ]
+        criteria = f"regime(dataset={dataset!r}, eps={eps}, T={T}, arch={arch!r})"
+    if not selected:
+        raise SystemExit(f"no source policy matches {criteria}")
+    return selected
 
 
 def schedule_data_to_results(df: pd.DataFrame) -> list[tuple[int, float, float]]:
@@ -162,8 +200,18 @@ class CurveCellConfig:
     cache_root: str = "cache"
     num_reps: int = 8
     seed: int = 0
+
+    # --- Source selection ------------------------------------------------------------
+    # A curve job's unit is one source *regime*: every seed-policy learned under the
+    # same (dataset, eps, T, arch) is transferred by one invocation, because ADR 0008
+    # reports their spread as that regime's generalization consistency. Unset fields
+    # are not filtered on, so no flags at all means "every policy in the parquet".
+    source_dataset: str = ""
+    source_eps: float = float("nan")
+    source_T: int = 0
+    source_arch: str = ""
     source_run_id: str = ""
-    """If set, transfer only this source run; otherwise every source policy in the parquet."""
+    """Debug escape hatch: transfer only this one run, ignoring the regime filter."""
 
 
 def main(conf: CurveCellConfig) -> None:
@@ -174,13 +222,14 @@ def main(conf: CurveCellConfig) -> None:
         T=conf.target_T,
         arch=conf.target_arch,
     )
-    records = load_source_policies(conf.schedules_parquet)
-    if conf.source_run_id:
-        records = [r for r in records if r[0].run_id == conf.source_run_id]
-        if not records:
-            raise SystemExit(
-                f"source_run_id {conf.source_run_id!r} not in {conf.schedules_parquet}"
-            )
+    records = select_sources(
+        load_source_policies(conf.schedules_parquet),
+        dataset=conf.source_dataset,
+        eps=conf.source_eps,
+        T=conf.source_T,
+        arch=conf.source_arch,
+        run_id=conf.source_run_id,
+    )
 
     for source, sigmas, clips in records:
         out = run_curve_cell(

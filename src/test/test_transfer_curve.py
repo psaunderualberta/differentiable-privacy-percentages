@@ -2,8 +2,9 @@ import math
 
 import numpy as np
 import pandas as pd
+import pytest
 
-from transfer_curve import load_source_policies, resample_curve
+from transfer_curve import load_source_policies, resample_curve, select_sources
 from util.transfer import SourcePolicy
 
 
@@ -152,3 +153,48 @@ class TestScheduleDataToResults:
 
         # Rep index becomes the seed; accuracy/loss carried through in order.
         assert results == [(0, 0.81, 0.42), (1, 0.79, 0.45), (2, 0.80, 0.44)]
+
+
+def _policy(run_id, dataset="mnist", eps=1.0, T=200, arch="cnn"):
+    source = SourcePolicy(
+        run_id=run_id, dataset=dataset, eps=eps, delta=1e-7, T=T, p=0.01, arch=arch
+    )
+    return (source, np.ones(T), np.ones(T))
+
+
+def _ids(records):
+    return [source.run_id for source, _, _ in records]
+
+
+class TestSelectSources:
+    """One curve invocation transfers one source *regime* — every seed-policy under
+    the same (dataset, ε, T, arch) — because ADR 0008 reports their spread as that
+    regime's generalization consistency. An unset field is not filtered on."""
+
+    def test_regime_filter_keeps_every_seed_policy_in_that_regime(self):
+        records = [
+            _policy("runA"),
+            _policy("runB"),
+            _policy("otherArch", arch="mlp"),
+            _policy("otherEps", eps=8.0),
+        ]
+
+        selected = select_sources(records, dataset="mnist", eps=1.0, T=200, arch="cnn")
+
+        assert _ids(selected) == ["runA", "runB"]
+
+    def test_no_filter_selects_everything(self):
+        records = [_policy("runA"), _policy("otherArch", arch="mlp")]
+
+        assert _ids(select_sources(records)) == ["runA", "otherArch"]
+
+    def test_run_id_overrides_the_regime_filter(self):
+        # The debug escape hatch: pin one run without restating its regime.
+        records = [_policy("runA"), _policy("runB")]
+
+        assert _ids(select_sources(records, run_id="runB")) == ["runB"]
+
+    def test_a_regime_with_no_policies_is_an_error_not_an_empty_run(self):
+        # A silently-empty job would write no cell and look identical to a crash.
+        with pytest.raises(SystemExit):
+            select_sources([_policy("runA")], dataset="eyepacs")
