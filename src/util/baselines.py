@@ -11,9 +11,9 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import tqdm
+import wandb
 from jaxtyping import Array, PRNGKeyArray
 
-import wandb
 from environments.dp import (
     DPTrainingParams,
     train_with_noise,
@@ -39,9 +39,35 @@ file_location = os.path.abspath(os.path.dirname(__file__))
 
 
 _BASELINE_CACHE_VERSION = "v2"
+
 """Bumped whenever the baselines' mechanism changes, because ``restore_from_cache``
 keys only on ``run_id`` and would otherwise fail open and restore stale numbers.
 v2 = the adaptive-clip baseline privatises its count release (ADR 0013)."""
+
+
+# The native references, in the order generate_baseline_data has always swept them.
+# The order is load-bearing: reference_sweep_keys reproduces the original sequential
+# key split, so changing it would silently change every reference's results.
+REFERENCES = (
+    "Adaptive Clip (Andrew et al.)",
+    "Dynamic-DPSGD",
+    "Constant σ/clip",
+)
+
+
+def reference_sweep_keys(key: PRNGKeyArray) -> dict[str, PRNGKeyArray]:
+    """The per-reference sweep key, as a pure function of the master key.
+
+    Reproduces ``generate_baseline_data``'s original running-split so a reference
+    swept in isolation (one SLURM job per reference, per the transfer launcher)
+    draws exactly the parameters it would have drawn in the combined sweep — the
+    subset stays comparable to previously generated baselines.
+    """
+    keys = {}
+    for reference in REFERENCES:
+        key, sweep_key = jr.split(key)
+        keys[reference] = sweep_key
+    return keys
 
 
 def _baseline_path(run_id: str) -> pathlib.Path:
@@ -434,59 +460,78 @@ class Baseline:
             best_schedule, name, with_progress_bar=with_progress_bar, test_data=True
         )
 
+    def sweep_reference(
+        self,
+        reference: str,
+        key: PRNGKeyArray,
+        with_progress_bar: bool = True,
+    ) -> pd.DataFrame:
+        """Sweep one native reference and return its final-eval rows.
+
+        Split out of ``generate_baseline_data`` so the transfer launcher can run
+        each reference as its own SLURM job (they are the longest stage, and
+        sharing a job would serialise three sweeps behind one wall clock). The
+        ``key`` comes from :func:`reference_sweep_keys`, so a reference swept alone
+        sees exactly the key it would have seen in the combined sweep.
+        """
+        if reference == "Adaptive Clip (Andrew et al.)":
+            params = [
+                lambda key: jr.uniform(key, shape=(), minval=0.01, maxval=5.0),  # c_0
+                lambda key: jr.uniform(key, shape=(), minval=0.01, maxval=1.0),  # eta_C
+                lambda _: self.privacy_params,  # privacy_params
+            ]
+            df, _ = self.baseline_sweep(
+                key,
+                params,
+                reference,
+                StatefulMedianGradientNoiseAndClipSchedule,
+                with_progress_bar=with_progress_bar,
+            )
+            return df
+
+        if reference == "Dynamic-DPSGD":
+            params = [
+                lambda key: jr.uniform(key, shape=(), minval=0.5, maxval=5.0),  # rho_mu
+                lambda key: jr.uniform(key, shape=(), minval=0.5, maxval=5.0),  # rho_c
+                lambda key: jr.uniform(key, shape=(), minval=0.5, maxval=5.0),  # c_0
+                lambda _: self.privacy_params,  # privacy_params
+            ]
+            df, dynamic_schedule = self.baseline_sweep(
+                key,
+                params,
+                reference,
+                DynamicDPSGDSchedule,
+                with_progress_bar=with_progress_bar,
+            )
+            self.best_dynamic_schedule: DynamicDPSGDSchedule = cast(
+                DynamicDPSGDSchedule, dynamic_schedule
+            )
+            return df
+
+        if reference == "Constant σ/clip":
+            return self._constant_schedule_sweep(key, with_progress_bar=with_progress_bar)
+
+        raise ValueError(f"unknown reference {reference!r}; expected one of {REFERENCES}")
+
     def generate_baseline_data(
         self,
         key: PRNGKeyArray,
         with_progress_bar: bool = True,
+        references: tuple[str, ...] = REFERENCES,
     ) -> pd.DataFrame:
-        name = "Adaptive Clip (Andrew et al.)"
-        params = [
-            lambda key: jr.uniform(key, shape=(), minval=0.01, maxval=5.0),  # c_0
-            lambda key: jr.uniform(key, shape=(), minval=0.01, maxval=1.0),  # eta_C
-            lambda _: self.privacy_params,  # privacy_params
+        """Sweep the native references and return their concatenated final-eval rows.
+
+        ``references`` narrows the sweep without perturbing it: each one is keyed by
+        :func:`reference_sweep_keys`, so a subset produces byte-identical rows to the
+        same references inside the full run.
+        """
+        keys = reference_sweep_keys(key)
+        frames = [
+            self.sweep_reference(reference, keys[reference], with_progress_bar=with_progress_bar)
+            for reference in references
         ]
 
-        key, sweep_key = jr.split(key)
-        median_df, _ = self.baseline_sweep(
-            sweep_key,
-            params,
-            name,
-            StatefulMedianGradientNoiseAndClipSchedule,
-            with_progress_bar=with_progress_bar,
-        )
-
-        name = "Dynamic-DPSGD"
-        params = [
-            lambda key: jr.uniform(key, shape=(), minval=0.5, maxval=5.0),  # rho_mu
-            lambda key: jr.uniform(key, shape=(), minval=0.5, maxval=5.0),  # rho_c
-            lambda key: jr.uniform(key, shape=(), minval=0.5, maxval=5.0),  # c_0
-            lambda _: self.privacy_params,  # privacy_params
-        ]
-
-        key, sweep_key = jr.split(key)
-        dynamic_df, dynamic_schedule = self.baseline_sweep(
-            sweep_key,
-            params,
-            name,
-            DynamicDPSGDSchedule,
-            with_progress_bar=with_progress_bar,
-        )
-        self.best_dynamic_schedule: DynamicDPSGDSchedule = cast(
-            DynamicDPSGDSchedule, dynamic_schedule
-        )
-
-        # c_0 = jnp.asarray(2.5)
-        # rho_mu = jnp.asarray(2)
-        # rho_c = jnp.asarray(2)
-        # schedule = DynamicDPSGDSchedule(rho_mu, rho_c, c_0, self.privacy_params)
-
-        key, sweep_key = jr.split(key)
-        constant_df = self._constant_schedule_sweep(
-            sweep_key,
-            with_progress_bar=with_progress_bar,
-        )
-
-        self.original_df = pd.concat([median_df, dynamic_df, constant_df], axis=0)
+        self.original_df = pd.concat(frames, axis=0)
         self.df = self.original_df.copy()
 
         return self.df.copy()
