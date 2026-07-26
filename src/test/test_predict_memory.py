@@ -72,7 +72,9 @@ def _heuristic_mem(cfg: CNNConfig, T: int) -> int:
     P = pm._param_count(net)
     fm = pm._conv_feature_map_elements(cfg, _INPUT_SHAPE[-2], _INPUT_SHAPE[-1])
     peak = pm._heuristic_bytes(1, T, _BATCH, P, fm)
-    return pm._next_pow2_gib(peak, 1)
+    # max_gib high enough not to clamp: these cases probe the tier the heuristic
+    # would ask for, not what the launcher caps it to.
+    return pm._next_pow2_gib(peak, 1, 1024)
 
 
 @pytest.mark.parametrize("name", list(_CASES))

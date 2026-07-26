@@ -143,7 +143,9 @@ _HEURISTIC_FIXED_BASE_BYTES = 256 * 2**20  # runtime + dataset host->device stag
 # that keeps the worst case (default CNN) safe. Verified against compiled peaks
 # for the default / width / depth CNN ladders at T=1000 and T=5000: every case
 # lands on its correct power-of-two tier or one tier high (width@5000: 16G->32G,
-# the safe direction), none under-provisions. This is a coarse safety net that
+# the safe direction). The estimate itself is not always an upper bound — the
+# CIFAR-10 depth-1 rung at T=5000 predicts 28.29 GiB against a compiled 29.76 —
+# but the gap stayed inside the tier. This is a coarse safety net that
 # only fires on compile OOM — the exact compiled path is preferred for CNNs.
 _HEURISTIC_CONV_ACT_ALPHA = 0.30
 

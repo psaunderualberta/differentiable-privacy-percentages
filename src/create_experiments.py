@@ -106,8 +106,12 @@ def _to_run_config(
 # Shared privacy / optimisation budget.
 DELTA: float = 1e-6
 BATCH_SIZE: int = 250  # T=250 ≈ 1 MNIST epoch (N=60 000)
-DATASETS: list[str] = ["mnist", "fashion-mnist"]
-NUM_OUTER_STEPS: int = 3000
+# The two axes no longer share a dataset list: the arch axis adds CIFAR-10, while
+# the T-sweep re-runs later as a separate launch (its defaults are all CNNs, so
+# ADR 0010 invalidates it too) and stays on the 28x28 pair for now.
+T_SWEEP_DATASETS: list[str] = ["mnist", "fashion-mnist"]
+LADDER_DATASETS: list[str] = ["mnist", "fashion-mnist", "cifar-10"]
+NUM_OUTER_STEPS: int = 1000
 SEEDS: tuple[int, ...] = tuple(range(8))
 
 # --- Axis 1: vary T, architecture fixed at the dataset-default CNN ---
@@ -124,21 +128,48 @@ OPTIMIZERS: list[OptimizerConfig] = [
         learning_rate=dist_config_helper(value=0.1, distribution="constant"),
         momentum=dist_config_helper(value=0.9, distribution="constant"),
     ),
+    # Second arm: the same matrix with the private network's inner momentum off.
+    SGDConfig(
+        learning_rate=dist_config_helper(value=0.1, distribution="constant"),
+        momentum=dist_config_helper(value=0.0, distribution="constant"),
+    ),
     # AdamConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
     # AdamWConfig(learning_rate=dist_config_helper(value=1e-3, distribution="constant")),
 ]
 
 
 def _opt_tag(opt: OptimizerConfig) -> str:
-    return type(opt).__name__.removesuffix("Config").lower()
+    """Name the optimizer *and* the arm it belongs to (ADR 0011).
+
+    The private network's inner momentum is an arm — the whole axis matrix is
+    replicated under each value — so it has to be visible on the run itself, not
+    just in the W&B project it happened to land in. Optimizers with no momentum
+    field (Adam/AdamW) keep their bare name. ``compile_results_fetch.
+    resolve_optimizer`` reproduces this scheme independently; the naming is the
+    contract between them.
+    """
+    name = type(opt).__name__.removesuffix("Config").lower()
+    momentum = getattr(opt, "momentum", None)
+    if momentum is None:
+        return name
+    assert momentum.distribution == "constant", (
+        f"{name} momentum must be constant to name an arm, "
+        f"got distribution={momentum.distribution!r}"
+    )
+    return f"{name}-m{momentum.value}"
 
 
 def _arch_ladder_tags() -> list[tuple[MLPConfig | CNNConfig, list[str]]]:
     """Invert LADDERS into ``[(unique arch, [ladder tags])]``.
 
-    Architectures shared across ladders (e.g. the width/depth anchor) are emitted
-    once with the union of their ``ladder:<name>`` tags, so the W&B run is created
-    a single time and downstream tooling reads its membership from the tags.
+    Architectures shared across ladders are emitted once with the union of their
+    ``ladder:<name>`` tags, so the W&B run is created a single time and
+    downstream tooling reads its membership from the tags.
+
+    Distinct architectures must not share an ``_arch_label``: the label keys a
+    forest-plot row, and it drops kernel/stride/padding, so a collision would
+    silently merge two rungs into one row. No collision exists in the current
+    matrix; the assertion is what keeps it that way.
     """
     unique: list[tuple[MLPConfig | CNNConfig, list[str]]] = []
     for ladder_name, archs in LADDERS.items():
@@ -151,6 +182,10 @@ def _arch_ladder_tags() -> list[tuple[MLPConfig | CNNConfig, list[str]]]:
                     break
             else:
                 unique.append((arch, [tag]))
+
+    labels = [_arch_label(arch) for arch, _tags in unique]
+    duplicates = {lbl for lbl in labels if labels.count(lbl) > 1}
+    assert not duplicates, f"distinct architectures share an _arch_label: {sorted(duplicates)}"
     return unique
 
 
@@ -221,7 +256,7 @@ def _build_experiments() -> dict[str, list[tuple[list[str], str, str, SweepConfi
         bucket: list[tuple[list[str], str, str, SweepConfig]] = []
 
         # Axis 1: T-sweep — dataset-default arch, full eps breadth.
-        for ds in DATASETS:
+        for ds in T_SWEEP_DATASETS:
             for eps in T_SWEEP_EPSILONS:
                 for T in T_VALUES:
                     arch = DATASET_NETWORK_DEFAULTS[ds]
@@ -236,8 +271,8 @@ def _build_experiments() -> dict[str, list[tuple[list[str], str, str, SweepConfi
                             )
                         )
 
-        # Axis 2: architecture ladders — deduped archs, eps=8 only, T fixed.
-        for ds in DATASETS:
+        # Axis 2: architecture ladders — deduped archs, single eps, T fixed.
+        for ds in LADDER_DATASETS:
             for eps in LADDER_EPSILONS:
                 for arch, ladder_tags in _arch_ladder_tags():
                     T = T_FOR_ARCH_SWEEP

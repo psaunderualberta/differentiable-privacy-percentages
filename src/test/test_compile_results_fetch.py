@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -428,3 +429,136 @@ class TestMainFullConfigWiring:
         crf.main(conf)
 
         assert called["n"] == 0
+
+
+class TestResolveOptimizer:
+    """The optimizer column carries the arm (inner SGD momentum), per ADR 0011."""
+
+    def test_sgd_momentum_arms_get_distinct_names(self):
+        assert crf.resolve_optimizer({"optimizer": {"_type": "SGDConfig", "momentum": 0.9}}) == (
+            "sgd-m0.9"
+        )
+        assert crf.resolve_optimizer({"optimizer": {"_type": "SGDConfig", "momentum": 0.0}}) == (
+            "sgd-m0.0"
+        )
+
+    def test_momentum_may_arrive_as_a_distribution_dict(self):
+        env = {"optimizer": {"_type": "SGDConfig", "momentum": {"value": 0.9}}}
+        assert crf.resolve_optimizer(env) == "sgd-m0.9"
+
+    def test_adam_and_adamw_stay_bare(self):
+        # Cached FixedParallelSweep / ParallelSCSweep runs must still re-fetch.
+        assert crf.resolve_optimizer({"optimizer": {"_type": "AdamConfig"}}) == "adam"
+        assert crf.resolve_optimizer({"optimizer": {"_type": "AdamWConfig"}}) == "adamw"
+
+    def test_legacy_runs_without_momentum_stay_bare(self):
+        assert crf.resolve_optimizer({"optimizer": "sgd"}) == "sgd"
+        assert crf.resolve_optimizer({"optimizer": {"_type": "SGDConfig"}}) == "sgd"
+
+    def test_unknown_optimizer_is_rejected(self):
+        with pytest.raises(ValueError):
+            crf.resolve_optimizer({"optimizer": {"_type": "RMSPropConfig"}})
+
+
+class TestReadOffMetadata:
+    """Per-run metadata needed to read accuracies at a common step (ADR 0014)."""
+
+    def test_records_the_last_outer_step_each_run_reached(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        api = FakeApi(FakeRunWithArtifacts(), _baseline_df())
+
+        scalars, _sch, _hist = crf._fetch_one_run("e", "p", "abc123", api=api)
+
+        # Two history rows → outer steps 0 and 1.
+        assert {s["final_outer_step"] for s in scalars} == {1}
+
+    def test_learned_8rep_evaluation_is_kept_alongside_the_1rep_read(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        bdf = pd.concat(
+            [
+                _baseline_df(),
+                pd.DataFrame(
+                    [
+                        {"type": "Learned Schedule", "accuracy": 0.7, "loss": 0.5},
+                        {"type": "Learned Schedule", "accuracy": 0.9, "loss": 0.3},
+                    ]
+                ),
+            ]
+        )
+        api = FakeApi(FakeRunWithArtifacts(), bdf)
+
+        scalars, _sch, _hist = crf._fetch_one_run("e", "p", "abc123", api=api)
+
+        by_sched = {s["schedule"]: s for s in scalars}
+        # The 1-rep final-history read stays the headline number...
+        assert by_sched["Learned Schedule"]["mean_acc"] == 0.9
+        assert by_sched["Learned Schedule"]["n_reps"] == 1
+        # ...with the multi-rep evaluation recorded beside it for comparison.
+        assert by_sched["Learned Schedule"]["learned_acc_8rep"] == pytest.approx(0.8)
+        # It is not a schedule row of its own.
+        assert set(by_sched) == {"Learned Schedule", "Constant σ/clip"}
+
+    def test_learned_8rep_is_absent_for_a_run_that_stopped_for_a_chain_hop(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        api = FakeApi(FakeRunWithArtifacts(), _baseline_df())
+
+        scalars, _sch, _hist = crf._fetch_one_run("e", "p", "abc123", api=api)
+
+        by_sched = {s["schedule"]: s for s in scalars}
+        assert by_sched["Learned Schedule"]["learned_acc_8rep"] is None
+
+
+class TestCnnParamCountGuard:
+    """The fetch-side param model must not drift from the network it describes.
+
+    ``_cnn_param_count`` models the intended halving-pool geometry (ADR 0010); when
+    the built network disagreed with it, ``arch_param_count`` was wrong by ~5x and
+    nothing noticed.
+    """
+
+    @pytest.mark.parametrize(
+        "net",
+        [
+            # cnn-width: aggressive-downsampling block.
+            {
+                "channels": [8, 16],
+                "kernel_sizes": [8, 4],
+                "paddings": [2, 0],
+                "strides": [2, 2],
+                "pool_kernel_size": 2,
+                "mlp": {"hidden_sizes": [64]},
+            },
+            # cnn-depth: same-conv block, downsampling carried by the pool.
+            {
+                "channels": [16, 16, 16],
+                "kernel_sizes": [3, 3, 3],
+                "paddings": [1, 1, 1],
+                "strides": [1, 1, 1],
+                "pool_kernel_size": 2,
+                "mlp": {"hidden_sizes": [64]},
+            },
+        ],
+    )
+    @pytest.mark.parametrize("dataset", ["mnist", "cifar-10"])
+    def test_modelled_count_matches_a_built_network(self, net, dataset):
+        input_shape, nclasses = DATASET_SHAPES[dataset]
+        assert crf._cnn_param_count(input_shape, net, nclasses) == crf._built_cnn_param_count(
+            input_shape, net, nclasses
+        )
+
+    def test_guard_passes_on_the_current_code(self):
+        crf.assert_cnn_param_counts_consistent()
+
+
+class TestMlpParamCountGuard:
+    """Same guard for the MLP model, which feeds both the ladder and CNN heads."""
+
+    @pytest.mark.parametrize("hidden", [[], [64], [128], [512], [128, 128]])
+    def test_modelled_count_matches_a_built_network(self, hidden):
+        input_shape, nclasses = DATASET_SHAPES["mnist"]
+        din = int(np.prod(input_shape))
+        assert crf._mlp_param_count(din, hidden, nclasses) == crf._built_mlp_param_count(
+            din, hidden, nclasses
+        )
