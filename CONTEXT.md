@@ -202,5 +202,43 @@ target at the target budget. They are distinct and must not be conflated:
 - **Constant** — best flat σ/clip found by a sweep.
 - **DynamicDPSGD** (arXiv:2111.00173) — a *prescribed, closed-form* dynamic
   schedule; deterministic given its params, **not** data-adaptive at runtime.
-- **StatefulMedianGradient** (NeurIPS 2021) — a *runtime-adaptive* schedule that
-  sets σ/clip from per-step gradient-median statistics.
+- **StatefulMedianGradient** (Andrew et al., NeurIPS 2021) — a *runtime-adaptive*
+  schedule that drives C toward the quantile target using the **within-clip fraction**,
+  and sets σ = C/μ_grad.
+
+### Adaptive clipping
+
+**Within-clip fraction**:
+The per-step statistic b̄ — the fraction of the batch whose per-example gradient norm
+falls at or below the current clip threshold C_t. The quantity the adaptive-clipping
+schedule privatises and steers; the gradient *median* is the fixed point it converges
+to, never a quantity that is estimated directly.
+_Avoid_: median estimate, median gradient norm, clipped count.
+
+**Quantile target (γ)**:
+The value the within-clip fraction is driven toward by the geometric update
+C ← C·exp(−η_C(b̄ − γ)). γ = 0.5 makes the fixed point the median norm.
+_Avoid_: target quantile fraction, gamma.
+
+**Count release**:
+The privatised release of the within-clip fraction: the ±½-encoded indicator sum plus
+Gaussian noise, divided by the *expected* batch size L. Jointly Gaussian with the
+gradient release over the same batch, so the two share one per-step budget.
+_Avoid_: quantile mechanism, b-bar noise.
+
+**Count noise ratio (r)**:
+The knob controlling how much of the per-step budget the count release consumes,
+expressed the way Andrew et al. express it: the count's noise is one *r*-th of the
+expected batch size. Because the release is divided by that same expected batch size,
+r fixes the *standard error of the within-clip fraction* (1/r) independently of the
+privacy regime — the property that makes a single default value meaningful across the
+whole (ε, T) grid. Andrew's default is r = 20.
+_Avoid_: sigma_b, count noise, quantile noise.
+
+**Median budget fraction (ρ)**:
+The share of the per-step GDP budget spent on the count release rather than the
+gradient release: μ_count² = ρ·μ₀² and μ_grad² = (1−ρ)·μ₀². **Derived, not chosen** —
+it follows from the count noise ratio and the regime. Reported as the diagnostic that
+says how much privacy honest adaptivity cost; the thing that makes the adaptive
+baseline genuinely (ε,δ)-DP at an unchanged total budget.
+_Avoid_: privacy split, epsilon share, noise fraction.

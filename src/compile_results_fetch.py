@@ -17,6 +17,7 @@ Usage (from src/):
 
 from __future__ import annotations
 
+import itertools
 import json
 import shutil
 import tempfile
@@ -179,9 +180,13 @@ _OPTIMIZER_TYPE_TO_NAME: dict[str, str] = {
     "AdamWConfig": "adamw",
 }
 
+# The learned schedule's own name in the baseline artifact's ``type`` column; it
+# is not a baseline, so it is excluded from _BASELINE_SCHEDULES below.
+LEARNED_SCHEDULE: str = "Learned Schedule"
+
 _BASELINE_SCHEDULES: tuple[str, ...] = (
     "Constant σ/clip",
-    "Clip to Median Gradient Norm",
+    "Adaptive Clip (Andrew et al.)",
     "Dynamic-DPSGD",
 )
 
@@ -192,14 +197,14 @@ _BASELINE_SCHEDULES: tuple[str, ...] = (
 
 
 def _mlp_param_count(din: int, hidden_sizes: list[int], nclasses: int) -> int:
+    """Weights + biases of a Linear/tanh stack — the network MLP.from_config builds.
+
+    An earlier version added 2 affine parameters per hidden unit, for a
+    normalisation layer the MLP does not have; ``assert_mlp_param_counts_consistent``
+    is what now keeps this honest.
+    """
     sizes = [din, *hidden_sizes, nclasses]
-    total = 0
-    for i in range(len(sizes) - 1):
-        a, b = sizes[i], sizes[i + 1]
-        total += a * b + b
-        if i < len(sizes) - 2:
-            total += 2 * b
-    return total
+    return sum(a * b + b for a, b in itertools.pairwise(sizes))
 
 
 def _cnn_param_count(input_shape: tuple[int, ...], net: dict, nclasses: int) -> int:
@@ -224,15 +229,110 @@ def _cnn_param_count(input_shape: tuple[int, ...], net: dict, nclasses: int) -> 
     return total
 
 
+def _built_param_count(conf: Any, input_shape: tuple[int, ...], nclasses: int) -> int:
+    """Parameter count of the network the training code actually builds from ``conf``.
+
+    JAX and the network package are imported lazily, so the fetch script keeps its
+    no-JAX import path for every other use; only the guards below pay for it.
+    """
+    import equinox as eqx
+    import jax
+
+    from networks._registry import build
+    from networks.cnn.CNN import CNN  # noqa: F401 — triggers @register(CNNConfig)
+    from networks.mlp.MLP import MLP  # noqa: F401 — triggers @register(MLPConfig)
+
+    model = build(conf, (1, *input_shape), (1, nclasses))
+    leaves = jax.tree.leaves(eqx.filter(model, eqx.is_array))
+    return int(sum(leaf.size for leaf in leaves))
+
+
+def _built_cnn_param_count(input_shape: tuple[int, ...], net: dict, nclasses: int) -> int:
+    from networks.cnn.config import CNNConfig
+    from networks.mlp.config import MLPConfig
+
+    conf = CNNConfig(
+        channels=tuple(net["channels"]),
+        kernel_sizes=tuple(net["kernel_sizes"]),
+        paddings=tuple(net["paddings"]),
+        strides=tuple(net["strides"]),
+        pool_kernel_size=net["pool_kernel_size"],
+        mlp=MLPConfig(hidden_sizes=tuple(net["mlp"]["hidden_sizes"])),
+    )
+    return _built_param_count(conf, input_shape, nclasses)
+
+
+def _built_mlp_param_count(din: int, hidden_sizes: list[int], nclasses: int) -> int:
+    from networks.mlp.config import MLPConfig
+
+    return _built_param_count(MLPConfig(hidden_sizes=tuple(hidden_sizes)), (din,), nclasses)
+
+
+def assert_mlp_param_counts_consistent() -> None:
+    """Guard ``_mlp_param_count`` against the built network (see below)."""
+    for dataset in ("mnist", "cifar-10"):
+        input_shape, nclasses = DATASET_SHAPES[dataset]
+        din = 1
+        for d in input_shape:
+            din *= d
+        for hidden in ([], [64], [128], [512], [128, 128]):
+            modelled = _mlp_param_count(din, hidden, nclasses)
+            built = _built_mlp_param_count(din, hidden, nclasses)
+            if modelled != built:
+                raise AssertionError(
+                    f"_mlp_param_count({dataset}, hidden={hidden}) = {modelled} "
+                    f"disagrees with the built network's {built} parameters"
+                )
+
+
+def assert_cnn_param_counts_consistent() -> None:
+    """Guard ``_cnn_param_count``'s geometry model against the built network.
+
+    The modelled count assumes a *halving* pool. When the pool was silently
+    stride-1 (ADR 0010) the two disagreed by ~5x and ``arch_param_count`` was
+    wrong for every CNN run, with nothing to catch it — the same failure mode
+    ``assert_shapes_consistent`` guards for ``DATASET_SHAPES``.
+    """
+    probes: list[dict] = [
+        *_AUTO_CNN.values(),
+        # The same-conv block of the cnn-depth ladder: all downsampling is the pool's.
+        {
+            "channels": [16, 16, 16],
+            "kernel_sizes": [3, 3, 3],
+            "paddings": [1, 1, 1],
+            "strides": [1, 1, 1],
+            "pool_kernel_size": 2,
+            "mlp": {"hidden_sizes": [64]},
+        },
+    ]
+    for dataset in ("mnist", "cifar-10"):
+        input_shape, nclasses = DATASET_SHAPES[dataset]
+        for net in probes:
+            modelled = _cnn_param_count(input_shape, net, nclasses)
+            built = _built_cnn_param_count(input_shape, net, nclasses)
+            if modelled != built:
+                raise AssertionError(
+                    f"_cnn_param_count({dataset}, channels={net['channels']}) = {modelled} "
+                    f"disagrees with the built network's {built} parameters"
+                )
+
+
 # ---------------------------------------------------------------------------
 # Config interpretation
 # ---------------------------------------------------------------------------
 
 
 def resolve_optimizer(env_dict: dict) -> str:
-    """Map ``env.optimizer`` to {"sgd", "adam", "adamw"}.
+    """Name the optimizer and, for SGD, the arm it belongs to (ADR 0011).
 
-    Handles both legacy literal-string runs and current OptimizerConfig dicts.
+    Returns e.g. ``"sgd-m0.9"`` / ``"sgd-m0.0"`` — the private network's inner
+    momentum is an arm, and pooling the arms into one ``"sgd"`` column would make
+    the difference invisible in every figure. Adam/AdamW carry no momentum and
+    stay bare, as do legacy runs that predate the arm (literal-string optimizers,
+    or configs with no momentum recorded), so cached sweeps still re-fetch.
+
+    ``create_experiments._opt_tag`` reproduces this scheme independently; the
+    naming is the contract between them.
     """
     opt = env_dict.get("optimizer")
     if isinstance(opt, str):
@@ -242,9 +342,17 @@ def resolve_optimizer(env_dict: dict) -> str:
         return name
     if isinstance(opt, dict):
         t = opt.get("_type")
-        if t in _OPTIMIZER_TYPE_TO_NAME:
-            return _OPTIMIZER_TYPE_TO_NAME[t]
-        raise ValueError(f"unknown OptimizerConfig _type: {t!r}")
+        if t not in _OPTIMIZER_TYPE_TO_NAME:
+            raise ValueError(f"unknown OptimizerConfig _type: {t!r}")
+        name = _OPTIMIZER_TYPE_TO_NAME[t]
+        # Serialised either as the DistributionConfig's scalar .value or as the
+        # nested dict, depending on which writer produced the run config.
+        momentum = opt.get("momentum")
+        if isinstance(momentum, dict):
+            momentum = momentum.get("value")
+        if momentum is None:
+            return name
+        return f"{name}-m{float(momentum)}"
     raise ValueError(f"missing or unrecognised env.optimizer: {opt!r}")
 
 
@@ -675,18 +783,31 @@ def _fetch_one_run(
     history = _history(run)
     learned_acc = history[-1]["test_acc"]
     learned_loss = history[-1]["test_loss"]
+    # Runs do not all reach the same step, so the step this run stopped at is part
+    # of what its accuracy means (ADR 0014); the plot layer reads each cell back
+    # at the minimum step common to its seeds.
+    common["final_outer_step"] = history[-1]["outer_step"]
     bdf = _baseline_means(api, entity, project, run.id)
     means = bdf.groupby("type")[["accuracy", "loss"]].mean()
     counts = bdf.groupby("type").size()
+
+    # The baseline artifact also holds a multi-rep evaluation of the learned
+    # schedule, written only when the run did not stop for a chain hop. Kept
+    # beside the 1-rep history read (never replacing it) so the two can be
+    # checked against each other on the completed-run subset.
+    learned_acc_8rep = (
+        float(means.loc[LEARNED_SCHEDULE, "accuracy"]) if LEARNED_SCHEDULE in means.index else None
+    )
 
     scalars: list[dict] = []
     scalars.append(
         {
             **common,
-            "schedule": "Learned Schedule",
+            "schedule": LEARNED_SCHEDULE,
             "mean_acc": learned_acc,
             "mean_loss": learned_loss,
             "n_reps": 1,
+            "learned_acc_8rep": learned_acc_8rep,
         }
     )
     for sched in _BASELINE_SCHEDULES:

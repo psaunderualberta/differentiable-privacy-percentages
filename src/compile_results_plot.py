@@ -68,20 +68,20 @@ from networks.mlp.config import MLPConfig
 
 LEARNED = "Learned Schedule"
 CONSTANT = "Constant σ/clip"
-MEDIAN = "Clip to Median Gradient Norm"
+ADAPTIVE_CLIP = "Adaptive Clip (Andrew et al.)"
 DYNAMIC = "Dynamic-DPSGD"
 
-SCHEDULE_ORDER: list[str] = [LEARNED, DYNAMIC, MEDIAN, CONSTANT]
+SCHEDULE_ORDER: list[str] = [LEARNED, DYNAMIC, ADAPTIVE_CLIP, CONSTANT]
 SCHEDULE_SHORT: dict[str, str] = {
     LEARNED: "Learned",
     DYNAMIC: "Dynamic-DPSGD",
-    MEDIAN: "Median-Clip",
+    ADAPTIVE_CLIP: "Adaptive-Clip",
     CONSTANT: "Constant",
 }
 SCHEDULE_COLORS: dict[str, str] = {
     LEARNED: "#1f77b4",
     DYNAMIC: "#d62728",
-    MEDIAN: "#2ca02c",
+    ADAPTIVE_CLIP: "#2ca02c",
     CONSTANT: "#7f7f7f",
 }
 
@@ -178,6 +178,80 @@ def _xaxis_ladder(df: pd.DataFrame, ordered_labels: list[str]) -> XAxis:
 # ---------------------------------------------------------------------------
 # Aggregation
 # ---------------------------------------------------------------------------
+
+
+# The condition a run belongs to — everything but the seed. A cell's seeds are
+# the runs that agree on all of these.
+_CELL_KEYS: list[str] = ["optimizer", "dataset", "eps", "T", "arch_label"]
+
+
+def read_off_at_common_step(scalars: pd.DataFrame, histories: pd.DataFrame) -> pd.DataFrame:
+    """Re-read each cell's learned accuracy at the step common to all its seeds.
+
+    Runs are fetched whether or not they finished, and a run killed at outer step
+    25 would otherwise contribute the same kind of dot as one that genuinely
+    diverged. Reading every seed of a cell at the *minimum* step any of them
+    reached makes the numbers one quantity again, at the price of truncating the
+    cell to its slowest seed — which is why ``read_off_step`` is added as a column
+    and reported in every caption (ADR 0014).
+
+    Baseline rows come from a single end-of-run evaluation and cannot be re-read
+    per step, so their values are left untouched; they still carry their cell's
+    ``read_off_step``.
+    """
+    out = scalars.copy()
+    if histories.empty or "final_outer_step" not in out.columns:
+        out["read_off_step"] = out.get("final_outer_step")
+        return out
+
+    keys = [k for k in _CELL_KEYS if k in out.columns and k in histories.columns]
+    step = (
+        out.groupby(keys, dropna=False)["final_outer_step"]
+        .min()
+        .rename("read_off_step")
+        .reset_index()
+    )
+    out = out.merge(step, on=keys, how="left")
+
+    at_step = histories.merge(
+        step, left_on=[*keys, "outer_step"], right_on=[*keys, "read_off_step"], how="inner"
+    )
+    at_step = at_step[[*keys, "seed", "test_acc", "test_loss"]].drop_duplicates(
+        subset=[*keys, "seed"]
+    )
+
+    merged = out.merge(at_step, on=[*keys, "seed"], how="left", suffixes=("", "_at_step"))
+    # A run absent from histories keeps its fetched value rather than going NaN.
+    rewritable = (out["schedule"] == LEARNED) & merged["test_acc"].notna()
+    out.loc[rewritable, "mean_acc"] = merged.loc[rewritable, "test_acc"].to_numpy()
+    out.loc[rewritable, "mean_loss"] = merged.loc[rewritable, "test_loss"].to_numpy()
+    return out
+
+
+def _range_text(values: pd.Series) -> tuple[str, bool] | None:
+    """``("8", True)`` / ``("5–8", False)``, or None if no value is known."""
+    vals = pd.Series(values).dropna()
+    if vals.empty:
+        return None
+    lo, hi = int(vals.min()), int(vals.max())
+    return (str(lo), True) if lo == hi else (f"{lo}–{hi}", False)
+
+
+def ci_caption(n: pd.Series, read_off_step: pd.Series | None = None) -> str:
+    """Caption stating the true per-cell ``n`` and the read-off step (ADR 0014).
+
+    Both are properties of the data rather than of the experiment design: seeds go
+    missing (a chained run mid-hop is not fetched) and cells are truncated to
+    their slowest seed, so a hardcoded "n=8 seeds" can be wrong in either
+    direction and the truncation is invisible unless the step is stated.
+    """
+    seeds = _range_text(n)
+    clause = f"n = {seeds[0]} seeds" if seeds else "n unknown"
+    step = _range_text(read_off_step) if read_off_step is not None else None
+    if step:
+        noun = "step" if step[1] else "steps"
+        clause += f"; read off at outer {noun} {step[0]}"
+    return f"shaded = 95% CI ({clause})"
 
 
 def _stderr(s: pd.Series) -> float:
@@ -349,7 +423,14 @@ def plot_main(
         bbox_to_anchor=(0.5, -0.02),
         frameon=False,
     )
-    fig.text(0.5, 0.005, "shaded = 95% CI (n=8 seeds)", ha="center", fontsize=7, style="italic")
+    fig.text(
+        0.5,
+        0.005,
+        ci_caption(agg["n"], df.get("read_off_step")),
+        ha="center",
+        fontsize=7,
+        style="italic",
+    )
     fig.tight_layout(rect=(0, 0.03, 1, 1))
     _save(fig, out_path_stem)
 
@@ -409,7 +490,14 @@ def plot_delta(
             ax.grid(True, alpha=0.3, linewidth=0.5)
 
     _label_facets(axes, datasets, epsilons, xaxis.label, ylabel)
-    fig.text(0.5, 0.005, "shaded = 95% CI (n=5 seeds)", ha="center", fontsize=7, style="italic")
+    fig.text(
+        0.5,
+        0.005,
+        ci_caption(delta["n"], df.get("read_off_step")),
+        ha="center",
+        fontsize=7,
+        style="italic",
+    )
     fig.tight_layout(rect=(0, 0.03, 1, 1))
     _save(fig, out_path_stem)
 
@@ -1291,6 +1379,9 @@ def main(conf: PlotConfig) -> None:
     histories = pd.read_parquet(histories_path) if histories_path.exists() else pd.DataFrame()
     if scalars.empty:
         raise SystemExit(f"scalars.parquet at {in_dir} is empty")
+
+    # Every accuracy below is a common-step read, not each run's own last step.
+    scalars = read_off_at_common_step(scalars, histories)
 
     out_root = Path(conf.out_dir) if conf.out_dir else in_dir / "plots"
     optimizers = list(conf.optimizers) if conf.optimizers else sorted(scalars["optimizer"].unique())

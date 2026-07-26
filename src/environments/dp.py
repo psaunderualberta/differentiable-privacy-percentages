@@ -465,8 +465,28 @@ def train_with_stateful_noise(
         # Reported loss over the m genuinely-included buffer rows only.
         new_loss = jnp.sum(per_losses * valid_t) / jnp.maximum(valid_t.sum(), 1.0)
 
-        # Update stateful schedule — the within-clip fraction (median statistic)
-        # is taken over the valid rows only.
+        # Step t clips and counts against the *incoming* threshold C_t; C_{t+1} is
+        # derived afterwards (Andrew et al. Algorithm 1, ADR 0013).
+        clip = schedule_state.get_clip()
+        noise = schedule_state.get_noise()
+
+        # Clip gradients (masking invalid buffer rows; divisor stays L)
+        clipped_grads = clip_grads_psac(grads, clip, valid_t)
+
+        # Add spherical noise to gradients
+        count_key = jr.fold_in(noise_key, iter_t)
+        noise_key, _key = jr.split(noise_key)
+        noises = get_spherical_noise(clipped_grads, noise, clip, _key)
+        noised_grads = eqx.apply_updates(clipped_grads, noises)
+
+        # Privacy-neutral post-processing of the already-privatised gradient (the
+        # adaptive-clip schedule normalises the update by C_t to decouple the effective
+        # step size from the clip magnitude). Default is a no-op.
+        noised_grads = schedule.postprocess_update(noised_grads, schedule_state)
+
+        # Advance the schedule. Any private release it makes from this batch (the
+        # count release) draws from a key folded off the gradient-noise stream, so
+        # the existing gradient-noise draws are unchanged.
         new_schedule_state = schedule.update_state(
             schedule_state,
             grads,
@@ -474,22 +494,8 @@ def train_with_stateful_noise(
             batch_x,
             batch_y,
             valid_t,
+            count_key,
         )
-        clip = new_schedule_state.get_clip()
-        noise = new_schedule_state.get_noise()
-
-        # Clip gradients (masking invalid buffer rows; divisor stays L)
-        clipped_grads = clip_grads_psac(grads, clip, valid_t)
-
-        # Add spherical noise to gradients
-        noise_key, _key = jr.split(noise_key)
-        noises = get_spherical_noise(clipped_grads, noise, clip, _key)
-        noised_grads = eqx.apply_updates(clipped_grads, noises)
-
-        # Privacy-neutral post-processing of the already-privatised gradient (the
-        # median schedule normalises the update by C_t to decouple the effective
-        # step size from the clip magnitude). Default is a no-op.
-        noised_grads = schedule.postprocess_update(noised_grads, new_schedule_state)
 
         # Update model
         updates, new_opt_state = optimizer.update(noised_grads, opt_state, model)

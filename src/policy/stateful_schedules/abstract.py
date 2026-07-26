@@ -1,7 +1,7 @@
 from abc import abstractmethod
 
 import equinox as eqx
-from jaxtyping import Array, PyTree
+from jaxtyping import Array, PRNGKeyArray, PyTree
 
 from util.logger import Loggable, LoggableArray, LoggingSchema
 
@@ -35,7 +35,15 @@ class AbstractStatefulNoiseAndClipSchedule(eqx.Module):
         batch_x: Array,
         batch_y: Array,
         valid: Array,
+        key: PRNGKeyArray,
     ) -> AbstractScheduleState:
+        """Advance the schedule state after a DP-SGD step.
+
+        Args:
+            key: Randomness for any *private release* the schedule makes from the
+                batch (e.g. the adaptive-clip count release). Schedules that read
+                nothing from the data ignore it.
+        """
         raise NotImplementedError("Subclasses must implement update_state method.")
 
     def postprocess_update(

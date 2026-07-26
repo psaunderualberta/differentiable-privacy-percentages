@@ -28,7 +28,7 @@ from util.transfer import (
 _REGIME_SLUGS = {
     "Constant σ/clip": "Constant",
     "Dynamic-DPSGD": "Dynamic-DPSGD",
-    "Clip to Median Gradient Norm": "Median",
+    "Adaptive Clip (Andrew et al.)": "Median",
 }
 
 

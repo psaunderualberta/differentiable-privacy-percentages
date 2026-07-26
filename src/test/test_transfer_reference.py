@@ -21,8 +21,8 @@ class TestBaselineDataToResults:
                     "Constant σ/clip",
                     "Constant σ/clip",
                     "Dynamic-DPSGD",
-                    "Clip to Median Gradient Norm",
-                    "Clip to Median Gradient Norm",
+                    "Adaptive Clip (Andrew et al.)",
+                    "Adaptive Clip (Andrew et al.)",
                 ],
                 "step": [0] * 5,
                 "loss": [0.4, 0.5, 0.3, 0.6, 0.55],
@@ -45,7 +45,7 @@ class TestBaselineDataToResults:
 class TestRegimeSlugsAreFilesystemSafe:
     """Regime slugs become a cell's source_id, which write_transfer_cell embeds in a
     filename. The raw ``type`` strings carry a path separator and whitespace ("Constant
-    σ/clip", "Clip to Median Gradient Norm"), so every slug must be path-safe."""
+    σ/clip", "Adaptive Clip (Andrew et al.)"), so every slug must be path-safe."""
 
     def test_no_slug_contains_a_path_separator_or_whitespace(self):
         for slug in regime_slugs():

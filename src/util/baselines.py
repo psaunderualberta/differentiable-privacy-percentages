@@ -38,12 +38,18 @@ from util.util import jnp2np2jnp
 file_location = os.path.abspath(os.path.dirname(__file__))
 
 
+_BASELINE_CACHE_VERSION = "v2"
+"""Bumped whenever the baselines' mechanism changes, because ``restore_from_cache``
+keys only on ``run_id`` and would otherwise fail open and restore stale numbers.
+v2 = the adaptive-clip baseline privatises its count release (ADR 0013)."""
+
+
 def _baseline_path(run_id: str) -> pathlib.Path:
-    return _ckpt_dir(run_id) / "baseline_data.pkl"
+    return _ckpt_dir(run_id) / f"baseline_data_{_BASELINE_CACHE_VERSION}.pkl"
 
 
 def _baseline_artifact_name(run_id: str) -> str:
-    return f"baseline-{run_id}"
+    return f"baseline-{_BASELINE_CACHE_VERSION}-{run_id}"
 
 
 class Baseline:
@@ -375,7 +381,7 @@ class Baseline:
     def _constant_schedule_sweep(
         self,
         key: PRNGKeyArray,
-        name: str = "Constant σ/clip",  # noqa: RUF001
+        name: str = "Constant σ/clip",
         num_runs_in_sweep: int = 20,
         with_progress_bar: bool = True,
     ) -> pd.DataFrame:
@@ -433,7 +439,7 @@ class Baseline:
         key: PRNGKeyArray,
         with_progress_bar: bool = True,
     ) -> pd.DataFrame:
-        name = "Clip to Median Gradient Norm"
+        name = "Adaptive Clip (Andrew et al.)"
         params = [
             lambda key: jr.uniform(key, shape=(), minval=0.01, maxval=5.0),  # c_0
             lambda key: jr.uniform(key, shape=(), minval=0.01, maxval=1.0),  # eta_C
