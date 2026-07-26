@@ -95,7 +95,13 @@ class CNN(eqx.Module, Network):
                     key=_key,
                 ),
                 jax.nn.tanh,
-                eqx.nn.MaxPool2d(kernel_size=conf.pool_kernel_size),
+                # Equinox defaults MaxPool2d to stride 1, which pools without
+                # downsampling. Halving is what every ladder's geometry assumes
+                # (ADR 0010).
+                eqx.nn.MaxPool2d(
+                    kernel_size=conf.pool_kernel_size,
+                    stride=conf.pool_kernel_size,
+                ),
             ]
             in_channels = out_channels
             blocks.append(new_layer)

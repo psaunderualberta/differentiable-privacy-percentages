@@ -222,3 +222,6 @@ cache/
 
 # weird julia files
 julia-*.out
+
+# Claude Code worktree tooling state
+.claude/worktrees/
