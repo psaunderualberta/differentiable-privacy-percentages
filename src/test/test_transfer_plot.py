@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from transfer_plot import nearest_source, overlay_cells, transfer_matrix
+from transfer_plot import nearest_source, overlay_cells, overlay_stats, transfer_matrix
 
 
 def _rows(source_id, seeds_accs, producer="curve", target="mnist", t_eps=1.0, t_T=200):
@@ -95,36 +95,81 @@ class TestNearestSource:
 
 
 class TestOverlayCells:
-    """The curve-vs-equation overlay is drawn for a cell only when BOTH producers
-    have a record for it (ADR 0008) — a presence-check join, the only place the
-    compare-when-both-exist rule lives. Reference cells never participate."""
+    """The curve-vs-equation overlay joins on the source REGIME, not the source
+    policy (ADR 0015): the two producers have different row granularity — curve's
+    unit is one seed's policy, equation's is a whole distilled condition — and a
+    condition has no per-seed identity to match on. Reference cells never
+    participate, and a cell is drawn only when both producers have a record."""
 
-    def test_only_cells_present_in_both_curve_and_equation(self):
+    def test_producers_join_on_the_source_regime_not_the_source_id(self):
+        # The two sides can never share a source_id: curve's is a W&B run id,
+        # equation's is a condition slug. They DO share the regime the policies
+        # were learned in, which is exactly what a condition is defined by.
         producers = {
             "curve": pd.concat(
                 [
-                    _rows("shared", [(0, 0.7)], producer="curve", target="mnist"),
-                    _rows("curve_only", [(0, 0.7)], producer="curve", target="mnist"),
+                    _rows("wandb_run_1", [(0, 0.7)], producer="curve"),
+                    _rows("wandb_run_2", [(0, 0.7)], producer="curve"),
                 ],
                 ignore_index=True,
             ),
-            "equation": pd.concat(
-                [
-                    _rows("shared", [(0, 0.8)], producer="equation", target="mnist"),
-                    _rows("eqn_only", [(0, 0.8)], producer="equation", target="mnist"),
-                ],
-                ignore_index=True,
-            ),
+            "equation": _rows("eyepacs_eps1_T200_cnn_cat1", [(0, 0.8)], producer="equation"),
             # A reference producer is present but must never enter the overlay set.
-            "reference": _rows("Constant", [(0, 0.6)], producer="reference", target="mnist"),
+            "reference": _rows("Constant", [(0, 0.6)], producer="reference"),
         }
 
         cells = overlay_cells(producers)
 
-        assert cells == [("shared", "mnist", 1.0, 200)]
+        # One cell — the shared regime — despite three distinct source_ids.
+        assert cells == [("eyepacs", 1.0, 200, "cnn", "mnist", 1.0, 200)]
+
+    def test_a_regime_only_one_producer_has_is_not_drawn(self):
+        curve = _rows("wandb_run_1", [(0, 0.7)], producer="curve")
+        equation = _rows("cond_cat1", [(0, 0.8)], producer="equation")
+        equation["source_arch"] = "mlp"  # a different source regime
+
+        assert overlay_cells({"curve": curve, "equation": equation}) == []
 
     def test_empty_when_equation_producer_absent(self):
         # Curve can run without the SR pipeline, so no equation cells means no overlay.
         producers = {"curve": _rows("runA", [(0, 0.7)], producer="curve")}
 
         assert overlay_cells(producers) == []
+
+
+class TestOverlayStats:
+    """Because the join is on the regime (ADR 0015), the curve side must be
+    aggregated across its seed-policies before it can be compared with the single
+    distilled condition. The figure therefore asserts 'this regime's policies,
+    pooled, vs their distilled form' — not one policy vs its own distillation."""
+
+    def test_curve_side_pools_every_policy_in_the_regime(self):
+        assembled = pd.concat(
+            [
+                _rows("wandb_run_1", [(0, 0.4), (1, 0.6)], producer="curve"),
+                _rows("wandb_run_2", [(0, 0.8), (1, 1.0)], producer="curve"),
+            ],
+            ignore_index=True,
+        )
+        cell = ("eyepacs", 1.0, 200, "cnn", "mnist", 1.0, 200)
+
+        mean, spread = overlay_stats(assembled, cell)
+
+        # Pooled over all four rows, not averaged per-policy-then-averaged.
+        assert mean == pytest.approx(0.7)
+        # The spread now mixes seed noise AND across-policy spread within the
+        # regime — wider than either policy's own seed spread (0.1).
+        assert spread > 0.1
+
+    def test_only_the_requested_cell_contributes(self):
+        assembled = pd.concat(
+            [
+                _rows("wandb_run_1", [(0, 0.4)], producer="curve", target="mnist"),
+                _rows("wandb_run_2", [(0, 1.0)], producer="curve", target="cifar-10"),
+            ],
+            ignore_index=True,
+        )
+
+        mean, _ = overlay_stats(assembled, ("eyepacs", 1.0, 200, "cnn", "mnist", 1.0, 200))
+
+        assert mean == pytest.approx(0.4)

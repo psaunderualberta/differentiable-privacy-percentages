@@ -21,9 +21,21 @@ from util.transfer import assemble_transfer
 # A source×target cell is keyed by the source policy and the target regime.
 _CELL_KEYS = ["producer", "source_id", "target", "target_eps", "target_T"]
 
-# The cell identity shared across producers (producer itself excluded): a curve cell
-# and an equation cell overlay iff they agree on these.
-_OVERLAY_KEYS = ["source_id", "target", "target_eps", "target_T"]
+# The cell identity shared across producers: a curve cell and an equation cell
+# overlay iff they agree on the source REGIME and the target (ADR 0015). NOT
+# source_id — curve's is a W&B run id and equation's is a condition slug, so they can
+# never compare equal; and a distilled condition has no per-seed identity to match
+# on anyway. target_arch is excluded: ADR 0007 derives it from the target dataset, so
+# it adds nothing but a chance of spurious label mismatch.
+_OVERLAY_KEYS = [
+    "source_dataset",
+    "source_eps",
+    "source_T",
+    "source_arch",
+    "target",
+    "target_eps",
+    "target_T",
+]
 
 
 def transfer_matrix(assembled: pd.DataFrame) -> pd.DataFrame:
@@ -67,16 +79,34 @@ def _cell_keys(df: pd.DataFrame) -> set[tuple]:
 def overlay_cells(producers: dict[str, pd.DataFrame]) -> list[tuple]:
     """Cells for which BOTH the curve and equation producers have a record.
 
-    A presence-check join (ADR 0008): the curve-vs-equation overlay is drawn only
-    where both producers evaluated the same source×target cell. Returns the sorted
-    intersection of their cell keys; empty if either producer is absent. Reference
-    cells never participate.
+    A presence-check join (ADR 0008), keyed on the source *regime* rather than the
+    source policy (ADR 0015): the overlay is drawn only where both producers
+    evaluated the same source regime × target. Returns the sorted intersection of
+    their cell keys; empty if either producer is absent. Reference cells never
+    participate.
     """
     curve = producers.get("curve")
     equation = producers.get("equation")
     if curve is None or equation is None:
         return []
     return sorted(_cell_keys(curve) & _cell_keys(equation))
+
+
+def overlay_stats(assembled: pd.DataFrame, cell: tuple) -> tuple[float, float]:
+    """One producer's mean and spread for an overlay cell, pooled over the regime.
+
+    The overlay joins on the source regime (ADR 0015), so the curve side — whose
+    row unit is one seed's policy — is pooled across *every* policy in the regime
+    before it is compared with the equation side's single distilled condition.
+    Consequence: the curve error bar mixes seed noise with across-policy spread
+    while the equation's is seed noise alone, so the two bars are not like-for-like
+    and must not be read as a significance test.
+    """
+    mask = pd.Series(True, index=assembled.index)
+    for key, value in zip(_OVERLAY_KEYS, cell):
+        mask &= assembled[key] == value
+    accuracy = assembled.loc[mask, "accuracy"]
+    return float(accuracy.mean()), float(accuracy.std(ddof=0))
 
 
 # ---------------------------------------------------------------------------
@@ -171,34 +201,26 @@ def plot_matrix(assembled: pd.DataFrame, producer: str, out_stem: Path) -> None:
 
 
 def plot_overlay(producers: dict[str, pd.DataFrame], out_stem: Path) -> None:
-    """Per-cell curve-vs-equation accuracy comparison, only where both exist.
+    """Per-regime curve-vs-equation accuracy comparison, only where both exist.
 
-    Draws one grouped point per shared source×target cell: curve-transfer mean±spread
-    beside equation-transfer mean±spread. Skips entirely when the two producers share
-    no cell (the compare-only-when-both-exist rule).
+    Draws one grouped point per shared source-regime × target cell (ADR 0015):
+    curve-transfer mean±spread beside equation-transfer mean±spread. Skips entirely
+    when the two producers share no regime (the compare-only-when-both-exist rule).
+    The curve side is pooled across the regime's seed-policies, so its error bar is
+    wider by construction than the equation's — see ``overlay_stats``.
     """
     cells = overlay_cells(producers)
     if not cells:
-        print("  [skip] no cells present in both curve and equation")
+        print("  [skip] no source regimes present in both curve and equation")
         return
 
-    curve = transfer_matrix(producers["curve"])
-    equation = transfer_matrix(producers["equation"])
-
-    def _lookup(m: pd.DataFrame, cell: tuple) -> tuple[float, float]:
-        src, tgt, eps, T = cell
-        row = m[
-            (m["source_id"] == src)
-            & (m["target"] == tgt)
-            & (m["target_eps"] == eps)
-            & (m["target_T"] == T)
-        ].iloc[0]
-        return float(row["mean_acc"]), float(row["spread"])
-
-    labels = [f"{s}\n{_target_label(t, e, tt)}" for (s, t, e, tt) in cells]
+    labels = [
+        f"{s_ds} ε={s_eps:g} T={int(s_T)} {s_arch}\n→ {_target_label(t, e, tt)}"
+        for (s_ds, s_eps, s_T, s_arch, t, e, tt) in cells
+    ]
     x = np.arange(len(cells))
-    curve_mu, curve_sd = zip(*(_lookup(curve, c) for c in cells))
-    eqn_mu, eqn_sd = zip(*(_lookup(equation, c) for c in cells))
+    curve_mu, curve_sd = zip(*(overlay_stats(producers["curve"], c) for c in cells))
+    eqn_mu, eqn_sd = zip(*(overlay_stats(producers["equation"], c) for c in cells))
 
     fig, ax = plt.subplots(figsize=(1.4 * len(cells) + 2.5, 4.0))
     ax.errorbar(
@@ -209,7 +231,7 @@ def plot_overlay(producers: dict[str, pd.DataFrame], out_stem: Path) -> None:
     ax.set_xticklabels(labels, fontsize=7, rotation=30, ha="right")
     ax.set_xlim(-0.5, len(cells) - 0.5)
     ax.set_ylabel("transfer accuracy")
-    ax.set_title("Curve vs equation transfer (shared cells)", fontsize=10)
+    ax.set_title("Curve vs equation transfer (shared source regimes)", fontsize=10)
     ax.grid(True, axis="y", alpha=0.3, linewidth=0.5)
     ax.legend(frameon=False)
     fig.tight_layout()
