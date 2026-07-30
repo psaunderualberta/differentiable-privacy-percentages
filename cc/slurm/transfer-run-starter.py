@@ -68,6 +68,7 @@ from transfer_launch import (
     serial_sbatch,
     source_regimes,
 )
+from util.py_launcher import emitted_launcher
 
 # Per-stage wall clocks. Reference is the long pole: it sweeps a reference's
 # hyperparameters and then evaluates, where the two shape producers only evaluate.
@@ -288,7 +289,7 @@ def main(conf: TransferSlurmConfig) -> None:
         _submit(
             serial_sbatch(
                 name="plot",
-                command=f"uv run --no-sync transfer_plot.py --cache_root {conf.cache_root}",
+                command=f"{emitted_launcher()} transfer_plot.py --cache_root {conf.cache_root}",
                 walltime=_WALLTIMES["plot"],
                 project_dir=conf.project_dir,
                 account=conf.account,

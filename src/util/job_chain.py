@@ -38,6 +38,8 @@ import subprocess
 import threading
 import time
 
+from util.py_launcher import python_launcher_argv
+
 _shutdown_requested = threading.Event()
 
 
@@ -109,8 +111,7 @@ def resubmit_if_requested(run_id: str) -> None:
         prereqs = ["--prerequisites", os.environ.get("SLURM_JOB_ID", "")]
 
     cmd = [
-        "uv",
-        "run",
+        *python_launcher_argv(),
         resubmit_script,
         "--run_id",
         run_id,

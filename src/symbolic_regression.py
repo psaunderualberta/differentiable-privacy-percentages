@@ -20,6 +20,7 @@ from sr_category import (
     template_param_names,
 )
 from sr_identity import canonical_identity, derive_slug, identity_flags
+from util.py_launcher import python_launcher_argv
 
 # Fixed PySR run_id so a synthesis's run directory is reused across chained jobs.
 _RUN_ID = "pysr_run"
@@ -298,8 +299,7 @@ def _resubmit_chain(conf: PySRConfig, target: str) -> None:
     # directory (and warm-starts the same PySR state) — no identity is threaded through
     # CHAIN_* env vars. See docs/adr/0005.
     cmd = [
-        "uv",
-        "run",
+        *python_launcher_argv(),
         resubmit_script,
         "--cache_dir",
         os.environ.get("CHAIN_CACHE_DIR", ""),
