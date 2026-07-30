@@ -225,8 +225,3 @@ julia-*.out
 
 # Claude Code worktree tooling state
 .claude/worktrees/
-
-# Per-job cluster venv wheel cache (cc/prefetch-wheels.sh)
-cc/wheels/
-.venv-cluster/
-.venv-launcher/

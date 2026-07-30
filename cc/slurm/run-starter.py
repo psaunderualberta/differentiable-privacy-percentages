@@ -1,6 +1,5 @@
 import os
 import subprocess
-import sys
 from dataclasses import dataclass
 from tempfile import NamedTemporaryFile
 
@@ -12,9 +11,6 @@ os.environ["PROJECT_ROOT"] = os.path.abspath(
 os.environ["PROJECT_SOURCE_ROOT"] = os.path.abspath(
     os.path.join(os.environ["PROJECT_ROOT"], "src"),
 )
-
-sys.path.insert(0, os.environ["PROJECT_SOURCE_ROOT"])
-from util.py_launcher import emitted_launcher, job_prologue
 
 _THIS_SCRIPT = os.path.abspath(__file__)
 
@@ -115,11 +111,6 @@ export CHAIN_WANDB_PROJ="{self.wandb_proj}"
 export CHAIN_JOBNAME="{self.slurm_job_name}"
 export CHAIN_ACCOUNT="{self.account}"
 
-# Set up the Python environment this job runs in. Empty under uv; an export in
-# persistent-venv mode; a $SLURM_TMPDIR venv build in bootstrap mode. Must precede
-# any use of the launcher below. See src/util/py_launcher.py.
-{job_prologue()}
-
 # Startup printing
 echo "Current working directory: `pwd`"
 echo "Starting run at: `date`"
@@ -130,7 +121,7 @@ echo "CUDA devices: $CUDA_VISIBLE_DEVICES"
 echo "starting training..."
 echo tmpdir: $SLURM_TMPDIR
 echo main_args: {self.main_args}
-time {emitted_launcher()} main.py {self.main_args}
+time uv run --no-sync main.py {self.main_args}
 
 # End printing
 echo "Job finished with exit code $? at: `date`"

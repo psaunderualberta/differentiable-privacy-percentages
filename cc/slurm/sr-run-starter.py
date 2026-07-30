@@ -46,29 +46,8 @@ os.environ["PROJECT_SOURCE_ROOT"] = os.path.abspath(
 # so the launcher computes the SAME slug without importing pysr. See docs/adr/0005.
 sys.path.insert(0, os.environ["PROJECT_SOURCE_ROOT"])
 from sr_identity import identity_flags, slug_for
-from util.py_launcher import bootstrap_script, python_launcher
 
 _THIS_SCRIPT = os.path.abspath(__file__)
-
-
-def _sr_launcher() -> str:
-    """The launcher for the SR sbatch body, which cannot use the per-job venv.
-
-    Bootstrap mode is unsupported here for two independent reasons: this template does
-    its own ``module --force purge`` to make the Julia libraries load, which would tear
-    down the prologue's python/cuda modules; and PySR is excluded from
-    cc/requirements-cluster.txt because it needs a Julia depot, so a bootstrapped venv
-    could not import it anyway. Fail at submit time rather than 20 minutes into a job.
-    """
-    if bootstrap_script():
-        raise SystemExit(
-            "sr-run-starter.py does not support PY_LAUNCHER_BOOTSTRAP (per-job venv):\n"
-            "  PySR needs a Julia depot and is not in cc/requirements-cluster.txt, and\n"
-            "  this job's `module --force purge` conflicts with the prologue.\n"
-            "Submit the SR stage with a persistent venv instead:\n"
-            "  PY_LAUNCHER_BOOTSTRAP= PY_LAUNCHER=/path/to/venv/bin/python <this command>",
-        )
-    return python_launcher()
 
 
 @dataclass
@@ -170,8 +149,8 @@ module load StdEnv/2023 julia/1.11.3
 env -u LD_LIBRARY_PATH julia -e 'using ClusterManagers; println("ClusterManagers: OK")'
 env -u LD_LIBRARY_PATH julia -e 'using SymbolicRegression; println("SymbolicRegression: OK")'
 
-# Single launch: bare launcher (NOT srun) so PySR's slurm cluster_manager owns srun.
-time {_sr_launcher()} symbolic_regression.py {main_args}
+# Single launch: bare `uv run` (NOT srun) so PySR's slurm cluster_manager owns srun.
+time uv run symbolic_regression.py {main_args}
 
 echo "Job finished with exit code $? at: `date`"
 """.strip()

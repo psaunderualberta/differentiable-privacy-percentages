@@ -17,8 +17,6 @@ import dataclasses
 import pathlib
 import shlex
 
-from util.py_launcher import emitted_launcher, job_prologue
-
 # ---------------------------------------------------------------------------
 # Targets and cell identity
 # ---------------------------------------------------------------------------
@@ -249,7 +247,7 @@ def curve_jobs(regimes: list[SourceRegime], targets: list[Target], args: Produce
         Job(
             stage="curve",
             args=(
-                f"{emitted_launcher()} transfer_curve.py"
+                "uv run --no-sync transfer_curve.py"
                 f" --schedules_parquet {shlex.quote(args.schedules_parquet)}"
                 f" --source_dataset {shlex.quote(regime.dataset)}"
                 f" --source_eps {regime.eps:g}"
@@ -284,7 +282,7 @@ def equation_jobs(category_map, targets: list[Target], args: ProducerArgs) -> li
             Job(
                 stage="equation",
                 args=(
-                    f"{emitted_launcher()} transfer_equation.py"
+                    "uv run --no-sync transfer_equation.py"
                     f" --eval_dir {shlex.quote(args.eval_dir)}"
                     f" {_target_flags(target)}"
                     f" {args.shared_flags()}"
@@ -308,7 +306,7 @@ def reference_jobs(
         Job(
             stage="reference",
             args=(
-                f"{emitted_launcher()} transfer_reference.py"
+                "uv run --no-sync transfer_reference.py"
                 f" --reference {shlex.quote(reference)}"
                 f" {_target_flags(target)}"
                 f" {args.shared_flags()}"
@@ -397,10 +395,6 @@ echo "Current working directory: `pwd`"
 echo "Starting transfer '{stage}' task $SLURM_ARRAY_TASK_ID at: `date`"
 echo "CUDA devices: $CUDA_VISIBLE_DEVICES"
 
-# Python environment setup; must precede the manifest line, whose launcher may be a
-# deferred "$PY_LAUNCHER" this resolves. See src/util/py_launcher.py.
-{job_prologue()}
-
 # The manifest line IS the task: line (index+1) of the file the launcher wrote.
 CMD=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" {manifest})
 if [ -z "$CMD" ]; then
@@ -446,8 +440,6 @@ def serial_sbatch(
 echo "Current working directory: `pwd`"
 echo "Starting transfer '{name}' at: `date`"
 
-{job_prologue()}
-
 time {command}
 
 echo "Job finished with exit code $? at: `date`"
@@ -465,7 +457,7 @@ def preflight_command(targets: list[Target], args: ProducerArgs) -> str:
     """
     datasets = sorted({t.dataset for t in targets})
     return (
-        f"{emitted_launcher()} transfer_preflight.py"
+        "uv run --no-sync transfer_preflight.py"
         f" --datasets {' '.join(shlex.quote(d) for d in datasets)}"
         f" --batch_size {args.batch_size}"
     )

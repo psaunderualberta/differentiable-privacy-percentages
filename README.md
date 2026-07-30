@@ -106,59 +106,6 @@ uv sync
 
 A CUDA 12-compatible GPU is expected. CPU-only execution is possible but very slow.
 
-### Clusters without uv
-
-On clusters where uv cannot be installed, build a plain virtualenv from the cluster's
-own wheelhouse instead. There are two modes; both are driven by `PY_LAUNCHER`, which
-every command this repo *emits* (sbatch bodies, transfer array manifests, job-chain
-resubmits) uses in place of `uv run --no-sync`. See `src/util/py_launcher.py`.
-
-#### Bootstrap mode (recommended)
-
-Each job builds its own venv in `$SLURM_TMPDIR` and discards it, so the multi-GB GPU
-stack never touches `/project` or `/home` quota. Only a small launcher venv (tens of MB)
-lives on persistent storage.
-
-```bash
-# once, on a LOGIN node (compute nodes have no internet)
-bash cc/setup-venv.sh --launcher     # small venv: tyro, wandb, pandas — enough to submit
-bash cc/prefetch-wheels.sh           # fills cc/wheels/ with what the wheelhouse lacks
-
-# every shell (put in ~/.bashrc)
-source cc/activate-cluster.sh --bootstrap
-```
-
-Submit as normal afterwards. `cc/job-prologue.sh` is sourced at the top of each
-generated sbatch body and builds the venv offline from wheelhouse + `cc/wheels`.
-
-Two costs to know about: the venv rebuild is a few minutes of wall clock **per job**,
-and it repeats for every link of a job chain. Watch the `==> venv ready in Ns` line in
-the log to see what you're paying.
-
-#### Persistent mode
-
-One venv on `/project`, no per-job rebuild — simpler, but it's the multi-GB stack on
-quota'd storage.
-
-```bash
-bash cc/setup-venv.sh --full
-source cc/activate-cluster.sh --full
-```
-
-#### Notes
-
-- Substitute `python` for `uv run` in commands you type yourself.
-- Dependencies come from `cc/requirements-cluster.txt`, the training/transfer runtime
-  only. Version pins are **floors**, not `==`: the wheelhouse ships `+computecanada`
-  builds, so exact upstream pins resolve to nothing under `--no-index`. Expect mild
-  version skew from `uv.lock` (e.g. jax 0.6.0 vs 0.6.2) — fine for throughput, but
-  don't mix seeds from both clusters inside one figure.
-- PySR is excluded (it needs a Julia depot). The SR stage therefore does **not** support
-  bootstrap mode; `cc/slurm/sr-run-starter.py` refuses at submit time and tells you to
-  use a persistent venv.
-- `src/predict_memory.py` AOT-compiles the outer loop and so needs the full environment;
-  run it from a job or a `--full` venv, not the launcher venv.
-
 ---
 
 ## Usage

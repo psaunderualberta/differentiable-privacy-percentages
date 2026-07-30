@@ -11,7 +11,6 @@ import wandb
 # The sweep-file format helpers live in src/; this script is standalone, so put
 # src on the path before importing them.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src")))
-from util.py_launcher import python_launcher
 from util.sweep_file import RUN_ID_COL, read_sweep_file
 
 
@@ -27,7 +26,7 @@ def _submit_command(sweep_id: str, sweep_name: str, project: str) -> str:
     run-starter.py; legacy bare run-ID lists fall back to ``--run_id={}``.
     """
     rel = f"cc/sweeps/{sweep_id}.txt"
-    cmd = f"{python_launcher()} cc/slurm/run-starter.py --runtime.medium"
+    cmd = "uv run cc/slurm/run-starter.py --runtime.medium"
     tail = f"--wandb-proj '{project}' --jobname='\"{sweep_name}\"'"
 
     header = (_sweeps_dir() / f"{sweep_id}.txt").read_text().splitlines()[0].split("\t")
