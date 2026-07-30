@@ -42,6 +42,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 import tyro
+from _slurm_account import account_argv
 
 os.environ["PROJECT_ROOT"] = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", ".."),
@@ -194,8 +195,13 @@ def _write_manifest(conf: TransferSlurmConfig, stage: str, jobs: list) -> str:
     return str(path)
 
 
-def _submit(sbatch: str, label: str, dry_run: bool) -> str:
-    """Submit one sbatch script, returning its job id (empty on a dry run)."""
+def _submit(sbatch: str, label: str, dry_run: bool, account: str = "") -> str:
+    """Submit one sbatch script, returning its job id (empty on a dry run).
+
+    `account` goes on the command line as well as in the script's `#SBATCH
+    --account`, since only the command line outranks a stray SBATCH_ACCOUNT in
+    the environment. See _slurm_account.
+    """
     print(sbatch)
     if dry_run:
         print(f"[dry-run] would submit {label}\n")
@@ -206,7 +212,10 @@ def _submit(sbatch: str, label: str, dry_run: bool) -> str:
     with NamedTemporaryFile(mode="w", suffix=".sh", dir=tmpdir) as f:
         f.write(sbatch)
         f.flush()
-        process_out = subprocess.run(["sbatch", f.name], capture_output=True)
+        process_out = subprocess.run(
+            ["sbatch", *account_argv(account), f.name],
+            capture_output=True,
+        )
         stderr = process_out.stderr.decode("utf-8").strip()
         if stderr:
             raise Exception(f"Could not start {label}: {stderr}")
@@ -252,6 +261,7 @@ def main(conf: TransferSlurmConfig) -> None:
         ),
         "preflight",
         conf.dry_run,
+        conf.account,
     )
 
     producer_ids = []
@@ -279,6 +289,7 @@ def main(conf: TransferSlurmConfig) -> None:
             ),
             stage,
             conf.dry_run,
+            conf.account,
         )
         if job_id:
             producer_ids.append(job_id)
@@ -298,6 +309,7 @@ def main(conf: TransferSlurmConfig) -> None:
             ),
             "plot",
             conf.dry_run,
+            conf.account,
         )
 
 

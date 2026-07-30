@@ -346,3 +346,58 @@ class TestFinalize:
         assert lifecycle.should_stop() is False
         lifecycle.finalize()
         assert resubmits == []
+
+
+# ---------------------------------------------------------------------------
+# resubmit_if_requested — the argv handed to run-starter.py
+# ---------------------------------------------------------------------------
+
+
+class TestResubmitArgv:
+    """The continuation must inherit the parent's *resource* request.  Only the
+    wall clock is deliberately downgraded (medium -> short): the expensive
+    baseline computations happen on the first segment, and short segments
+    backfill far sooner.  Memory is NOT a wall clock — dropping it silently
+    reverted an 8G request to run-starter's 12G default."""
+
+    @pytest.fixture
+    def argv(self, monkeypatch):
+        """Capture the resubmit command instead of running sbatch."""
+        recorded: list[list[str]] = []
+
+        class _Result:
+            returncode = 0
+            stdout = "Submitted batch job 1"
+            stderr = ""
+
+        monkeypatch.setattr(
+            job_chain.subprocess, "run", lambda cmd, **kw: recorded.append(cmd) or _Result()
+        )
+
+        def _run(**chain_env):
+            monkeypatch.setenv("CHAIN_RESUBMIT_SCRIPT", "/fake/run-starter.py")
+            for key, value in chain_env.items():
+                monkeypatch.setenv(key, value)
+            job_chain._shutdown_requested.set()
+            job_chain.resubmit_if_requested("run-abc")
+            return recorded[-1]
+
+        return _run
+
+    def test_mem_per_gpu_is_propagated(self, argv):
+        cmd = argv(CHAIN_MEM_PER_GPU="8G")
+        assert "--mem-per-gpu" in cmd
+        assert cmd[cmd.index("--mem-per-gpu") + 1] == "8G"
+
+    def test_mem_per_gpu_omitted_when_unset(self, argv, monkeypatch):
+        monkeypatch.delenv("CHAIN_MEM_PER_GPU", raising=False)
+        cmd = argv()
+        # Blank would reach `sbatch --mem-per-gpu ''`; fall back to the launcher default.
+        assert "--mem-per-gpu" not in cmd
+
+    def test_wall_clock_is_downgraded_to_short(self, argv):
+        assert "--runtime.short" in argv(CHAIN_MEM_PER_GPU="8G")
+
+    def test_account_omitted_when_blank(self, argv):
+        cmd = argv(CHAIN_ACCOUNT="")
+        assert "--account" not in cmd

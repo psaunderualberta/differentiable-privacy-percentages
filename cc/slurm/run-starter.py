@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from tempfile import NamedTemporaryFile
 
 import tyro
+from _slurm_account import account_argv
 
 os.environ["PROJECT_ROOT"] = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", ".."),
@@ -110,6 +111,7 @@ export CHAIN_RESUBMIT_SCRIPT="{_THIS_SCRIPT}"
 export CHAIN_WANDB_PROJ="{self.wandb_proj}"
 export CHAIN_JOBNAME="{self.slurm_job_name}"
 export CHAIN_ACCOUNT="{self.account}"
+export CHAIN_MEM_PER_GPU="{self.mem_per_gpu}"
 
 # Startup printing
 echo "Current working directory: `pwd`"
@@ -137,7 +139,9 @@ if __name__ == "__main__":
         f.write(conf.sbatch_file)
         f.flush()
 
-        cmd_list = ["sbatch"]
+        # `-A` on the command line, not just the in-script `#SBATCH --account`,
+        # so a stray SBATCH_ACCOUNT in the environment cannot win. See _slurm_account.
+        cmd_list = ["sbatch", *account_argv(conf.account)]
         # `singleton`: at most one job with this name (which encodes the run_id)
         # per user runs/suspends at a time.  This serializes chain continuations
         # AND blocks accidental concurrent submissions for the same run_id — the

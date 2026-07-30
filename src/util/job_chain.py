@@ -108,6 +108,23 @@ def resubmit_if_requested(run_id: str) -> None:
     if "SLURM_JOB_ID" in os.environ:
         prereqs = ["--prerequisites", os.environ.get("SLURM_JOB_ID", "")]
 
+    # Omit --account entirely when CHAIN_ACCOUNT is unset/blank rather than passing
+    # an empty string: run-starter forwards it to `sbatch -A`, where a blank value
+    # would swallow the next flag.  Falling back to run-starter's own default keeps
+    # the continuation on a real allocation.
+    account = os.environ.get("CHAIN_ACCOUNT", "").strip()
+    account_flag = ["--account", account] if account else []
+
+    # The continuation must inherit the parent's memory request — without this it
+    # silently reverts to run-starter's default, so a chain launched with
+    # `--mem-per-gpu 8G` OOMs (or over-reserves) from segment two onwards.  Blank
+    # is omitted for the same reason as --account above.  The wall clock is the one
+    # resource deliberately NOT inherited: --runtime.short below downgrades every
+    # continuation, since the expensive baseline computations only run on the first
+    # segment and short segments backfill sooner.
+    mem_per_gpu = os.environ.get("CHAIN_MEM_PER_GPU", "").strip()
+    mem_flag = ["--mem-per-gpu", mem_per_gpu] if mem_per_gpu else []
+
     cmd = [
         "uv",
         "run",
@@ -118,8 +135,8 @@ def resubmit_if_requested(run_id: str) -> None:
         os.environ.get("CHAIN_WANDB_PROJ", ""),
         "--jobname",
         os.environ.get("CHAIN_JOBNAME", "chain-job"),
-        "--account",
-        os.environ.get("CHAIN_ACCOUNT", ""),
+        *account_flag,
+        *mem_flag,
         "--runtime.short",
         *prereqs,
     ]

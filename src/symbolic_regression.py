@@ -290,6 +290,7 @@ def _resubmit_chain(conf: PySRConfig, target: str) -> None:
         return
 
     depth = int(os.environ.get("CHAIN_DEPTH", "0"))
+    account = os.environ.get("CHAIN_ACCOUNT", "").strip()
     prereqs: list[str] = []
     if "SLURM_JOB_ID" in os.environ:
         prereqs = ["--prerequisites", os.environ["SLURM_JOB_ID"]]
@@ -311,8 +312,9 @@ def _resubmit_chain(conf: PySRConfig, target: str) -> None:
         os.environ.get("CHAIN_MAX_JOBS", "16"),
         "--ntasks",
         os.environ.get("CHAIN_NTASKS", "32"),
-        "--account",
-        os.environ.get("CHAIN_ACCOUNT", ""),
+        # Omitted when blank so sr-run-starter's `sbatch -A` never gets an empty
+        # value (which would swallow the next flag); its own default then applies.
+        *(["--account", account] if account else []),
         "--jobname",
         os.environ.get("CHAIN_JOBNAME", f"sr-{target}"),
         *identity_flags(asdict(conf)),

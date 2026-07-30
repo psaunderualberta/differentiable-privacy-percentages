@@ -34,6 +34,7 @@ from tempfile import NamedTemporaryFile
 from typing import Literal
 
 import tyro
+from _slurm_account import account_argv
 
 os.environ["PROJECT_ROOT"] = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", ".."),
@@ -169,7 +170,7 @@ def _submit(conf: SRSlurmConfig, target: str) -> None:
         f.write(sbatch)
         f.flush()
 
-        cmd_list = ["sbatch"]
+        cmd_list = ["sbatch", *account_argv(conf.account)]
         if conf.prerequisites:
             cmd_list.append("-d after:" + ",".join(conf.prerequisites))
         cmd_list.append(f.name)
