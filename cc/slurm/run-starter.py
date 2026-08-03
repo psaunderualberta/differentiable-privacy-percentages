@@ -63,6 +63,19 @@ class SlurmConfig:
     account: str = "aip-nidhih"
     wandb_proj: str = "Testing Mu-gdp"
     prerequisites: tuple[str, ...] = ()
+    wandb_dir: str = ""
+    """Parent directory for W&B local run storage. Defaults to /scratch/$USER/wandb.
+
+    Offline runs only reach the cloud when `wandb sync` succeeds, so the run dir
+    must outlive the job — SLURM_TMPDIR is wiped at job end, which made a missed
+    sync unrecoverable. It cannot go in the project directory either: a run dir
+    is ~300MB-1GB, so a full sweep would put hundreds of GB on the shared
+    filesystem. Persistent scratch is the one location that is both.
+    """
+
+    @property
+    def resolved_wandb_dir(self) -> str:
+        return self.wandb_dir or os.path.expandvars("/scratch/$USER/wandb")
 
     @property
     def slurm_job_name(self) -> str:
@@ -86,6 +99,7 @@ class SlurmConfig:
             f' --wandb-conf.entity "psaunder"'
             f" --wandb-conf.mode offline"
             f" --wandb-conf.wandb-sync-interval-secs 300"
+            f' --wandb-conf.wandb-dir "{self.resolved_wandb_dir}"'
             f' --wandb-conf.restart_run_id="{self.run_id}"'
             f' --wandb-conf.checkpoint_run_id="{self.run_id}"'
         )
@@ -122,18 +136,20 @@ echo "CUDA devices: $CUDA_VISIBLE_DEVICES"
 
 echo "starting training..."
 echo tmpdir: $SLURM_TMPDIR
+echo wandb_dir: {self.resolved_wandb_dir}
 echo main_args: {self.main_args}
+mkdir -p "{self.resolved_wandb_dir}"
 time uv run --no-sync main.py {self.main_args}
 TRAIN_EXIT=$?
 
 # Belt-and-braces re-sync.  main.py already syncs after run.finish(), so this is
 # normally a no-op; it exists for the case where the process never got that far
-# (SIGKILL on wall clock, OOM, node failure).  Offline run dirs live on the
-# shared filesystem rather than SLURM_TMPDIR (see util/wandb_init._resolve_wandb_dir),
-# so they are still here, and `wandb sync` is incremental and idempotent.
+# (SIGKILL on wall clock, OOM, node failure).  Offline run dirs live in persistent
+# scratch rather than SLURM_TMPDIR, so they are still here after such a kill, and
+# `wandb sync` is incremental and idempotent.
 # Keyed on the run id rather than the `latest-run` symlink, which races when
 # several jobs share this wandb directory.
-for run_dir in wandb/offline-run-*-{self.run_id}; do
+for run_dir in "{self.resolved_wandb_dir}"/wandb/offline-run-*-{self.run_id}; do
     if [ -d "$run_dir" ]; then
         echo "Re-syncing $run_dir"
         uv run --no-sync wandb sync "$run_dir"
