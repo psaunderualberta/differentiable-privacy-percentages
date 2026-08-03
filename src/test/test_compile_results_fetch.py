@@ -192,6 +192,7 @@ class FakeRunWithArtifacts:
         self.config = {
             "dataset": "mnist",
             "prng_seed": 0,
+            "num_outer_steps": 1000,
             "env": {
                 "eps": 0.5,
                 "num_training_steps": 2,
@@ -572,13 +573,15 @@ class TestMlpParamCountGuard:
 class FakeCheckpointArtifact:
     """A ``checkpoint-<run_id>`` artifact holding save_checkpoint's npy sidecars."""
 
-    def __init__(self, name, sigmas, clips, metadata=None, with_npys=True):
+    def __init__(self, name, sigmas, clips, step=999, with_npys=True, with_metadata=True):
         self.name = name
         self._sigmas = sigmas
         self._clips = clips
         self._with_npys = with_npys
-        if metadata is not None:
-            self.metadata = metadata
+        # save_checkpoint always records the step; `with_metadata=False` models a
+        # stand-in that cannot (e.g. LocalArtifact replaying an archive).
+        if with_metadata:
+            self.metadata = {"step": step, "run_id": "abc123"}
 
     def download(self, root=None):
         Path(root).mkdir(parents=True, exist_ok=True)
@@ -593,9 +596,10 @@ class FakeCheckpointArtifact:
 class _RunWithArtifactList:
     """Minimal run stand-in whose logged_artifacts() is fully controlled."""
 
-    def __init__(self, artifacts, run_id="abc123", state="finished"):
+    def __init__(self, artifacts, run_id="abc123", state="finished", num_outer_steps=1000):
         self.id = run_id
         self.state = state
+        self.config = {} if num_outer_steps is None else {"num_outer_steps": num_outer_steps}
         self._artifacts = artifacts
 
     def logged_artifacts(self):
@@ -661,9 +665,9 @@ class TestFinalScheduleArraysCheckpointFallback:
         monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
         run = _RunWithArtifactList(
             [
-                FakeCheckpointArtifact("checkpoint-abc123:v0", [0.1], [1.1], {"step": 24}),
-                FakeCheckpointArtifact("checkpoint-abc123:v9", [0.9], [1.9], {"step": 999}),
-                FakeCheckpointArtifact("checkpoint-abc123:v4", [0.4], [1.4], {"step": 499}),
+                FakeCheckpointArtifact("checkpoint-abc123:v0", [0.1], [1.1], step=24),
+                FakeCheckpointArtifact("checkpoint-abc123:v9", [0.9], [1.9], step=999),
+                FakeCheckpointArtifact("checkpoint-abc123:v4", [0.4], [1.4], step=499),
             ]
         )
 
@@ -672,22 +676,16 @@ class TestFinalScheduleArraysCheckpointFallback:
         assert sigmas == pytest.approx([0.9])
         assert clips == pytest.approx([1.9])
 
-    def test_falls_back_to_version_order_without_metadata(self, tmp_path, monkeypatch):
-        # LocalArtifact (archive replay) carries no .metadata, and versions
-        # increment monotonically with the step, so :vNN is the tiebreaker.
+    def test_refuses_a_checkpoint_that_does_not_record_its_step(self, tmp_path, monkeypatch):
+        # Ordering by the :vNN suffix instead would recover the arrays but leave
+        # the step unknown — and the step is what proves the checkpoint is final.
         monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
         run = _RunWithArtifactList(
-            [
-                FakeCheckpointArtifact("checkpoint-abc123:v2", [0.2], [1.2]),
-                FakeCheckpointArtifact("checkpoint-abc123:v11", [0.11], [1.11]),
-                FakeCheckpointArtifact("checkpoint-abc123:v3", [0.3], [1.3]),
-            ]
+            [FakeCheckpointArtifact("checkpoint-abc123:v3", [0.3], [1.3], with_metadata=False)]
         )
 
-        sigmas, _, _ = crf._final_schedule_arrays(run)
-
-        # v11 > v3 numerically, not lexicographically.
-        assert sigmas == pytest.approx([0.11])
+        with pytest.raises(RuntimeError, match="no checkpoint"):
+            crf._final_schedule_arrays(run)
 
     def test_raises_when_neither_tables_nor_checkpoint_exist(self, tmp_path, monkeypatch):
         monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
@@ -711,9 +709,7 @@ class _RecoveredRun(FakeRunWithArtifacts):
     """A completed run that lost both table artifacts but kept its checkpoints."""
 
     def logged_artifacts(self):
-        return [
-            FakeCheckpointArtifact("checkpoint-abc123:v1", [0.4, 0.5], [1.0, 1.1], {"step": 999})
-        ]
+        return [FakeCheckpointArtifact("checkpoint-abc123:v1", [0.4, 0.5], [1.0, 1.1], step=999)]
 
 
 class TestScheduleSourceProvenance:
@@ -774,18 +770,19 @@ class TestNeverStartedClassification:
 class TestCheckpointFallbackOnlyForFinishedRuns:
     """A mid-training checkpoint must never be passed off as the final schedule.
 
-    main() fetches ``crashed`` runs as well as ``finished`` ones. main.py logs the
-    tables from its ``finally`` block, so a run that reached state ``finished``
-    ran teardown and its newest checkpoint really is its last. A run SIGKILLed by
-    SLURM (OOM / wall clock / node failure) never got there, and its newest
+    main() fetches ``crashed`` runs as well as ``finished`` ones. A run SIGKILLed
+    by SLURM (OOM / wall clock / node failure) never ran teardown, so its newest
     checkpoint is wherever training happened to stop.
+
+    State alone is NOT sufficient, though — see
+    ``TestCheckpointMustBeTheFinalOuterStep``.
     """
 
     @pytest.mark.parametrize("state", ["crashed", "failed", "running", None])
     def test_refuses_to_recover_a_run_that_did_not_finish(self, state, tmp_path, monkeypatch):
         monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
         run = _RunWithArtifactList(
-            [FakeCheckpointArtifact("checkpoint-abc123:v3", [0.5], [1.5], {"step": 400})],
+            [FakeCheckpointArtifact("checkpoint-abc123:v3", [0.5], [1.5], step=400)],
             state=state,
         )
 
@@ -795,12 +792,62 @@ class TestCheckpointFallbackOnlyForFinishedRuns:
     def test_recovers_a_finished_run(self, tmp_path, monkeypatch):
         monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
         run = _RunWithArtifactList(
-            [FakeCheckpointArtifact("checkpoint-abc123:v3", [0.5], [1.5], {"step": 999})],
+            [FakeCheckpointArtifact("checkpoint-abc123:v3", [0.5], [1.5], step=999)],
             state="finished",
         )
 
         sigmas, _, source = crf._final_schedule_arrays(run)
         assert (sigmas, source) == (pytest.approx([0.5]), "checkpoint")
+
+
+class TestCheckpointMustBeTheFinalOuterStep:
+    """``state == "finished"`` does not mean the run trained to completion.
+
+    main.py's ``finally`` block calls ``run.finish()`` on the job-chain shutdown
+    path too, so a run paused mid-chain — waiting for its continuation job, or
+    whose continuation never ran — sits in W&B as ``finished`` with only part of
+    its training done. Three of the 61 FirSweep runs recovered here are exactly
+    that: newest checkpoint at step 49 or 74 of 1000. Gating on state alone would
+    have recorded a 50-step schedule as the converged one.
+
+    The checkpoint's own step is the ground truth, so require it to be the last
+    outer step the run was configured to take.
+    """
+
+    def test_refuses_a_checkpoint_from_a_run_that_stopped_early(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        run = _RunWithArtifactList(
+            [FakeCheckpointArtifact("checkpoint-abc123:v2", [0.5], [1.5], step=49)],
+            state="finished",
+            num_outer_steps=1000,
+        )
+
+        with pytest.raises(RuntimeError, match="stopped early"):
+            crf._final_schedule_arrays(run)
+
+    def test_accepts_a_checkpoint_at_the_final_outer_step(self, tmp_path, monkeypatch):
+        # The final periodic save is taken at step num_outer_steps - 1, after that
+        # step's update + project(), which is exactly the tables' final row.
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        run = _RunWithArtifactList(
+            [FakeCheckpointArtifact("checkpoint-abc123:v9", [0.5], [1.5], step=299)],
+            state="finished",
+            num_outer_steps=300,
+        )
+
+        sigmas, _, source = crf._final_schedule_arrays(run)
+        assert (sigmas, source) == (pytest.approx([0.5]), "checkpoint")
+
+    def test_refuses_when_the_config_does_not_record_num_outer_steps(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        run = _RunWithArtifactList(
+            [FakeCheckpointArtifact("checkpoint-abc123:v9", [0.5], [1.5], step=999)],
+            state="finished",
+            num_outer_steps=None,
+        )
+
+        with pytest.raises(RuntimeError, match="num_outer_steps"):
+            crf._final_schedule_arrays(run)
 
     def test_a_crashed_run_with_tables_is_still_read_normally(self, tmp_path, monkeypatch):
         # The gate guards only the fallback. A crashed run that *did* upload its

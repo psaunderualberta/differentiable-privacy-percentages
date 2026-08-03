@@ -726,28 +726,24 @@ def _baseline_means(api: wandb.Api, entity: str, project: str, run_id: str) -> p
     return df
 
 
-def _artifact_version(name: str) -> int:
-    """The ``:vNN`` suffix of an artifact name as an int (-1 if absent)."""
-    _, _, ver = name.rpartition(":v")
-    return int(ver) if ver.isdigit() else -1
+def _latest_checkpoint_artifact(run: Any) -> tuple[Any, int] | None:
+    """The newest ``checkpoint-<run_id>`` artifact and the step it holds, or None.
 
-
-def _latest_checkpoint_artifact(run: Any) -> Any | None:
-    """The newest ``checkpoint-<run_id>`` artifact logged by ``run``, or None.
-
-    Prefers the ``step`` recorded in the artifact metadata by ``save_checkpoint``.
-    Versions increment monotonically with the step, so the ``:vNN`` suffix is an
-    equivalent ordering and is used for artifact stand-ins that carry no metadata
-    (notably ``LocalArtifact``, which replays an archive).
+    Ordered by the ``step`` that ``save_checkpoint`` records in the artifact
+    metadata.  An artifact without that metadata is skipped rather than ordered
+    by its ``:vNN`` suffix: the step is needed anyway to prove the checkpoint is
+    the run's last one (see ``_schedule_arrays_from_checkpoint``), so a stand-in
+    that cannot supply it cannot be recovered from either.
     """
-    best, best_key = None, None
+    best: tuple[Any, int] | None = None
     for art in run.logged_artifacts():
         if "checkpoint-" not in art.name:
             continue
         step = (getattr(art, "metadata", None) or {}).get("step")
-        key = int(step) if step is not None else _artifact_version(art.name)
-        if best_key is None or key > best_key:
-            best, best_key = art, key
+        if step is None:
+            continue
+        if best is None or int(step) > best[1]:
+            best = (art, int(step))
     return best
 
 
@@ -766,13 +762,21 @@ def _schedule_arrays_from_checkpoint(run: Any) -> tuple[list[float], list[float]
     them (see ``util.wandb_init.finish_and_sync``), so the tables were lost while
     the checkpoints — logged throughout training — survived.
 
-    Only ``finished`` runs are recovered. ``main.py`` logs the tables from its
-    ``finally`` block, so reaching state ``finished`` means teardown ran and the
-    newest checkpoint is genuinely the run's *last* one. A run that died without
-    teardown (SIGKILL / OOM / node failure) is state ``crashed`` — and ``main``
-    fetches those too — but its newest checkpoint is wherever training happened
-    to stop, so recovering it would pass a mid-training schedule off as final.
-    Those stay in missing.csv instead.
+    Two conditions must BOTH hold, because either alone is passable by a run that
+    never reached its final schedule:
+
+    1. State ``finished``.  A run that died without teardown (SIGKILL / OOM /
+       node failure) is ``crashed`` — and ``main`` fetches those too — but its
+       newest checkpoint is wherever training happened to stop.
+    2. The newest checkpoint is at the *last* outer step.  State is not enough:
+       ``main.py`` runs its ``finally`` block (and so ``run.finish()``) on the
+       job-chain shutdown path as well, so a run paused mid-chain — or whose
+       continuation job never ran — also sits in W&B as ``finished`` with only
+       part of its training done.  Three of the 61 FirSweep runs recovered here
+       are exactly that, with their newest checkpoint at step 49 or 74 of 1000.
+
+    Runs failing either check stay in missing.csv, where they are visible, rather
+    than contributing an under-trained schedule that looks converged.
     """
     state = getattr(run, "state", None)
     if state != "finished":
@@ -781,9 +785,26 @@ def _schedule_arrays_from_checkpoint(run: Any) -> tuple[list[float], list[float]
             "— its newest checkpoint is mid-training, so it is not the final schedule"
         )
 
-    art = _latest_checkpoint_artifact(run)
-    if art is None:
-        raise RuntimeError("missing 'sigmas'/'clips' artifact and no checkpoint to recover from")
+    found = _latest_checkpoint_artifact(run)
+    if found is None:
+        raise RuntimeError(
+            "missing 'sigmas'/'clips' artifact and no checkpoint (recording its step) "
+            "to recover from"
+        )
+    art, step = found
+
+    num_outer_steps = (getattr(run, "config", None) or {}).get("num_outer_steps")
+    if num_outer_steps is None:
+        raise RuntimeError(
+            "missing 'sigmas'/'clips' artifact and run.config has no num_outer_steps, "
+            f"so checkpoint {art.name} (step {step}) cannot be shown to be the final one"
+        )
+    if step + 1 != int(num_outer_steps):
+        raise RuntimeError(
+            f"missing 'sigmas'/'clips' artifact and the newest checkpoint is step {step} "
+            f"of {num_outer_steps} outer steps — the run stopped early (job-chain hop, or "
+            "a continuation that never ran), so this is not the final schedule"
+        )
 
     root = str(ARTIFACT_ROOT / _safe_dir_name(art.name))
     with _claim_download_dir(root, owner=art.name):
