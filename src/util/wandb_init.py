@@ -102,12 +102,44 @@ def _resolve_wandb_dir(wandb_config: WandbConfig) -> str | None:
     fails (e.g. the network is still down at job end) the data must remain
     recoverable, so we keep offline runs on persistent storage rather than
     the transient ``SLURM_TMPDIR``.  An explicit ``wandb_dir`` always wins.
+
+    That offline carve-out used to be documented here but not implemented: every
+    mode got ``SLURM_TMPDIR``, so a missed sync took the run's data down with the
+    job.  That is how 61 completed FirSweep runs became unrecoverable.
     """
     if wandb_config.wandb_dir is not None:
         return wandb_config.wandb_dir
 
-    # write in slurm tmpdir if in a SLURM job, o/w write in persistent storage
+    if wandb_config.mode == "offline":
+        # None → wandb's default ./wandb, which under SLURM is the --chdir
+        # project directory on the shared (persistent) filesystem.
+        return None
+
+    # Online/disabled: fast per-job scratch, since nothing has to outlive the job.
     return os.environ.get("SLURM_TMPDIR", None)
+
+
+def finish_and_sync(run: Any, mode: str, run_dir: str) -> None:
+    """Finish a run, then push it to the cloud.  Order matters.
+
+    In offline mode ``wandb.log`` hands records to the wandb service
+    asynchronously and ``run.finish()`` is what flushes the remainder to the
+    transaction log.  ``wandb sync`` uploads only what is in that log when it
+    runs, so syncing *before* finishing drops whatever the service has not
+    written yet — and nothing syncs afterwards, so it is dropped permanently.
+
+    The final logging burst is the worst case: ``WandbTableLogger.finish`` logs
+    every accumulated table at once (12 of them, each up to T columns wide), so
+    the tail of that burst is exactly what gets lost.  This is the FirSweep
+    failure — runs completed all 1000 outer steps, then surfaced with `sigmas`
+    uploaded and `clips` missing, or neither.
+
+    Keeping both calls here means the ordering is one tested unit rather than
+    two adjacent statements in main.py's ``finally`` block, where it has already
+    been inverted once (commit 6fc991c).
+    """
+    run.finish()
+    sync_offline_run(mode, run_dir)
 
 
 def sync_offline_run(mode: str, run_dir: str) -> None:

@@ -30,9 +30,9 @@ from util.util import (
     pytree_has_nan,
 )
 from util.wandb_init import (
+    finish_and_sync,
     init_wandb_run,
     start_offline_sync_daemon,
-    sync_offline_run,
 )
 
 
@@ -322,14 +322,15 @@ def main():
             sync_daemon.stop()
 
         logger.finish()
-        # Offline runs never touched the network during training (so they can't
-        # be marked "crashed" mid-run); push the buffered data to the cloud now,
-        # while we're still inside the SLURM allocation and SLURM_TMPDIR exists.
-        if sync_daemon is not None:
-            sync_offline_run(wandb_config.mode, run_dir)
 
         print(f"dp_psac_ref eval command:\n  {_dp_psac_ref_cmd}")
-        run.finish()
+        # Finish first, THEN sync: run.finish() is what flushes the tables
+        # logger.finish() just logged, and `wandb sync` only uploads what is
+        # already in the transaction log.  finish_and_sync owns that ordering —
+        # see its docstring for the data loss the inverted order caused.  It is
+        # called unconditionally (not just when the periodic daemon ran), so an
+        # offline run with wandb_sync_interval_secs=0 still reaches the cloud.
+        finish_and_sync(run, wandb_config.mode, run_dir)
 
     # Resubmit the continuation job iff a job-chain stop was latched (no-op for
     # KeyboardInterrupt / normal completion).  Runs after teardown so the
