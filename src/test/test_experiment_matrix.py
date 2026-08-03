@@ -103,25 +103,33 @@ class TestBuiltMatrix:
     def test_both_momentum_arms_are_built(self, experiments):
         assert set(experiments) == {"sgd-m0.9", "sgd-m0.0"}
 
-    def test_t_sweep_excludes_cifar(self, experiments):
+    def test_t_sweep_covers_its_configured_datasets(self, experiments):
+        # Read off the constant rather than pinning a literal: which datasets the
+        # T-sweep runs is a knob that gets retuned between launches, and pinning
+        # it here just breaks the suite on the next retune (it did — the launch
+        # that added CIFAR-10 to this axis).  What must hold is that the built
+        # matrix agrees with the constant.
         for bucket in experiments.values():
             datasets = {c.dataset for tags, _g, _n, c in bucket if "T-sweep" in tags}
-            assert datasets == {"mnist", "fashion-mnist"}
+            assert datasets == set(ce.T_SWEEP_DATASETS)
 
-    def test_arch_axis_includes_cifar(self, experiments):
+    def test_arch_axis_covers_its_configured_datasets(self, experiments):
         for bucket in experiments.values():
             datasets = {c.dataset for tags, _g, _n, c in bucket if "arch" in tags}
-            assert datasets == {"mnist", "fashion-mnist", "cifar-10"}
+            assert datasets == set(ce.LADDER_DATASETS)
 
     def test_arch_axis_run_count(self, experiments):
-        # 10 archs x 3 datasets x 1 eps x 8 seeds, per arm.
+        # 10 archs x every ladder dataset x 1 eps x every seed, per arm.
+        expected = 10 * len(ce.LADDER_DATASETS) * len(ce.SEEDS)
         for bucket in experiments.values():
             arch_runs = [r for r in bucket if "arch" in r[0]]
-            assert len(arch_runs) == 240
+            assert len(arch_runs) == expected
 
     def test_every_run_shares_the_outer_step_budget(self, experiments):
+        # The invariant is that one budget covers the whole matrix (the plot layer
+        # reads every cell at a common step), not that it is any given number.
         for bucket in experiments.values():
-            assert {c.num_outer_steps for _t, _g, _n, c in bucket} == {1000}
+            assert {c.num_outer_steps for _t, _g, _n, c in bucket} == {ce.NUM_OUTER_STEPS}
 
     def test_arms_differ_only_in_inner_momentum(self, experiments):
         momenta = {

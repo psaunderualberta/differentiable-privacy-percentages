@@ -106,9 +106,9 @@ def _to_run_config(
 # Shared privacy / optimisation budget.
 DELTA: float = 1e-6
 BATCH_SIZE: int = 250  # T=250 ≈ 1 MNIST epoch (N=60 000)
-# The two axes no longer share a dataset list: the arch axis adds CIFAR-10, while
-# the T-sweep re-runs later as a separate launch (its defaults are all CNNs, so
-# ADR 0010 invalidates it too) and stays on the 28x28 pair for now.
+# Both axes now cover the same three datasets; the lists stay separate so the
+# T-sweep (which re-runs as its own launch — its defaults are all CNNs, so ADR
+# 0010 invalidates it too) can be narrowed again without touching the arch axis.
 T_SWEEP_DATASETS: list[str] = ["mnist", "fashion-mnist", "cifar-10"]
 LADDER_DATASETS: list[str] = ["mnist", "fashion-mnist", "cifar-10"]
 NUM_OUTER_STEPS: int = 3000
