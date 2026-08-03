@@ -126,6 +126,7 @@ export CHAIN_WANDB_PROJ="{self.wandb_proj}"
 export CHAIN_JOBNAME="{self.slurm_job_name}"
 export CHAIN_ACCOUNT="{self.account}"
 export CHAIN_MEM_PER_GPU="{self.mem_per_gpu}"
+export CHAIN_WANDB_DIR="{self.resolved_wandb_dir}"
 
 # Startup printing
 echo "Current working directory: `pwd`"
@@ -158,6 +159,12 @@ done
 
 # End printing
 echo "Job finished with exit code $TRAIN_EXIT at: `date`"
+
+# Exit with main.py's status, not the bookkeeping above it.  A bash script exits
+# with the status of its last command, so without this every job reports
+# COMPLETED to SLURM however training ended — and `sacct` stops being able to
+# tell a crashed run from a successful one.
+exit $TRAIN_EXIT
 """.strip()
 
 

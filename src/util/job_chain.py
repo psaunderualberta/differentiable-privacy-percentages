@@ -125,6 +125,13 @@ def resubmit_if_requested(run_id: str) -> None:
     mem_per_gpu = os.environ.get("CHAIN_MEM_PER_GPU", "").strip()
     mem_flag = ["--mem-per-gpu", mem_per_gpu] if mem_per_gpu else []
 
+    # Likewise for where the offline run dir goes: the continuation is a fresh
+    # sbatch of run-starter.py, which otherwise re-derives its own default, so an
+    # operator who redirected the first segment would silently lose that choice
+    # from segment two onwards.  Blank is omitted, as with --account above.
+    wandb_dir = os.environ.get("CHAIN_WANDB_DIR", "").strip()
+    wandb_dir_flag = ["--wandb-dir", wandb_dir] if wandb_dir else []
+
     cmd = [
         "uv",
         "run",
@@ -137,6 +144,7 @@ def resubmit_if_requested(run_id: str) -> None:
         os.environ.get("CHAIN_JOBNAME", "chain-job"),
         *account_flag,
         *mem_flag,
+        *wandb_dir_flag,
         "--runtime.short",
         *prereqs,
     ]
