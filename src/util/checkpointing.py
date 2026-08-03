@@ -25,11 +25,16 @@ to download from W&B.  Returns ``(restored_state, start_step)`` where
 ``start_step = saved_step + 1``, or ``None`` if neither source is available.
 
 Note that `load_checkpoint` *in isolation* can restore from local disk with no
-network.  End-to-end resume via ``main.py`` is NOT offline-capable, however:
-when ``checkpoint_run_id`` is set, ``conf/singleton_conf.py`` fetches the source
+network.  End-to-end resume via ``main.py`` needs W&B at least once: when
+``checkpoint_run_id`` is set, ``conf/singleton_conf.py`` fetches the source
 run's config from the W&B *server* (``wandb.Api().run(...)``) before this
-function is ever called, so the source run must exist on W&B.  A run created in
-``disabled`` mode was never uploaded and cannot be resumed.
+function is ever called, so the source run must exist on W&B — a run created in
+``disabled`` mode was never uploaded and cannot be resumed.  That config is
+cached on disk after the first successful fetch (``util/run_conf_cache.py``),
+so a *later* job in the same chain can start while W&B is unreachable.
+
+Both network calls here are retried on transient failures — see
+``util/wandb_retry.py`` for the outage that made that necessary.
 
 W&B branching
 -------------
@@ -47,6 +52,7 @@ import numpy as np
 import orbax.checkpoint as ocp
 
 import wandb
+from util.wandb_retry import retry_transient
 
 # Resolve the project root from the location of this file:
 # src/util/checkpointing.py → src/util → src → project root
@@ -71,16 +77,24 @@ def _remote_checkpoint_exists(entity: str, project: str, run_id: str) -> bool:
     the *first job of a chain* (nothing has been saved yet — safe to start
     fresh) versus a *continuation whose checkpoint exists but couldn't be
     fetched* (must abort rather than silently restart from step 0 and clobber
-    the in-progress run's history).  Any lookup error is treated as "does not
-    exist" so a genuine first run is never blocked.
+    the in-progress run's history).
+
+    Retried on transient failures: this probe decides whether the job lives or
+    dies, and because it fails *closed* a network blip here aborts a run that
+    had nothing to protect.  Two of the 30 lost FirSweep runs died exactly that
+    way — first jobs of a chain, zero artifacts, killed by a proxy outage that
+    broke the download and then this probe as well.
     """
     collection = f"{entity}/{project}/{_artifact_name(run_id)}"
     try:
-        return wandb.Api().artifact_collection_exists(collection, "checkpoint")
+        return retry_transient(
+            lambda: wandb.Api().artifact_collection_exists(collection, "checkpoint"),
+            what=f"check whether a checkpoint exists for run '{run_id}'",
+        )
     except Exception as e:
-        print(e.args[0])
-        # Fail closed: if we can't verify absence (auth/network error), assume a
-        # remote checkpoint exists so we never restart from step 0 and clobber an
+        print(f"Could not determine whether '{collection}' exists: {e!r}")
+        # Fail closed: if we still can't verify absence, assume a remote
+        # checkpoint exists so we never restart from step 0 and clobber an
         # in-progress run.  A genuinely-missing collection returns False cleanly
         # (no exception), so a real first run is not blocked.
         return True
@@ -182,10 +196,10 @@ def load_checkpoint(
 
     Note
     ----
-    This function restores from local disk without a network, but resuming
-    through ``main.py`` is not offline-capable: ``conf/singleton_conf.py``
-    fetches the source run's config from the W&B server before this is called
-    (see the module docstring).
+    This function restores from local disk without a network.  Resuming through
+    ``main.py`` additionally needs the source run's config, which
+    ``conf/singleton_conf.py`` fetches (or reads from its on-disk cache) before
+    this is called — see the module docstring.
     """
     checkpointer = ocp.StandardCheckpointer()
 
@@ -211,8 +225,14 @@ def load_checkpoint(
     print(f"Attempting to download checkpoint: {artifact_path}")
 
     try:
-        artifact = wandb.Api().artifact(artifact_path)
-        local_path = pathlib.Path(artifact.download())
+        # Retried as one unit: wandb.Api() is where the API-key verification
+        # happens, so the network failure can surface from any of the three
+        # calls.  A genuinely-missing artifact raises ValueError and so fails
+        # fast — the first job of a chain does not wait out the retry window.
+        local_path = retry_transient(
+            lambda: pathlib.Path(wandb.Api().artifact(artifact_path).download()),
+            what=f"download checkpoint '{artifact_path}'",
+        )
 
         restored = checkpointer.restore(local_path, target=state_template)
         start_step = int(restored["step"]) + 1

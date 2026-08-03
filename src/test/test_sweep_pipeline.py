@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import util.run_conf_cache as run_conf_cache
 from conf.config import EnvConfig, ScheduleOptimizerConfig, SweepConfig, WandbConfig
 from conf.singleton_conf import _reconstruct_from_dict, get_wandb_run_conf
 from policy.schedules.config import (
@@ -118,6 +119,12 @@ def _mock_wandb_conf(run_id: str) -> WandbConfig:
         mode="disabled",
         restart_run_id=run_id,
     )
+
+
+@pytest.fixture(autouse=True)
+def _cache_in_tmp(tmp_path, monkeypatch):
+    """Keep get_wandb_run_conf's on-disk config cache out of the real cache dir."""
+    monkeypatch.setenv(run_conf_cache.CACHE_DIR_ENV_VAR, str(tmp_path / "run-configs"))
 
 
 # ---------------------------------------------------------------------------

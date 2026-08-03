@@ -9,6 +9,8 @@ Covers:
 - Multiple saves coexist; any step can be restored independently
 - load_checkpoint returns None when no local checkpoint exists and
   entity/project are not provided (no W&B network call is attempted)
+- Transient W&B failures are retried at both the artifact download and the
+  fail-closed existence probe, while permanent ones fail fast
 
 All tests run fully offline: W&B is replaced by a lightweight mock run object
 so no network calls are made during any part of the test suite.
@@ -22,8 +24,11 @@ import jax.numpy as jnp
 import jax.random as jr
 import optax
 import pytest
+import requests
+import urllib3
 
 import util.checkpointing as ckpt
+import util.wandb_retry as retry_mod
 from environments.nes import ESState
 from util.checkpointing import load_checkpoint, save_checkpoint
 from util.run_lifecycle import TrainingState
@@ -301,9 +306,9 @@ class TestLoadCheckpointNoneReturns:
 
 
 class _FakeApi:
-    """Fake wandb.Api: artifact() always fails to download; artifacts() reports
-    whether the checkpoint collection exists (i.e. whether any checkpoint was
-    ever saved for the run)."""
+    """Fake wandb.Api: artifact() always fails to download;
+    artifact_collection_exists() reports whether the checkpoint collection
+    exists (i.e. whether any checkpoint was ever saved for the run)."""
 
     def __init__(self, collection_exists: bool):
         self._collection_exists = collection_exists
@@ -311,10 +316,8 @@ class _FakeApi:
     def artifact(self, path):
         raise RuntimeError("simulated download failure")
 
-    def artifacts(self, type_, collection):
-        if self._collection_exists:
-            return [object()]  # one existing version
-        raise RuntimeError("collection not found")
+    def artifact_collection_exists(self, name, type_):
+        return self._collection_exists
 
 
 class TestLoadCheckpointFetchFailure:
@@ -332,3 +335,131 @@ class TestLoadCheckpointFetchFailure:
         monkeypatch.setattr(ckpt.wandb, "Api", lambda: _FakeApi(collection_exists=False))
         result = load_checkpoint("first-run", None, full_state, "entity", "project")
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# load_checkpoint — transient network failures must not kill the job
+#
+# Two of the 30 "never started" FirSweep runs died here: a ~65 s api.wandb.ai
+# proxy outage broke the artifact download, and the fail-closed existence probe
+# then hit the same dead proxy and reported "a checkpoint exists" for a run that
+# had never saved one.  Both calls now retry before any conclusion is drawn.
+# ---------------------------------------------------------------------------
+
+
+def _blip() -> Exception:
+    """The 503 tunnel failure seen in the FirSweep logs."""
+    return requests.exceptions.ProxyError(
+        urllib3.exceptions.ProxyError(
+            "Unable to connect to proxy",
+            OSError("Tunnel connection failed: 503 Service Unavailable"),
+        ),
+    )
+
+
+class _FakeArtifact:
+    def __init__(self, path):
+        self._path = str(path)
+
+    def download(self):
+        return self._path
+
+
+class _FlakyApi:
+    """Serves a checkpoint only after ``artifact_failures`` transient blips.
+
+    ``probe_failures`` blips are likewise raised by the existence probe before
+    it answers ``collection_exists``.  Call counts are recorded on the class so
+    they survive the ``wandb.Api()`` construction in the code under test.
+    """
+
+    artifact_calls = 0
+    probe_calls = 0
+
+    def __init__(self, path, artifact_failures=0, probe_failures=0, collection_exists=False):
+        self._path = path
+        self._artifact_failures = artifact_failures
+        self._probe_failures = probe_failures
+        self._collection_exists = collection_exists
+
+    def artifact(self, path):
+        _FlakyApi.artifact_calls += 1
+        if _FlakyApi.artifact_calls <= self._artifact_failures:
+            raise _blip()
+        if self._path is None:
+            raise ValueError(f"artifact {path!r} not found in 'entity/project'")
+        return _FakeArtifact(self._path)
+
+    def artifact_collection_exists(self, name, type_):
+        _FlakyApi.probe_calls += 1
+        if _FlakyApi.probe_calls <= self._probe_failures:
+            raise _blip()
+        return self._collection_exists
+
+
+@pytest.fixture
+def flaky_api(monkeypatch):
+    """Install a _FlakyApi factory; returns a configure(**kwargs) callable."""
+    monkeypatch.setattr(retry_mod.time, "sleep", lambda _: None)
+    _FlakyApi.artifact_calls = 0
+    _FlakyApi.probe_calls = 0
+
+    def configure(**kwargs):
+        monkeypatch.setattr(ckpt.wandb, "Api", lambda: _FlakyApi(**kwargs))
+
+    return configure
+
+
+@pytest.fixture
+def remote_checkpoint(full_state, tmp_path):
+    """A saved checkpoint standing in for one downloaded from W&B."""
+    save_checkpoint(full_state, 42, _MockRun(id="uploaded-run"))
+    return tmp_path / "checkpoints" / "uploaded-run" / "42"
+
+
+class TestLoadCheckpointRetries:
+    def test_transient_download_failure_is_retried_then_restores(
+        self, full_state, remote_checkpoint, flaky_api
+    ):
+        flaky_api(path=remote_checkpoint, artifact_failures=2)
+        result = load_checkpoint("chain-run", None, full_state, "entity", "project")
+
+        assert result is not None
+        _, start_step = result
+        assert start_step == 43
+        assert _FlakyApi.artifact_calls == 3, "the blip should have been retried, not fatal"
+        assert _FlakyApi.probe_calls == 0, "a successful download must not probe at all"
+
+    def test_missing_artifact_is_not_retried(self, full_state, flaky_api):
+        # First job of a chain: the artifact genuinely does not exist.  That is
+        # a permanent ValueError, so burning the retry window on it would just
+        # waste allocated GPU time at every chain start.
+        flaky_api(path=None, collection_exists=False)
+        assert load_checkpoint("first-run", None, full_state, "entity", "project") is None
+        assert _FlakyApi.artifact_calls == 1
+
+    def test_existence_probe_retries_before_failing_closed(self, full_state, flaky_api):
+        # The exact shape of the 8oz33jkx / p5avu99n failures: no checkpoint was
+        # ever saved, but the probe hit the same dead proxy and failed closed.
+        # With retries the probe recovers and the run starts fresh, as it should.
+        flaky_api(path=None, artifact_failures=99, probe_failures=2, collection_exists=False)
+        assert load_checkpoint("first-run", None, full_state, "entity", "project") is None
+        assert _FlakyApi.probe_calls == 3
+
+    def test_still_fails_closed_when_the_outage_outlasts_the_retries(self, full_state, flaky_api):
+        # Safety property from the NoMomentumSweep fix is preserved: if we still
+        # cannot tell whether a checkpoint exists, refuse to restart from step 0.
+        flaky_api(path=None, artifact_failures=99, probe_failures=99)
+        with pytest.raises(RuntimeError, match="clobber"):
+            load_checkpoint("chain-run", None, full_state, "entity", "project")
+        assert _FlakyApi.artifact_calls == retry_mod.DEFAULT_ATTEMPTS
+        assert _FlakyApi.probe_calls == retry_mod.DEFAULT_ATTEMPTS
+
+    def test_local_checkpoint_never_touches_the_network(self, full_state, mock_run, flaky_api):
+        # Restoring from disk must stay offline-capable.
+        flaky_api(path=None, artifact_failures=99, probe_failures=99)
+        save_checkpoint(full_state, 42, mock_run)
+        result = load_checkpoint(mock_run.id, None, full_state, "entity", "project")
+
+        assert result is not None
+        assert _FlakyApi.artifact_calls == 0

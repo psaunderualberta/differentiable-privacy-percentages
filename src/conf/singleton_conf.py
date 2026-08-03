@@ -16,14 +16,42 @@ from conf.config import (
     WandbConfig,
 )
 from conf.config_util import DistributionConfig, dist_config_helper
+from util.run_conf_cache import read_run_conf, write_run_conf
+from util.wandb_retry import is_transient, retry_transient
 
 
 def get_wandb_run_conf(wandb_conf: WandbConfig, run_id: str) -> dict:
-    """Fetch the saved config dict for a prior W&B run."""
-    run = wandb.Api().run(
-        f"{wandb_conf.entity}/{wandb_conf.project}/{run_id}",
-    )
-    return run.config
+    """Fetch the saved config dict for a prior W&B run.
+
+    This is the first of the two mandatory-online calls made before
+    ``wandb.init``, and a transient failure here kills the job outright (the
+    FirSweep losses — see ``util/wandb_retry.py``).  So it is hardened twice
+    over: transient failures are retried with backoff, and a successful fetch
+    is cached on persistent disk so a chain continuation can still start when
+    the outage outlasts the retry window.
+
+    The server stays authoritative — the cache is read only once retries are
+    exhausted, and never for a permanent error such as a deleted run.
+    """
+    entity, project = wandb_conf.entity, wandb_conf.project
+
+    def _fetch() -> dict:
+        run = wandb.Api().run(f"{entity}/{project}/{run_id}")
+        return run.config
+
+    try:
+        run_conf = retry_transient(_fetch, what=f"fetch the config for run '{run_id}'")
+    except Exception as e:
+        if not is_transient(e):
+            raise
+        cached = read_run_conf(entity, project, run_id)
+        if cached is None:
+            raise
+        print(f"W&B unreachable ({e!r}); using the cached config for run '{run_id}'.")
+        return cached
+
+    write_run_conf(entity, project, run_id, run_conf)
+    return run_conf
 
 
 @cache
