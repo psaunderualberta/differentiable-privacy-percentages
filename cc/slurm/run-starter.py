@@ -124,9 +124,24 @@ echo "starting training..."
 echo tmpdir: $SLURM_TMPDIR
 echo main_args: {self.main_args}
 time uv run --no-sync main.py {self.main_args}
+TRAIN_EXIT=$?
+
+# Belt-and-braces re-sync.  main.py already syncs after run.finish(), so this is
+# normally a no-op; it exists for the case where the process never got that far
+# (SIGKILL on wall clock, OOM, node failure).  Offline run dirs live on the
+# shared filesystem rather than SLURM_TMPDIR (see util/wandb_init._resolve_wandb_dir),
+# so they are still here, and `wandb sync` is incremental and idempotent.
+# Keyed on the run id rather than the `latest-run` symlink, which races when
+# several jobs share this wandb directory.
+for run_dir in wandb/offline-run-*-{self.run_id}; do
+    if [ -d "$run_dir" ]; then
+        echo "Re-syncing $run_dir"
+        uv run --no-sync wandb sync "$run_dir"
+    fi
+done
 
 # End printing
-echo "Job finished with exit code $? at: `date`"
+echo "Job finished with exit code $TRAIN_EXIT at: `date`"
 """.strip()
 
 
