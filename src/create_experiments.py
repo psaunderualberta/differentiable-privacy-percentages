@@ -109,9 +109,9 @@ BATCH_SIZE: int = 250  # T=250 ≈ 1 MNIST epoch (N=60 000)
 # The two axes no longer share a dataset list: the arch axis adds CIFAR-10, while
 # the T-sweep re-runs later as a separate launch (its defaults are all CNNs, so
 # ADR 0010 invalidates it too) and stays on the 28x28 pair for now.
-T_SWEEP_DATASETS: list[str] = ["mnist", "fashion-mnist"]
+T_SWEEP_DATASETS: list[str] = ["mnist", "fashion-mnist", "cifar-10"]
 LADDER_DATASETS: list[str] = ["mnist", "fashion-mnist", "cifar-10"]
-NUM_OUTER_STEPS: int = 1000
+NUM_OUTER_STEPS: int = 3000
 SEEDS: tuple[int, ...] = tuple(range(8))
 
 # --- Axis 1: vary T, architecture fixed at the dataset-default CNN ---
@@ -213,8 +213,8 @@ def _make_sweep_config(
         dataset=ds,
         num_outer_steps=NUM_OUTER_STEPS,
         with_baselines=True,
-        baseline_log_interval=50,
-        plotting_interval=50,
+        baseline_log_interval=100,
+        plotting_interval=100,
         prng_seed=dist_config_helper(value=float(seed), distribution="constant"),
         env=EnvConfig(
             network=network_conf,
