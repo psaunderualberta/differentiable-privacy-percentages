@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import tqdm
 import tyro
@@ -691,6 +692,12 @@ def _history(run: Any) -> list[dict]:
     """
     rows = list(run.scan_history(keys=["test-accuracy", "test-loss"]))
     if not rows:
+        # A config seed created by create_experiments.py that no training job ever
+        # wrote to is left in state "finished", so it arrives here looking exactly
+        # like a run that trained and failed to log. `_runtime` separates them:
+        # it is 0 (or absent) until a job actually starts writing to the run.
+        if not (dict(run.summary or {}).get("_runtime") or 0):
+            raise RuntimeError("run never started (config seed; no training job wrote to it)")
         raise RuntimeError("no test-accuracy / test-loss rows in run history")
     return [
         {
@@ -719,8 +726,86 @@ def _baseline_means(api: wandb.Api, entity: str, project: str, run_id: str) -> p
     return df
 
 
-def _final_schedule_arrays(run: Any) -> tuple[list[float], list[float]]:
-    """Pull the final-outer-step row from the sigmas/clips W&B tables."""
+def _artifact_version(name: str) -> int:
+    """The ``:vNN`` suffix of an artifact name as an int (-1 if absent)."""
+    _, _, ver = name.rpartition(":v")
+    return int(ver) if ver.isdigit() else -1
+
+
+def _latest_checkpoint_artifact(run: Any) -> Any | None:
+    """The newest ``checkpoint-<run_id>`` artifact logged by ``run``, or None.
+
+    Prefers the ``step`` recorded in the artifact metadata by ``save_checkpoint``.
+    Versions increment monotonically with the step, so the ``:vNN`` suffix is an
+    equivalent ordering and is used for artifact stand-ins that carry no metadata
+    (notably ``LocalArtifact``, which replays an archive).
+    """
+    best, best_key = None, None
+    for art in run.logged_artifacts():
+        if "checkpoint-" not in art.name:
+            continue
+        step = (getattr(art, "metadata", None) or {}).get("step")
+        key = int(step) if step is not None else _artifact_version(art.name)
+        if best_key is None or key > best_key:
+            best, best_key = art, key
+    return best
+
+
+def _schedule_arrays_from_checkpoint(run: Any) -> tuple[list[float], list[float]]:
+    """Final σ/clip recovered from the newest checkpoint artifact.
+
+    ``util.checkpointing.save_checkpoint`` writes ``sigmas.npy``/``clips.npy``
+    beside every Orbax checkpoint, holding exactly ``get_private_noise_scales()``
+    and ``get_private_clips()`` — the same two arrays the sigmas/clips W&B tables
+    hold. The last checkpoint is taken after the final update+``project()``, so it
+    reproduces the tables' final row (verified equal to 1e-16 on a run that has
+    both).
+
+    This is the recovery path for runs whose *table* artifacts never uploaded:
+    the offline ``wandb sync`` used to run before ``run.finish()`` had flushed
+    them (see ``util.wandb_init.finish_and_sync``), so the tables were lost while
+    the checkpoints — logged throughout training — survived.
+
+    Only ``finished`` runs are recovered. ``main.py`` logs the tables from its
+    ``finally`` block, so reaching state ``finished`` means teardown ran and the
+    newest checkpoint is genuinely the run's *last* one. A run that died without
+    teardown (SIGKILL / OOM / node failure) is state ``crashed`` — and ``main``
+    fetches those too — but its newest checkpoint is wherever training happened
+    to stop, so recovering it would pass a mid-training schedule off as final.
+    Those stay in missing.csv instead.
+    """
+    state = getattr(run, "state", None)
+    if state != "finished":
+        raise RuntimeError(
+            f"missing 'sigmas'/'clips' artifact and run state is {state!r}, not 'finished' "
+            "— its newest checkpoint is mid-training, so it is not the final schedule"
+        )
+
+    art = _latest_checkpoint_artifact(run)
+    if art is None:
+        raise RuntimeError("missing 'sigmas'/'clips' artifact and no checkpoint to recover from")
+
+    root = str(ARTIFACT_ROOT / _safe_dir_name(art.name))
+    with _claim_download_dir(root, owner=art.name):
+        local = Path(art.download(root=root))
+
+    arrays: list[list[float]] = []
+    for tn in ("sigmas", "clips"):
+        path = local / f"{tn}.npy"
+        if not path.exists():
+            raise RuntimeError(f"checkpoint artifact {art.name} has no {tn}.npy")
+        arrays.append([float(v) for v in np.load(path)])
+    return arrays[0], arrays[1]
+
+
+def _final_schedule_arrays(run: Any) -> tuple[list[float], list[float], str]:
+    """Final-outer-step σ/clip, plus which source they came from.
+
+    Returns ``(sigmas, clips, source)`` where ``source`` is ``"table"`` (the
+    sigmas/clips W&B tables) or ``"checkpoint"`` (recovered — see
+    ``_schedule_arrays_from_checkpoint``). Both arrays always come from the same
+    source: pairing a table σ with a checkpoint clip would mix two outer steps.
+    """
     tables: dict[str, pd.DataFrame] = {}
     targets = ("sigmas", "clips")
     for art in run.logged_artifacts():
@@ -732,15 +817,15 @@ def _final_schedule_arrays(run: Any) -> tuple[list[float], list[float]]:
                 tables[tn] = pd.DataFrame(data=t.data, columns=t.columns)
         if len(tables) == len(targets):
             break
-    for tn in targets:
-        if tn not in tables:
-            raise RuntimeError(f"missing '{tn}' artifact")
+    if len(tables) != len(targets):
+        sigmas, clips = _schedule_arrays_from_checkpoint(run)
+        return sigmas, clips, "checkpoint"
 
     def _final_row(df: pd.DataFrame) -> list[float]:
         cols = [c for c in df.columns if c != "step"]
         return [float(v) for v in df[cols].iloc[-1].tolist()]
 
-    return _final_row(tables["sigmas"]), _final_row(tables["clips"])
+    return _final_row(tables["sigmas"]), _final_row(tables["clips"]), "table"
 
 
 def _fetch_one_run(
@@ -823,7 +908,7 @@ def _fetch_one_run(
             }
         )
 
-    sigmas, clips = _final_schedule_arrays(run)
+    sigmas, clips, schedule_source = _final_schedule_arrays(run)
     if T is not None and (len(sigmas) != T or len(clips) != T):
         raise RuntimeError(
             f"final schedule length mismatch (sigmas={len(sigmas)}, clips={len(clips)}, T={T})"
@@ -839,6 +924,9 @@ def _fetch_one_run(
                 "step_norm": step_norm,
                 "sigma": s_val,
                 "clip": c_val,
+                # "table" or "checkpoint" — recovered rows are exact, but the
+                # provenance is worth keeping auditable. See _final_schedule_arrays.
+                "schedule_source": schedule_source,
             }
         )
 

@@ -562,3 +562,257 @@ class TestMlpParamCountGuard:
         assert crf._mlp_param_count(din, hidden, nclasses) == crf._built_mlp_param_count(
             din, hidden, nclasses
         )
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint recovery for runs whose sigmas/clips tables never uploaded
+# ---------------------------------------------------------------------------
+
+
+class FakeCheckpointArtifact:
+    """A ``checkpoint-<run_id>`` artifact holding save_checkpoint's npy sidecars."""
+
+    def __init__(self, name, sigmas, clips, metadata=None, with_npys=True):
+        self.name = name
+        self._sigmas = sigmas
+        self._clips = clips
+        self._with_npys = with_npys
+        if metadata is not None:
+            self.metadata = metadata
+
+    def download(self, root=None):
+        Path(root).mkdir(parents=True, exist_ok=True)
+        # Orbax's own files always exist; the npy sidecars are what we read.
+        (Path(root) / "_METADATA").write_text("{}")
+        if self._with_npys:
+            np.save(Path(root) / "sigmas.npy", np.asarray(self._sigmas))
+            np.save(Path(root) / "clips.npy", np.asarray(self._clips))
+        return str(root)
+
+
+class _RunWithArtifactList:
+    """Minimal run stand-in whose logged_artifacts() is fully controlled."""
+
+    def __init__(self, artifacts, run_id="abc123", state="finished"):
+        self.id = run_id
+        self.state = state
+        self._artifacts = artifacts
+
+    def logged_artifacts(self):
+        return list(self._artifacts)
+
+
+class TestFinalScheduleArraysCheckpointFallback:
+    """Runs that completed but lost their table artifacts must still be readable.
+
+    The offline `wandb sync` ran before `run.finish()` flushed the tables, so 61
+    FirSweep runs kept every checkpoint but lost sigmas/clips. save_checkpoint
+    writes the same two arrays as npy sidecars, so the data is recoverable.
+    """
+
+    def test_reads_tables_when_they_are_present(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        run = _RunWithArtifactList(
+            [
+                FakeLoggedArtifact("sigmas:v1", "sigmas", ["step", "0"], [[0, 0.4], [1, 0.6]]),
+                FakeLoggedArtifact("clips:v1", "clips", ["step", "0"], [[0, 1.0], [1, 1.2]]),
+                FakeCheckpointArtifact("checkpoint-abc123:v3", [9.9], [9.9]),
+            ]
+        )
+
+        sigmas, clips, source = crf._final_schedule_arrays(run)
+
+        assert source == "table"
+        # The tables win; the checkpoint's sentinel values must not appear.
+        assert sigmas == [0.6]
+        assert clips == [1.2]
+
+    def test_falls_back_to_the_checkpoint_when_both_tables_are_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        run = _RunWithArtifactList(
+            [FakeCheckpointArtifact("checkpoint-abc123:v3", [0.5, 0.6], [1.5, 1.6])]
+        )
+
+        sigmas, clips, source = crf._final_schedule_arrays(run)
+
+        assert source == "checkpoint"
+        assert sigmas == pytest.approx([0.5, 0.6])
+        assert clips == pytest.approx([1.5, 1.6])
+
+    def test_falls_back_when_only_clips_is_missing(self, tmp_path, monkeypatch):
+        # The observed partial case: the upload was cut off after `sigmas`.
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        run = _RunWithArtifactList(
+            [
+                FakeLoggedArtifact("sigmas:v1", "sigmas", ["step", "0"], [[0, 0.4]]),
+                FakeCheckpointArtifact("checkpoint-abc123:v3", [0.5], [1.5]),
+            ]
+        )
+
+        sigmas, clips, source = crf._final_schedule_arrays(run)
+
+        assert source == "checkpoint"
+        # Both come from the checkpoint: mixing a table sigma with a checkpoint
+        # clip would pair arrays from two different outer steps.
+        assert sigmas == pytest.approx([0.5])
+        assert clips == pytest.approx([1.5])
+
+    def test_uses_the_newest_checkpoint_by_recorded_step(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        run = _RunWithArtifactList(
+            [
+                FakeCheckpointArtifact("checkpoint-abc123:v0", [0.1], [1.1], {"step": 24}),
+                FakeCheckpointArtifact("checkpoint-abc123:v9", [0.9], [1.9], {"step": 999}),
+                FakeCheckpointArtifact("checkpoint-abc123:v4", [0.4], [1.4], {"step": 499}),
+            ]
+        )
+
+        sigmas, clips, _ = crf._final_schedule_arrays(run)
+
+        assert sigmas == pytest.approx([0.9])
+        assert clips == pytest.approx([1.9])
+
+    def test_falls_back_to_version_order_without_metadata(self, tmp_path, monkeypatch):
+        # LocalArtifact (archive replay) carries no .metadata, and versions
+        # increment monotonically with the step, so :vNN is the tiebreaker.
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        run = _RunWithArtifactList(
+            [
+                FakeCheckpointArtifact("checkpoint-abc123:v2", [0.2], [1.2]),
+                FakeCheckpointArtifact("checkpoint-abc123:v11", [0.11], [1.11]),
+                FakeCheckpointArtifact("checkpoint-abc123:v3", [0.3], [1.3]),
+            ]
+        )
+
+        sigmas, _, _ = crf._final_schedule_arrays(run)
+
+        # v11 > v3 numerically, not lexicographically.
+        assert sigmas == pytest.approx([0.11])
+
+    def test_raises_when_neither_tables_nor_checkpoint_exist(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        run = _RunWithArtifactList([])
+
+        with pytest.raises(RuntimeError, match="no checkpoint"):
+            crf._final_schedule_arrays(run)
+
+    def test_raises_when_the_checkpoint_has_no_npy_sidecars(self, tmp_path, monkeypatch):
+        # Checkpoints written before the npy sidecars were added.
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        run = _RunWithArtifactList(
+            [FakeCheckpointArtifact("checkpoint-abc123:v3", [0.5], [1.5], with_npys=False)]
+        )
+
+        with pytest.raises(RuntimeError, match=r"sigmas\.npy"):
+            crf._final_schedule_arrays(run)
+
+
+class _RecoveredRun(FakeRunWithArtifacts):
+    """A completed run that lost both table artifacts but kept its checkpoints."""
+
+    def logged_artifacts(self):
+        return [
+            FakeCheckpointArtifact("checkpoint-abc123:v1", [0.4, 0.5], [1.0, 1.1], {"step": 999})
+        ]
+
+
+class TestScheduleSourceProvenance:
+    def test_marks_rows_read_from_the_tables(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        api = FakeApi(FakeRunWithArtifacts(), _baseline_df())
+
+        _, schedules, _ = crf._fetch_one_run("e", "p", "abc123", api=api)
+
+        assert {r["schedule_source"] for r in schedules} == {"table"}
+
+    def test_marks_rows_recovered_from_a_checkpoint(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        api = FakeApi(_RecoveredRun(), _baseline_df())
+
+        _, schedules, _ = crf._fetch_one_run("e", "p", "abc123", api=api)
+
+        assert {r["schedule_source"] for r in schedules} == {"checkpoint"}
+        assert [r["sigma"] for r in schedules] == pytest.approx([0.4, 0.5])
+
+
+# ---------------------------------------------------------------------------
+# Never-started config seeds
+# ---------------------------------------------------------------------------
+
+
+class _NoHistoryRun(FakeRun):
+    def __init__(self, summary):
+        super().__init__()
+        self.summary = summary
+        self._history = []
+
+
+class TestNeverStartedClassification:
+    """A config seed no job ever wrote to is not a data-loss problem.
+
+    create_experiments.py leaves seeds in state "finished", so they reach the
+    fetch looking identical to a run that trained but failed to log.
+    """
+
+    def test_reports_a_config_seed_as_never_started(self):
+        with pytest.raises(RuntimeError, match="never started"):
+            crf._history(_NoHistoryRun({"_runtime": 0}))
+
+    def test_treats_a_missing_runtime_as_never_started(self):
+        with pytest.raises(RuntimeError, match="never started"):
+            crf._history(_NoHistoryRun({}))
+
+    def test_still_reports_a_started_run_that_logged_nothing(self):
+        with pytest.raises(RuntimeError, match="no test-accuracy"):
+            crf._history(_NoHistoryRun({"_runtime": 4321.0}))
+
+    def test_a_run_with_history_is_unaffected(self):
+        rows = crf._history(FakeRun())
+        assert [r["test_acc"] for r in rows] == [0.5, 0.9]
+
+
+class TestCheckpointFallbackOnlyForFinishedRuns:
+    """A mid-training checkpoint must never be passed off as the final schedule.
+
+    main() fetches ``crashed`` runs as well as ``finished`` ones. main.py logs the
+    tables from its ``finally`` block, so a run that reached state ``finished``
+    ran teardown and its newest checkpoint really is its last. A run SIGKILLed by
+    SLURM (OOM / wall clock / node failure) never got there, and its newest
+    checkpoint is wherever training happened to stop.
+    """
+
+    @pytest.mark.parametrize("state", ["crashed", "failed", "running", None])
+    def test_refuses_to_recover_a_run_that_did_not_finish(self, state, tmp_path, monkeypatch):
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        run = _RunWithArtifactList(
+            [FakeCheckpointArtifact("checkpoint-abc123:v3", [0.5], [1.5], {"step": 400})],
+            state=state,
+        )
+
+        with pytest.raises(RuntimeError, match="not 'finished'"):
+            crf._final_schedule_arrays(run)
+
+    def test_recovers_a_finished_run(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        run = _RunWithArtifactList(
+            [FakeCheckpointArtifact("checkpoint-abc123:v3", [0.5], [1.5], {"step": 999})],
+            state="finished",
+        )
+
+        sigmas, _, source = crf._final_schedule_arrays(run)
+        assert (sigmas, source) == (pytest.approx([0.5]), "checkpoint")
+
+    def test_a_crashed_run_with_tables_is_still_read_normally(self, tmp_path, monkeypatch):
+        # The gate guards only the fallback. A crashed run that *did* upload its
+        # tables has a genuine final row and must keep being read.
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        run = _RunWithArtifactList(
+            [
+                FakeLoggedArtifact("sigmas:v1", "sigmas", ["step", "0"], [[0, 0.4]]),
+                FakeLoggedArtifact("clips:v1", "clips", ["step", "0"], [[0, 1.0]]),
+            ],
+            state="crashed",
+        )
+
+        sigmas, clips, source = crf._final_schedule_arrays(run)
+        assert (sigmas, clips, source) == ([0.4], [1.0], "table")
