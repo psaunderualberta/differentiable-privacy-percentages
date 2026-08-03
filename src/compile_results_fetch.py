@@ -556,7 +556,7 @@ def _dump_run_to_dir(run: Any, api: Any, entity: str, project: str, run_dir: Pat
         art.download(root=str(artifacts_root / sub))
         index.append({"name": art.name, "dir": sub, "kind": "logged"})
 
-    baseline_name = f"baseline-{run.id}:latest"
+    baseline_name = f"baseline-v2-{run.id}:latest"
     baseline = api.artifact(f"{entity}/{project}/{baseline_name}")
     sub = _safe_dir_name(baseline_name)
     baseline.download(root=str(artifacts_root / sub))
@@ -703,7 +703,7 @@ def _history(run: Any) -> list[dict]:
 
 
 def _baseline_means(api: wandb.Api, entity: str, project: str, run_id: str) -> pd.DataFrame:
-    name = f"baseline-{run_id}:latest"
+    name = f"baseline-v2-{run_id}:latest"
     artifact = api.artifact(f"{entity}/{project}/{name}")
     # Explicit per-artifact root: known before the download starts so the claim
     # guard covers the actual write window (see _claim_download_dir).
