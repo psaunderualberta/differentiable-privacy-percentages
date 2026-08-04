@@ -34,11 +34,15 @@ def warm(dataset: str, batch_size: int) -> tuple:
     budget is irrelevant here — only the dataset is being touched — so a nominal
     (eps, T) is used.
     """
+    from conf.scope import RunContext, using
     from conf.singleton_conf import SingletonConfig
     from util.dataloaders import get_dataset_shapes
 
     target = TargetSpec(name=dataset, eps=1.0, delta=1e-7, T=1, arch="")
-    with SingletonConfig.override(build_target_config(target, batch_size)):
+    config = build_target_config(target, batch_size)
+    # Both scopes, exactly as the three producers do it: net_factory reads the
+    # SingletonConfig, dataloaders reads the conf.scope RunContext.
+    with SingletonConfig.override(config), using(RunContext(config)):
         return get_dataset_shapes()
 
 

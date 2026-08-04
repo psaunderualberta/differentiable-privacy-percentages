@@ -1,5 +1,6 @@
 import dataclasses
 import os
+from pathlib import PurePosixPath
 
 import numpy as np
 import pandas as pd
@@ -237,6 +238,23 @@ def _imagenet100_select(
 def _chexpert_frontal_mask(frontal_lateral: np.ndarray) -> np.ndarray:
     """Boolean mask selecting frontal-view rows from the ``Frontal/Lateral`` column."""
     return np.asarray(frontal_lateral) == "Frontal"
+
+
+def _chexpert_relpath(csv_path: str) -> str:
+    """Map a CheXpert CSV ``Path`` onto the layout the download actually produced.
+
+    ``train.csv`` roots every path at the archive directory
+    (``CheXpert-v1.0-small/train/patient00001/...``), but the ``ashery/chexpert``
+    Kaggle mirror unzips ``train/`` and ``valid/`` straight into the data dir, so
+    joining the CSV value onto ``datadir`` points at nothing. Anchor on the split
+    component and drop anything ahead of it, which leaves an already-relative path
+    (the official archive's layout) untouched.
+    """
+    parts = PurePosixPath(csv_path).parts
+    for i, part in enumerate(parts):
+        if part in ("train", "valid"):
+            return str(PurePosixPath(*parts[i:]))
+    return csv_path
 
 
 _EYEPACS_IMG_SIZE = 256
@@ -522,18 +540,137 @@ _IMAGENET100_WNIDS: list[str] = [
     "n02090622",
 ]
 
-# Chrabaszcz downsampled-ImageNet 32x32 mirror on the Hugging Face hub. The label
-# feature's `names` must be wnids (n########); we map them onto the ImageNet-100
-# subset above. Change this constant if a different mirror is used.
-_IMAGENET32_HF_REPO = "Chrabaszcz/imagenet32"
+# The ImageNet-100 subset again, as the synset *names* the mirrors actually label
+# with. Aligned index-for-index with _IMAGENET100_WNIDS above (guarded by
+# test_dataloader.py): the wnids stay the citable identity of the subset (ADR 0007),
+# the names are only how we address it in a given mirror.
+_IMAGENET100_NAMES: list[str] = [
+    "bonnet, poke bonnet",  # n02869837
+    "green mamba",  # n01749939
+    "langur",  # n02488291
+    "Doberman, Doberman pinscher",  # n02107142
+    "gyromitra",  # n13037406
+    "Saluki, gazelle hound",  # n02091831
+    "vacuum, vacuum cleaner",  # n04517823
+    "window screen",  # n04589890
+    "cocktail shaker",  # n03062245
+    "garden spider, Aranea diademata",  # n01773797
+    "garter snake, grass snake",  # n01735189
+    "carbonara",  # n07831146
+    "pineapple, ananas",  # n07753275
+    "computer keyboard, keypad",  # n03085013
+    "tripod",  # n04485082
+    "komondor",  # n02105505
+    "American lobster, Northern lobster, Maine lobster, Homarus americanus",  # n01983481
+    "bannister, banister, balustrade, balusters, handrail",  # n02788148
+    "honeycomb",  # n03530642
+    "tile roof",  # n04435653
+    "papillon",  # n02086910
+    "boathouse",  # n02859443
+    "stinkhorn, carrion fungus",  # n13040303
+    "jean, blue jean, denim",  # n03594734
+    "Chihuahua",  # n02085620
+    "Chesapeake Bay retriever",  # n02099849
+    "robin, American robin, Turdus migratorius",  # n01558993
+    "tub, vat",  # n04493381
+    "Great Dane",  # n02109047
+    "rotisserie",  # n04111531
+    "bottlecap",  # n02877765
+    "throne",  # n04429376
+    "little blue heron, Egretta caerulea",  # n02009229
+    "rock crab, Cancer irroratus",  # n01978455
+    "Rottweiler",  # n02106550
+    "lorikeet",  # n01820546
+    "Gila monster, Heloderma suspectum",  # n01692333
+    "head cabbage",  # n07714571
+    "car wheel",  # n02974003
+    "coyote, prairie wolf, brush wolf, Canis latrans",  # n02114855
+    "moped",  # n03785016
+    "milk can",  # n03764736
+    "mixing bowl",  # n03775546
+    "toy terrier",  # n02087046
+    "chocolate sauce, chocolate syrup",  # n07836838
+    "rocking chair, rocker",  # n04099969
+    "wing",  # n04592741
+    "park bench",  # n03891251
+    "ambulance",  # n02701002
+    "football helmet",  # n03379051
+    "leafhopper",  # n02259212
+    "cauliflower",  # n07715103
+    "pirate, pirate ship",  # n03947888
+    "purse",  # n04026417
+    "hare",  # n02326432
+    "lampshade, lamp shade",  # n03637318
+    "fiddler crab",  # n01980166
+    "standard poodle",  # n02113799
+    "Shih-Tzu",  # n02086240
+    "pedestal, plinth, footstall",  # n03903868
+    "gibbon, Hylobates lar",  # n02483362
+    "safety pin",  # n04127249
+    "English foxhound",  # n02089973
+    "chime, bell, gong",  # n03017168
+    "American Staffordshire terrier, Staffordshire terrier, American pit bull terrier, pit bull terrier",  # n02093428
+    "bassinet",  # n02804414
+    "wild boar, boar, Sus scrofa",  # n02396427
+    "theater curtain, theatre curtain",  # n04418357
+    "dung beetle",  # n02172182
+    "hognose snake, puff adder, sand viper",  # n01729322
+    "Mexican hairless",  # n02113978
+    "mortarboard",  # n03787032
+    "Walker hound, Walker foxhound",  # n02089867
+    "red fox, Vulpes vulpes",  # n02119022
+    "modem",  # n03777754
+    "slide rule, slipstick",  # n04238763
+    "walking stick, walkingstick, stick insect",  # n02231487
+    "cinema, movie theater, movie theatre, movie house, picture palace",  # n03032252
+    "meerkat, mierkat",  # n02138441
+    "kuvasz",  # n02104029
+    "obelisk",  # n03837869
+    "harmonica, mouth organ, harp, mouth harp",  # n03494278
+    "sarong",  # n04136333
+    "mousetrap",  # n03794056
+    "hard disc, hard disk, fixed disk",  # n03492542
+    "American coot, marsh hen, mud hen, water hen, Fulica americana",  # n02018207
+    "reel",  # n04067472
+    "pickup, pickup truck",  # n03930630
+    "iron, smoothing iron",  # n03584829
+    "tabby, tabby cat",  # n02123045
+    "ski mask",  # n04229816
+    "vizsla, Hungarian pointer",  # n02100583
+    "laptop, laptop computer",  # n03642806
+    "stretcher",  # n04336792
+    "Dutch oven",  # n03259280
+    "African hunting dog, hyena dog, Cape hunting dog, Lycaon pictus",  # n02116738
+    "boxer",  # n02108089
+    "gasmask, respirator, gas helmet",  # n03424325
+    "goose",  # n01855672
+    "borzoi, Russian wolfhound",  # n02090622
+]
+
+
+# Downsampled-ImageNet 32x32 on the Hugging Face hub. Chrabaszcz's own upload is
+# gone; this mirror carries the identical splits (1,281,167 train / 50,000 val).
+# Its label feature's `names` are readable synsets, NOT wnids, so selection goes
+# through _IMAGENET100_NAMES. Change both constants together if a mirror is swapped.
+_IMAGENET32_HF_REPO = "ChocolateDave/imagenet-32"
+_IMAGENET32_IMG_SIZE = 32
 
 
 def _imagenet32_download_and_cache(datadir: str) -> None:
-    """Download the HF ImageNet-32 mirror, keep the 100-wnid subset, cache as .npy.
+    """Download the HF ImageNet-32 mirror, keep the 100-class subset, cache as .npy.
 
-    Mirrors ``image_ds_saver`` but filters to ``_IMAGENET100_WNIDS`` and remaps the
+    Mirrors ``image_ds_saver`` but filters to the ImageNet-100 subset and remaps the
     labels to ``[0, 100)`` via ``_imagenet100_select``. Images are cached HWC uint8
     (like cifar-10) so ``_preprocess('imagenet', ...)`` transposes to CHW.
+
+    Selection is by synset *name*: the mirror's label feature carries readable names
+    rather than wnids, and ``_IMAGENET100_NAMES`` is the same 100 classes in the same
+    order as ``_IMAGENET100_WNIDS`` (see the constants above).
+
+    The label column is read first and the subset selected *before* any image is
+    decoded — the source split is 1.28M images and materialising them all to filter
+    down to ~128k would exhaust memory. Decoding then goes row-by-row into a
+    preallocated array.
 
     Produces:
         imagenet-train.npy         (N_train, 32, 32, 3) uint8
@@ -541,21 +678,34 @@ def _imagenet32_download_and_cache(datadir: str) -> None:
         imagenet-val.npy           (N_val,   32, 32, 3) uint8
         imagenet-labels-val.npy    (N_val,   100) float32
     """
-    for split_name, hf_split in (("train", "train"), ("val", "validation")):
+    size = _IMAGENET32_IMG_SIZE
+    for split_name, hf_split in (("train", "train"), ("val", "val")):
         ds = load_dataset(_IMAGENET32_HF_REPO, split=hf_split)
-        wnid_names = ds.features["label"].names
-        sample_wnids = np.array([wnid_names[label] for label in ds["label"]])
+        class_names = ds.features["label"].names
+        sample_names = np.array([class_names[label] for label in ds["label"]])
 
-        mask, remapped = _imagenet100_select(sample_wnids, _IMAGENET100_WNIDS)
+        mask, remapped = _imagenet100_select(sample_names, _IMAGENET100_NAMES)
+        kept = np.flatnonzero(mask)
+        if kept.size == 0:
+            raise RuntimeError(
+                f"{_IMAGENET32_HF_REPO} split {hf_split!r} matched none of "
+                f"_IMAGENET100_NAMES — the mirror's label scheme has changed."
+            )
 
+        print(f"Processing imagenet {split_name} split ({kept.size} of {len(ds)} images)...")
         image_key = "image" if "image" in ds.features else "img"
-        images = np.stack(
-            [np.asarray(img.convert("RGB"), dtype=np.uint8) for img in ds[image_key]]
-        )[mask]
-        labels = np.eye(len(_IMAGENET100_WNIDS), dtype=np.float32)[remapped]
+        subset = ds.select(kept)
+        images = np.empty((kept.size, size, size, 3), dtype=np.uint8)
+        for i, example in enumerate(subset):
+            images[i] = np.asarray(example[image_key].convert("RGB"), dtype=np.uint8)
+            if i % 20000 == 0:
+                print(f"  {i}/{kept.size}")
+
+        labels = np.eye(len(_IMAGENET100_NAMES), dtype=np.float32)[remapped]
 
         np.save(os.path.join(datadir, f"imagenet-{split_name}.npy"), images)
         np.save(os.path.join(datadir, f"imagenet-labels-{split_name}.npy"), labels)
+        print(f"  Saved {split_name} split.")
 
 
 def _ensure_imagenet32_cached(datadir: str) -> tuple[str, str, str, str]:
@@ -623,7 +773,7 @@ def _chexpert_download_and_cache(datadir: str) -> None:
             img_file + ".tmp", mode="w+", dtype=np.uint8, shape=(n, 1, size, size)
         )
         for i, rel_path in enumerate(rows["Path"]):
-            img_path = os.path.join(datadir, rel_path)
+            img_path = os.path.join(datadir, _chexpert_relpath(rel_path))
             with Image.open(img_path) as img:
                 img_resized = img.convert("L").resize((size, size), Image.BILINEAR)
                 mmap[i, 0] = np.asarray(img_resized, dtype=np.uint8)

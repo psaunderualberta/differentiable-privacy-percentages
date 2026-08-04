@@ -139,6 +139,17 @@ class TestDatasetShapesConsistency:
         with pytest.raises(AssertionError, match="eyepacs"):
             assert_shapes_consistent()
 
+    @pytest.mark.parametrize(
+        "dataset, wrong",
+        [("chexpert", ((1, 32, 32), 2)), ("imagenet", ((3, 64, 64), 100))],
+    )
+    def test_assert_shapes_consistent_catches_surrogate_drift(self, monkeypatch, dataset, wrong):
+        """The surrogate targets are tied to the dataloader's size constants for the
+        same reason eyepacs is — the entries here are hand-copied and drifted once."""
+        monkeypatch.setitem(DATASET_SHAPES, dataset, wrong)
+        with pytest.raises(AssertionError, match=dataset):
+            assert_shapes_consistent()
+
 
 # ---------------------------------------------------------------------------
 # Integration fakes: a duck-typed live run + api that both the fetch path and

@@ -6,9 +6,12 @@ import numpy as np
 import pytest
 
 from util.dataloaders import (
+    _IMAGENET100_NAMES,
+    _IMAGENET100_WNIDS,
     DatasetLoader,
     _chexpert_binary_onehot,
     _chexpert_frontal_mask,
+    _chexpert_relpath,
     _get_sample_shape,
     _imagenet100_select,
     _preprocess,
@@ -116,6 +119,29 @@ class TestChexpertLabels:
         col = np.array(["Frontal", "Lateral", "Frontal"])
         np.testing.assert_array_equal(_chexpert_frontal_mask(col), [True, False, True])
 
+    def test_relpath_strips_the_archive_root(self):
+        """train.csv roots every Path at the archive dir, but the Kaggle mirror
+        (`ashery/chexpert`) unzips `train/` straight into datadir — so the CSV path
+        joined onto datadir points at nothing."""
+        assert (
+            _chexpert_relpath("CheXpert-v1.0-small/train/patient00001/study1/view1_frontal.jpg")
+            == "train/patient00001/study1/view1_frontal.jpg"
+        )
+        assert (
+            _chexpert_relpath("CheXpert-v1.0-small/valid/patient64541/study1/view1_frontal.jpg")
+            == "valid/patient64541/study1/view1_frontal.jpg"
+        )
+
+    def test_relpath_leaves_an_already_relative_path_alone(self):
+        """The official archive layout must keep working, so this is idempotent."""
+        p = "train/patient00001/study1/view1_frontal.jpg"
+        assert _chexpert_relpath(p) == p == _chexpert_relpath(_chexpert_relpath(p))
+
+    def test_relpath_passes_through_an_unrecognised_layout(self):
+        """No split component to anchor on — better to fail loudly at open() with the
+        original path than to silently mangle it."""
+        assert _chexpert_relpath("some/other/thing.jpg") == "some/other/thing.jpg"
+
 
 class TestImagenet100Subset:
     """Filter the 1000-class source to the published 100-wnid subset and remap labels."""
@@ -127,6 +153,24 @@ class TestImagenet100Subset:
         np.testing.assert_array_equal(mask, [True, True, True, False, True])
         # labels are given only for the selected rows, in original order
         np.testing.assert_array_equal(labels, [0, 2, 1, 0])
+
+    def test_subset_names_align_index_for_index_with_wnids(self):
+        """The available ImageNet-32 mirrors label by synset *name*, not wnid, so
+        selection goes through ``_IMAGENET100_NAMES``. The wnid list stays the
+        citable identity of the subset (ADR 0007), which only holds if the two are
+        the same classes in the same order — a silent misalignment would relabel
+        every sample rather than fail."""
+        assert len(_IMAGENET100_NAMES) == len(_IMAGENET100_WNIDS) == 100
+        assert len(set(_IMAGENET100_NAMES)) == 100
+        # Spot-check the published CMC head: n02869837=bonnet, n01749939=green mamba,
+        # n02488291=langur, n02107142=Doberman.
+        assert _IMAGENET100_WNIDS[:4] == ["n02869837", "n01749939", "n02488291", "n02107142"]
+        assert _IMAGENET100_NAMES[:4] == [
+            "bonnet, poke bonnet",
+            "green mamba",
+            "langur",
+            "Doberman, Doberman pinscher",
+        ]
 
 
 class TestDataloaderTestChunks:

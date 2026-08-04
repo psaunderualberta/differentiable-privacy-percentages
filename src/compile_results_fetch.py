@@ -105,17 +105,30 @@ def assert_shapes_consistent() -> None:
 
     The eyepacs entry silently disagreed with the cache once (224x224/2-class here
     vs the dataloader's 256x256/5-class), so its shape is tied to the dataloader's
-    own image-size / class-count constants rather than a hand-copied literal.
+    own image-size / class-count constants rather than a hand-copied literal. The
+    two surrogate targets are pinned the same way.
     """
-    from util.dataloaders import _EYEPACS_IMG_SIZE
+    from util.dataloaders import (
+        _CHEXPERT_IMG_SIZE,
+        _EYEPACS_IMG_SIZE,
+        _IMAGENET32_IMG_SIZE,
+        _IMAGENET100_NAMES,
+    )
 
-    expected_eyepacs = ((3, _EYEPACS_IMG_SIZE, _EYEPACS_IMG_SIZE), 5)
-    got = DATASET_SHAPES["eyepacs"]
-    if got != expected_eyepacs:
-        raise AssertionError(
-            f"DATASET_SHAPES['eyepacs']={got} drifted from the dataloader cache "
-            f"layout {expected_eyepacs}"
-        )
+    expected = {
+        "eyepacs": ((3, _EYEPACS_IMG_SIZE, _EYEPACS_IMG_SIZE), 5),
+        "chexpert": ((1, _CHEXPERT_IMG_SIZE, _CHEXPERT_IMG_SIZE), 2),
+        "imagenet": (
+            (3, _IMAGENET32_IMG_SIZE, _IMAGENET32_IMG_SIZE),
+            len(_IMAGENET100_NAMES),
+        ),
+    }
+    for dataset, want in expected.items():
+        got = DATASET_SHAPES[dataset]
+        if got != want:
+            raise AssertionError(
+                f"DATASET_SHAPES[{dataset!r}]={got} drifted from the dataloader cache layout {want}"
+            )
 
 
 _AUTO_CNN: dict[str, dict] = {
