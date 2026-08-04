@@ -12,6 +12,41 @@ from conf.scope import current
 
 __DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
 
+
+_LARGE_DATASETS = frozenset({"eyepacs", "chexpert", "imagenet"})
+"""Datasets whose .npy cache is too big for a Compute Canada /home quota.
+
+EyePACS (~35k 256x256 RGB), CheXpert (~190k 64x64 grayscale) and ImageNet-32
+(~128k 32x32 RGB) run to tens of GB; the rest are well under a GB.
+"""
+
+
+def _has_cache(directory: str) -> bool:
+    """Whether ``directory`` already holds cached ``.npy`` files."""
+    return os.path.isdir(directory) and any(f.endswith(".npy") for f in os.listdir(directory))
+
+
+def dataset_dir(dataset_name: str) -> str:
+    """Return the directory holding ``dataset_name``'s cached ``.npy`` files.
+
+    On Compute Canada ``$SCRATCH`` is set and gives a large, purgeable quota,
+    while ``/home`` is small — so the big datasets are cached under
+    ``$SCRATCH/data`` rather than the repo's ``src/data``.  Both roots are
+    searched first regardless of size, so a dataset that is *already* cached is
+    never re-downloaded just because the size rule would place it elsewhere.
+    """
+    home = os.path.join(__DATA_DIR, dataset_name)
+    scratch_root = os.environ.get("SCRATCH", "")
+    if not scratch_root:
+        return home
+
+    scratch = os.path.join(scratch_root, "data", dataset_name)
+    for candidate in (scratch, home):
+        if _has_cache(candidate):
+            return candidate
+    return scratch if dataset_name in _LARGE_DATASETS else home
+
+
 # ---------------------------------------------------------------------------
 # Module-level memmap cache: avoids re-opening the file header on every callback
 # call.  Keyed by absolute path; values are read-only np.memmap objects.
@@ -854,26 +889,20 @@ def get_dataset_loader() -> DatasetLoader:
     poly_d = sweep_config.dataset_poly_d
     batch_size = env_config.batch_size
 
+    datadir = dataset_dir(dataset_name)
     if dataset_name == "mnist":
-        datadir = os.path.join(__DATA_DIR, "mnist")
         x_train, y_train, x_val, y_val = _ensure_mnist_cached(datadir, variant="mnist")
     elif dataset_name == "fashion-mnist":
-        datadir = os.path.join(__DATA_DIR, "fashion-mnist")
         x_train, y_train, x_val, y_val = _ensure_mnist_cached(datadir, variant="fashion-mnist")
     elif dataset_name == "cifar-10":
-        datadir = os.path.join(__DATA_DIR, "cifar-10")
         x_train, y_train, x_val, y_val = _ensure_cifar10_cached(datadir)
     elif dataset_name == "eyepacs":
-        datadir = os.path.join(__DATA_DIR, "eyepacs")
         x_train, y_train, x_val, y_val = _ensure_eyepacs_cached(datadir)
     elif dataset_name == "chexpert":
-        datadir = os.path.join(__DATA_DIR, "chexpert")
         x_train, y_train, x_val, y_val = _ensure_chexpert_cached(datadir)
     elif dataset_name == "imagenet":
-        datadir = os.path.join(__DATA_DIR, "imagenet")
         x_train, y_train, x_val, y_val = _ensure_imagenet32_cached(datadir)
     elif dataset_name == "california":
-        datadir = os.path.join(__DATA_DIR, "california")
         x_train, y_train, x_val, y_val = _ensure_california_cached(datadir, poly_d)
     else:
         raise ValueError(f"Unknown dataset: {dataset_name!r}")
@@ -946,7 +975,7 @@ def get_dataset_shapes() -> tuple[
 
 def _dataloader_eyepacs(_=None, test=False) -> tuple[np.ndarray, np.ndarray]:
     """Load EyePACS retinal images as float32 arrays (legacy full-load helper)."""
-    eyepacs_datadir = os.path.join(__DATA_DIR, "eyepacs")
+    eyepacs_datadir = dataset_dir("eyepacs")
     x_train, y_train, x_val, y_val = _ensure_eyepacs_cached(eyepacs_datadir)
     img_file = x_val if test else x_train
     lbl_file = y_val if test else y_train
@@ -957,7 +986,7 @@ def _dataloader_eyepacs(_=None, test=False) -> tuple[np.ndarray, np.ndarray]:
 
 def _dataloader_california(degree=1):
     """Load the California Housing dataset as a binary classification problem (legacy)."""
-    california_datadir = os.path.join(__DATA_DIR, "california")
+    california_datadir = dataset_dir("california")
     poly_d = degree if degree != 1 else None
     x_train, y_train, _, _ = _ensure_california_cached(california_datadir, poly_d)
     return np.load(x_train).astype(np.float32), np.load(y_train).astype(np.float32)
@@ -965,7 +994,7 @@ def _dataloader_california(degree=1):
 
 def _dataloader_mnist(_=None, test=False) -> tuple[np.ndarray, np.ndarray]:
     """Load MNIST as float32 arrays (legacy full-load helper)."""
-    mnist_datadir = os.path.join(__DATA_DIR, "mnist")
+    mnist_datadir = dataset_dir("mnist")
     x_train, y_train, x_test, y_test = _ensure_mnist_cached(mnist_datadir, variant="mnist")
     x_file = x_test if test else x_train
     y_file = y_test if test else y_train
@@ -976,7 +1005,7 @@ def _dataloader_mnist(_=None, test=False) -> tuple[np.ndarray, np.ndarray]:
 
 def _dataloader_cifar_10(_=None, test=False) -> tuple[np.ndarray, np.ndarray]:
     """Load CIFAR-10 as float32 arrays (legacy full-load helper)."""
-    cifar_datadir = os.path.join(__DATA_DIR, "cifar-10")
+    cifar_datadir = dataset_dir("cifar-10")
     x_train, y_train, x_test, y_test = _ensure_cifar10_cached(cifar_datadir)
     x_file = x_test if test else x_train
     y_file = y_test if test else y_train
@@ -987,7 +1016,7 @@ def _dataloader_cifar_10(_=None, test=False) -> tuple[np.ndarray, np.ndarray]:
 
 def _dataloader_fashion_mnist(_=None, test=False) -> tuple[np.ndarray, np.ndarray]:
     """Load Fashion-MNIST as float32 arrays (legacy full-load helper)."""
-    fmnist_datadir = os.path.join(__DATA_DIR, "fashion-mnist")
+    fmnist_datadir = dataset_dir("fashion-mnist")
     x_train, y_train, x_test, y_test = _ensure_mnist_cached(fmnist_datadir, variant="fashion-mnist")
     x_file = x_test if test else x_train
     y_file = y_test if test else y_train

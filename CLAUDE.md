@@ -156,6 +156,8 @@ Research/writing notes live in `thesis/notes/`:
 
 Datasets are downloaded from Hugging Face on first use and cached as `.npy` files in `src/data/<dataset-name>/`. Supported: `mnist`, `fashion-mnist`, `cifar-10`, `california` (tabular regression treated as binary classification).
 
+`dataset_dir(name)` decides *which* directory that is. On Compute Canada `$SCRATCH` is set, and the large targets (`eyepacs`, `chexpert`, `imagenet`) are cached under `$SCRATCH/data/<name>/` instead — they run to tens of GB and would blow the `/home` quota. Both roots are searched for an existing cache first, so a dataset already downloaded is never re-fetched just because the size rule would place it elsewhere.
+
 ### Logging (`util/logger.py`)
 
 `WandbTableLogger` accumulates arrays into W&B tables (one row per timestep) and produces line plots at the end. Schedules declare their logging schema via `get_logging_schemas()`. Direct `wandb.log()` calls in `main.py` handle scalar metrics (val-loss, val-accuracy, etc.).

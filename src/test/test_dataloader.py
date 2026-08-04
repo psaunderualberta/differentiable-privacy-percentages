@@ -5,6 +5,10 @@ import tempfile
 import numpy as np
 import pytest
 
+from conf import scope
+from conf.config import Config, EnvConfig, ScheduleOptimizerConfig, SweepConfig, WandbConfig
+from conf.singleton_conf import SingletonConfig
+from util import dataloaders
 from util.dataloaders import (
     _IMAGENET100_NAMES,
     _IMAGENET100_WNIDS,
@@ -15,6 +19,8 @@ from util.dataloaders import (
     _get_sample_shape,
     _imagenet100_select,
     _preprocess,
+    dataset_dir,
+    get_dataset_loader,
 )
 
 
@@ -223,3 +229,119 @@ class TestDataloaderValChunks:
         val_rows = set(perm[np.arange(loader.n_val)].tolist())
         test_rows = set(perm[np.arange(loader.n_test) + loader.n_val].tolist())
         assert val_rows.isdisjoint(test_rows)
+
+
+@pytest.fixture
+def roots(monkeypatch, tmp_path):
+    """Stand-ins for the two dataset roots: the repo's ``src/data`` and ``$SCRATCH``.
+
+    The real ``src/data`` is whatever the developer happens to have downloaded, so
+    resolution tests must not read it — the size rule and the already-cached rule
+    would give different answers on different machines.
+    """
+    home, scratch = tmp_path / "repo-data", tmp_path / "scratch"
+    monkeypatch.setattr(dataloaders, "__DATA_DIR", str(home))
+    monkeypatch.setenv("SCRATCH", str(scratch))
+    yield home, scratch / "data"
+
+
+def _write_cache(directory: pathlib.Path, name: str) -> pathlib.Path:
+    """Make ``directory`` look like an already-downloaded dataset cache."""
+    directory.mkdir(parents=True, exist_ok=True)
+    np.save(directory / f"{name}-train.npy", np.zeros(1))
+    return directory
+
+
+class TestDatasetDirResolution:
+    """Where a dataset's .npy cache lives, on a cluster with $SCRATCH and without."""
+
+    def test_without_scratch_everything_lives_under_the_repo(self, monkeypatch):
+        monkeypatch.delenv("SCRATCH", raising=False)
+        repo_data = pathlib.Path(dataloaders.__file__).resolve().parent.parent / "data"
+        assert dataset_dir("eyepacs") == str(repo_data / "eyepacs")
+
+    def test_with_scratch_an_uncached_large_dataset_lives_under_scratch(self, roots):
+        _, scratch = roots
+        assert dataset_dir("eyepacs") == str(scratch / "eyepacs")
+
+    def test_with_scratch_a_small_dataset_still_lives_under_the_repo(self, roots):
+        home, _ = roots
+        assert dataset_dir("mnist") == str(home / "mnist")
+
+    def test_a_small_dataset_already_cached_on_scratch_is_read_from_there(self, roots):
+        _, scratch = roots
+        cached = _write_cache(scratch / "mnist", "mnist")
+        assert dataset_dir("mnist") == str(cached)
+
+    def test_a_large_dataset_already_cached_in_the_repo_is_not_moved_to_scratch(self, roots):
+        home, _ = roots
+        cached = _write_cache(home / "eyepacs", "eyepacs")
+        assert dataset_dir("eyepacs") == str(cached)
+
+    def test_an_empty_directory_does_not_count_as_a_cache(self, roots):
+        home, scratch = roots
+        (home / "eyepacs").mkdir(parents=True)
+        assert dataset_dir("eyepacs") == str(scratch / "eyepacs")
+
+
+class TestGetDatasetLoaderUsesResolvedDir:
+    """get_dataset_loader must read the cache from wherever dataset_dir puts it."""
+
+    @staticmethod
+    def _write_mnist(directory: pathlib.Path) -> None:
+        directory.mkdir(parents=True, exist_ok=True)
+        np.save(directory / "mnist-train.npy", np.zeros((50, 28, 28), dtype=np.uint8))
+        np.save(directory / "mnist-labels-train.npy", np.zeros((50, 10), dtype=np.float32))
+        np.save(directory / "mnist-test.npy", np.zeros((40, 28, 28), dtype=np.uint8))
+        np.save(directory / "mnist-labels-test.npy", np.zeros((40, 10), dtype=np.float32))
+
+    @contextlib.contextmanager
+    def _mnist_run(self, monkeypatch):
+        """Scope a mnist RunContext, and make any download attempt a hard failure."""
+
+        def _no_download(*args, **kwargs):
+            raise AssertionError("get_dataset_loader tried to download an already-cached dataset")
+
+        monkeypatch.setattr(dataloaders, "load_dataset", _no_download)
+        config = Config(
+            wandb_conf=WandbConfig(),
+            sweep=SweepConfig(
+                dataset="mnist",
+                env=EnvConfig(batch_size=8),
+                schedule_optimizer=ScheduleOptimizerConfig(max_sigma=10.0),
+            ),
+        )
+        with SingletonConfig.override(config), scope.using(scope.RunContext(config)):
+            yield
+
+    def test_reads_the_cache_from_the_repo_root(self, roots, monkeypatch):
+        home, _ = roots
+        self._write_mnist(home / "mnist")
+        with self._mnist_run(monkeypatch):
+            loader = get_dataset_loader()
+        assert loader.x_path == str(home / "mnist" / "mnist-train.npy")
+
+    def test_reads_the_cache_from_scratch_when_that_is_where_it_lives(self, roots, monkeypatch):
+        _, scratch = roots
+        self._write_mnist(scratch / "mnist")
+        with self._mnist_run(monkeypatch):
+            loader = get_dataset_loader()
+        assert loader.x_path == str(scratch / "mnist" / "mnist-train.npy")
+
+    def test_the_legacy_full_load_helper_also_follows_scratch(self, roots, monkeypatch):
+        _, scratch = roots
+
+        def _no_download(*args, **kwargs):
+            raise AssertionError("legacy loader tried to download an already-cached dataset")
+
+        monkeypatch.setattr(dataloaders, "_eyepacs_download_and_cache", _no_download)
+        cache = scratch / "eyepacs"
+        cache.mkdir(parents=True)
+        images = np.full((2, 3, 4, 4), 255, dtype=np.uint8)
+        np.save(cache / "eyepacs-train.npy", images)
+        np.save(cache / "eyepacs-labels-train.npy", np.eye(2, 5, dtype=np.float32))
+        np.save(cache / "eyepacs-val.npy", images)
+        np.save(cache / "eyepacs-labels-val.npy", np.eye(2, 5, dtype=np.float32))
+
+        loaded_images, _ = dataloaders._dataloader_eyepacs()
+        assert np.allclose(loaded_images, 1.0)

@@ -1,8 +1,9 @@
 """Warm every target dataset's on-disk cache before the transfer producers run.
 
-``util/dataloaders.py`` pins ``__DATA_DIR`` to ``src/data/`` in the repo and its
-``_ensure_*`` paths have no locking and no temp-rename, so two producer array tasks
-first-touching the same dataset would race a half-written ``.npy``. This stage runs
+``util/dataloaders.py`` resolves one cache directory per dataset (``dataset_dir``:
+``src/data/`` in the repo, or ``$SCRATCH/data/`` for the large targets on a cluster)
+and its ``_ensure_*`` paths have no locking and no temp-rename, so two producer array
+tasks first-touching the same dataset would race a half-written ``.npy``. This stage runs
 **once, sequentially**, ahead of the producer arrays (which depend on it via
 ``-d afterok:``) so every download happens exactly once with no concurrency.
 
