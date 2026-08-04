@@ -1,183 +1,206 @@
 # Interpretation: FirSweep
 
 **Artifacts:** `src/cache/results/psaunder__FirSweep/`
-- `t_sweep_table.csv` (top level; identical to `plots/sgd-m0.9/t_sweep_table.csv`)
-- `plots/sgd-m0.0/t_sweep_table.csv`, `plots/sgd-m0.9/t_sweep_table.csv`
-- `plots/{sgd-m0.0,sgd-m0.9}/t_sweep_main.png`, `t_sweep_delta_vs_constant.png`
+- `t_sweep_table.csv` (top level — **stale**, see note below)
+- `plots/{sgd-m0.0,sgd-m0.9}/t_sweep_table.{csv,tex}`
+- `plots/{sgd-m0.0,sgd-m0.9}/t_sweep_main.png`, `t_sweep_delta_vs_constant.png`, `t_sweep_delta_vs_dynamic.png`
 - `plots/{sgd-m0.0,sgd-m0.9}/sigma_shape.png`, `clip_shape.png`
 - `plots/{sgd-m0.0,sgd-m0.9}/shape_variants/{sigma,clip}_shape__T_sweep__by_T.png`
-- `plots/{sgd-m0.0,sgd-m0.9}/ladders/{mlp-width,cnn-width,cnn-depth}/table.csv`
+- `plots/{sgd-m0.0,sgd-m0.9}/ladders/{mlp-width,cnn-width,cnn-depth}/table.{csv,tex}`, `main.png`
 - `plots/{sgd-m0.0,sgd-m0.9}/ladders/overall/arch_forest_delta.png`
 - `plots/sgd-m0.9/curves/t_sweep_acc__mnist.png`
-- `missing.csv`, `scalars.parquet` (used to check n and read-off convention)
+- `missing.csv`, `scalars.parquet` (used to establish n, n_reps, and read-off convention)
 
-**Date:** 2026-07-31
+**Date:** 2026-08-04
 
 ---
 
 ## Global setup (applies to everything below)
 
-- Two **optimizer arms**, plotted in parallel directories: `sgd-m0.0` (no inner-loop momentum) and `sgd-m0.9` (momentum 0.9). Everything else is nominally matched.
-- Two **axes**: `T-sweep` (T ∈ {2000, 3000, 5000, 7000} × ε ∈ {3, 5, 8, 10}, fixed arch `cnn-16x32-head32`, MNIST + Fashion-MNIST) and `arch` (fixed T = 5000, ε = 10, arch ladders, + CIFAR-10).
-- Four **methods**: Learned Schedule, Dynamic-DPSGD, Adaptive Clip (Andrew et al.), Constant σ/clip. Metric is test accuracy (%), ↑ better.
-- **8 seeds** per cell nominally.
+- Two **optimizer arms** in parallel directories: `sgd-m0.0` (no inner-loop momentum) and `sgd-m0.9` (momentum 0.9). Everything else nominally matched.
+- Two **axes**: `T-sweep` (T ∈ {2000, 3000, 5000, 7000} × ε ∈ {3, 5, 8, 10}, fixed arch `cnn-16x32-head32`, MNIST + Fashion-MNIST) and `arch` (fixed T = 5000, ε = 10, three architecture ladders, + CIFAR-10).
+- Four **methods**: Learned Schedule, Dynamic-DPSGD, Adaptive Clip (Andrew et al.), Constant σ/clip. Metric is test accuracy (%), ↑ better. Direction is not stated on any figure or table.
+- Nominally **8 seeds** per cell; 851 runs total, 3404 (run × method) rows in `scalars.parquet`.
 
-⚠ **The single most important setup fact, and it is nowhere on the figures:** from `scalars.parquet`, `n_reps = 1` for **Learned Schedule** and `n_reps = 8` for **all three baselines**. Every baseline number is a mean over 8 seeds × 8 evaluation replicates (64 draws); every Learned number is a mean over 8 seeds × 1 replicate (8 draws). The `±` columns are therefore not comparable across columns.
+### Three setup facts that are nowhere on the figures and change how everything reads
+
+1. **`n_reps` is 1 for Learned and 8 for every baseline** (`scalars.parquet`, exact — 851 rows at `n_reps=1` for Learned, 851 each at `n_reps=8` for the other three). Every baseline number is a mean over 8 seeds × 8 evaluation replicates; every Learned number is 8 seeds × 1 replicate. **The `±` columns are not comparable across columns** — Learned's spread is inflated by construction. (`learned_acc_8rep` exists as a column but is null in all 3404 rows, so the intended fix was never populated.)
+
+2. **The read-off step differs per figure, per arm, and — inside the arch ladders — per run.** Captions: m0.0 T-sweep "outer step 1000"; m0.9 T-sweep "outer steps 978–1000"; m0.0 cnn-depth ladder "outer steps 426–1000"; m0.9 cnn-depth ladder "outer steps **55**–1000". The ladder captions are ranges because each run is read at *its own* last completed step. So a single arch cell averages seeds read at outer step 55 with seeds read at step 1000.
+
+3. **119 of 851 runs (14%) never reached 1000 outer steps, and 116 of those 119 are CIFAR-10 arch runs.** Median final step by rung (CIFAR, m0.0/m0.9): `mlp-512` 134/139, `cnn-16x16x16` 698/496, `cnn-16x16x16x16` 681/690, `cnn-32x64` 656/705. Only `cnn-8x16-head64` and `mlp-64` are fully trained on CIFAR in either arm. **Every CIFAR ladder number except those two rungs is built from truncated outer loops.**
+
+### File-hygiene note
+
+`t_sweep_table.csv` at the top level is dated Jul 31 and **does not match** `plots/sgd-m0.9/t_sweep_table.csv` (Aug 3) — 9 of 32 rows differ (e.g. FMNIST ε=8 T=2000: `84.950` stale vs `84.863` current; MNIST ε=3 T=5000 Constant: `94.821 ± 1.119` stale vs `95.060 ± 0.847` current). Everything else in the directory was regenerated Aug 3. **Delete or regenerate the top-level copy** before anyone quotes it.
 
 ---
 
-## `plots/sgd-m0.0/t_sweep_table.csv` + `t_sweep_main.png` + `t_sweep_delta_vs_constant.png`
+## `plots/sgd-m0.0/` T-sweep — table, `t_sweep_main.png`, `t_sweep_delta_vs_{constant,dynamic}.png`
 
-**Setup:** Rows = (dataset, ε, T). Columns = the four methods, `mean ± spread` test accuracy. Bold = per-row best. Plot: x = T (2000–7000, linear), y = test accuracy, one panel per ε (columns) × dataset (rows), shaded = 95% CI. Caption: *"n = 1–9 seeds; read off at outer step 1000."*
+**Setup:** Rows = (dataset, ε, T); columns = four methods, `mean ± spread` test accuracy, bold = per-row best. Main plot: x = T (2000–7000, linear), y = test accuracy, panels ε (cols) × dataset (rows), y **shared across all 8 panels** (73–92), shaded = 95% CI. Delta plots: y = Learned − baseline, ±4 (vs Constant) / ±7.5 (vs Dynamic).
 
 ### What it shows
-- **[shown]** Learned wins 26 of 32 rows. The wins are concentrated at small T: at Fashion-MNIST/T=2000 the Learned–Constant gap is +2.5 to +2.9 pts across all four ε; by T=7000 it is ≈ 0.0 to −0.2.
-- **[shown]** The delta plot is monotone decreasing in T in all 8 panels, crossing zero at T ≈ 5000 (Fashion-MNIST) and T ≈ 5000–5500 (MNIST). At T=7000 Constant is bolded in 5 of 8 rows.
-- **[shown]** Adaptive Clip is catastrophically bad in this arm: Fashion-MNIST 73.5–80.3 vs 81–85 for everything else (−7 to −10 pts); MNIST 89.9–94.6 vs 94.5–96.8 (−2 to −5 pts). It is last in all 32 rows.
-- **[shown]** ε is nearly inert. Averaging over T, the ε=3→ε=10 accuracy change is +0.44 (Learned FMNIST), +0.19 (Constant), +0.15 (Dynamic), and **−0.03 / +0.02 for Adaptive Clip** — i.e. a 3.3× privacy-budget increase buys ≲ 0.5 pt for anyone, and literally nothing for Adaptive Clip.
-- **[inferred]** The Learned advantage is a *budget-allocation-under-scarcity* effect, not a general one — assumes accuracy at large T is optimisation-limited rather than noise-limited, in which case any valid schedule reaches the same ceiling and the learned shape has nothing to buy.
-- **[inferred]** The ε-invariance plus the Adaptive-Clip collapse jointly suggest this arm is *clip/step-size limited*, not noise limited — assumes σ is not the binding constraint at m=0.0.
-- **[not shown]** No per-arm hyperparameter table. Whether the inner learning rate was retuned for m=0.0 vs m=0.9 (and whether the Andrew-et-al. baseline's clip-quantile / learning-rate were tuned at all in this arm) is not displayed.
+
+- **[shown]** Learned wins 18 of 19 populated rows. The margin is large at small T and vanishes at large T. Fashion-MNIST, Learned − Constant: **+2.55 / +1.36 / +0.12 / −0.04** at T = 2000/3000/5000/7000 (ε=3); the same monotone decay holds at all four ε, crossing zero at T ≈ 5000.
+- **[shown]** Learned − Dynamic-DPSGD follows the identical decay: **+2.90 / +1.58 / +0.42 / +0.15** (ε=3 FMNIST), ≈ +3.2 → +0.3 at ε = 5, 8, 10.
+- **[shown]** Adaptive Clip is last in all 19 rows by a wide margin: FMNIST 73.5–80.3 vs 81–85 for everyone else (−7 to −10 pts); MNIST 89.9–91.9 vs 94.5–95.9.
+- **[shown]** ε is nearly inert. FMNIST T=2000: Learned goes 83.888 → 84.271 across ε = 3 → 10, i.e. **a 3.3× budget increase buys +0.38 pts**. Constant moves +0.09, Adaptive Clip +0.02.
+- **[shown]** Only 19 of 32 cells are populated. MNIST has **3 cells total** (ε=3 T=2000 n=8, ε=3 T=3000 n=5, ε=10 T=7000 n=7); the ε=5 and ε=8 MNIST panels are entirely blank in `t_sweep_main.png`. FMNIST ε=10 T=5000/7000 are **n=2** (`85.250 ± 3.177`, `85.925 ± 3.494`).
+- **[inferred]** The Learned advantage is a *scarce-budget allocation* effect, not a general one — assumes accuracy at large T is optimisation-limited rather than noise-limited, in which case any valid schedule reaches the same ceiling and shape has nothing left to buy. The decay is monotone across 8 independent (ε, dataset) panels, which is strong support.
+- **[inferred]** This arm is clip/step-size limited, not noise limited — assumes σ is not the binding constraint at m=0.0. Supported jointly by the ε-inertness and by Adaptive Clip (which manipulates clip, not σ) being the method that collapses.
+- **[not shown]** No hyperparameter table. Whether the inner learning rate, or Adaptive Clip's target quantile / clip learning rate, were tuned per arm is not displayed anywhere.
 
 ### Rigor concerns
-- **Fashion-MNIST, ε=10, T=5000 has no `±` at all** — that cell is **n = 1 seed** (`85.000` / `84.131` / `78.094` / `84.638`). It is bolded as a Learned win. The adjacent T=7000 cell is n = 2 (`85.925 ± 3.494`). The upper-right panel of `t_sweep_main.png` and the corresponding delta panel show a CI fan opening to ±4 pts. **Those two cells carry no evidence and should be dropped or re-run**, not bolded.
-- **The ± is not comparable across columns** (n_reps 1 vs 8, see global note). Learned's spread is inflated relative to baselines by construction, so "Learned ± is larger" is an artefact, not a finding.
-- **Bolding vs noise:** at T=5000/7000 the Learned–Constant gap (≈ 0.0–0.2) is well inside the ±0.2–0.6 spreads. The T=7000 bolds are not distinguishable; the T=2000 bolds (+2.5 pts vs ±0.5) are.
-- **Read-off convention differs between arms.** The m0.0 caption says *"read off at outer step 1000"*; the m0.9 caption says *"read off at outer steps 976–1000"*. Two arms presented side by side should not use two read-off rules — the single-step read-off is a one-sample draw from a visibly noisy band (see the training-curve artifact below).
-- **Adaptive Clip's collapse is a baseline-integrity problem, not a result.** A published method landing 10 pts below *constant* σ/clip is far more likely mis-tuned than genuinely that bad. As presented it inflates the apparent margin of everything else.
-- **Survivorship:** `missing.csv` drops 28 m0.0 T-sweep runs, non-uniformly (all of the Fashion-MNIST ε=10 damage is here). Which seeds vanished is not random with respect to outcome — 17 of them are *"no test-accuracy rows in run history"*, i.e. runs that failed to log, and 12 of those are Fashion-MNIST ε=10.
+
+- **The MNIST row is 3 of 16 cells and cannot support any MNIST claim in this arm.** From `missing.csv`, **108 of the 141 missing runs are m0.0 / T-sweep / MNIST, all with reason `HTTP 500: parquet: could not read footer: context canceled`** — a W&B *download* failure, not a training failure. These runs almost certainly exist and are recoverable by re-fetching. This is the highest-value fix in the batch: it is 108 runs of already-spent compute.
+- **A further 17 m0.0 FMNIST T-sweep runs are `run never started`** — these are the ε=10 T=5000/7000 cells, hence n=2. Those two cells are bolded as Learned wins on the strength of two seeds with ±3.2–3.5 spread; the `t_sweep_main.png` ε=10 panel shows the CI fan opening to ±5 pts. Drop or re-run them; do not bold them.
+- **The ± is not comparable across columns** (n_reps 1 vs 8). "Learned has the widest error bars" is an artefact.
+- **Shared y-axis across all 8 panels of `t_sweep_main.png`** is set by Adaptive Clip's 73.5 floor, compressing the Learned/Dynamic/Constant separation into the top ~15% of each panel. The delta plots are the only readable view of the actual effect.
+- **Adaptive Clip's collapse is a baseline-integrity problem, not a result.** A published method landing 10 pts below *constant* σ/clip is far more likely mis-tuned than genuinely that bad — and the m0.9 arm demonstrates it (same code, +8.5 pts). As presented it inflates the apparent margin of every other method.
+- **Caption text overlaps the legend** in `t_sweep_main.png` and both delta plots — the n and read-off statement is illegible in the rendered figure.
 
 ---
 
-## `plots/sgd-m0.9/t_sweep_table.csv` (= top-level `t_sweep_table.csv`) + `t_sweep_main.png`
+## `plots/sgd-m0.9/` T-sweep — table, `t_sweep_main.png`, `t_sweep_delta_vs_{constant,dynamic}.png`
 
-**Setup:** As above, momentum-0.9 arm. Caption: *"n = 6–8 seeds; read off at outer steps 976–1000."*
+**Setup:** As above, momentum-0.9 arm. **Complete**: all 32 cells, n = 8 seeds (one cell n = 7). Main plot y-axis is **per-row** (FMNIST 83.5–86.5, MNIST 93.8–97.0) — a ~3 pt window, not the ~19 pt window of the m0.0 figure.
 
 ### What it shows
-- **[shown]** The result **inverts**. Learned wins 4 of 32 rows (all MNIST, T ∈ {5000, 7000}, ε ∈ {3, 5}). Adaptive Clip wins 19, Dynamic-DPSGD wins 9, Constant wins 0.
-- **[shown]** All four methods collapse into a ≈ 0.3–0.8 pt band. Fashion-MNIST ε=3 T=2000: 84.24 / 84.32 / 84.55 / 84.39 — a 0.31 pt total spread against ±0.17–0.53 error bars.
-- **[shown]** Adaptive Clip is now *competitive-to-best* (85.0 → 86.3 on Fashion-MNIST) instead of last. Same code, same ε, same T — only inner momentum changed.
-- **[shown]** Constant is now clearly *worst* and has the largest spread (e.g. MNIST ε=3 T=5000: `94.821 ± 1.119` vs `96.267 ± 0.214`), and its MNIST curve *decreases* with T in the ε=3/5 panels.
-- **[shown]** ε sensitivity recovers: ε=3→10 gains are 0.49–1.05 pts (vs 0.02–0.44 at m=0.0).
-- **[shown]** The absolute ceiling is higher: best Fashion-MNIST 86.34 (m0.9) vs 85.93 (m0.0); best MNIST 96.79 vs 96.82 (a wash).
-- **[inferred]** Momentum supplies most of what the learned schedule was supplying at m=0.0 — assumes the two arms are otherwise matched, which the artifacts do not establish.
-- **[not shown]** No paired statistical test. With four methods inside a 0.3 pt band and 6–8 seeds, per-row bolding is picking noise.
+
+- **[shown]** The ranking **inverts**. Learned wins 4 of 32 rows (all MNIST, T ∈ {5000, 7000}, ε ∈ {3, 5}). Adaptive Clip wins 19, Dynamic-DPSGD wins 9, Constant wins 0.
+- **[shown]** All four methods collapse into a ≈ 0.3–0.8 pt band. FMNIST ε=3 T=2000: 84.24 / 84.32 / 84.39 / 84.54 — a 0.31 pt total spread against ±0.17–0.53 reported error bars.
+- **[shown]** **Learned − Constant is now increasing in T** (≈ 0 at T=2000 → +0.6 FMNIST / +1.4 MNIST at T=7000) — the exact opposite of the m0.0 arm's monotone decay. Every FMNIST CI in that plot includes zero at every T.
+- **[shown]** **Learned − Dynamic-DPSGD is negative at every ε and every T on Fashion-MNIST** (−0.1 to −0.4) and ≈ 0 ± 0.15 on MNIST. So "Learned wins" in this arm holds only against Constant.
+- **[shown]** Constant is now clearly worst, has the largest spread (MNIST ε=3 T=5000: `95.060 ± 0.847` vs Learned `96.200 ± 0.177`), and its MNIST accuracy **decreases** with T at ε=3 and ε=5.
+- **[shown]** Adaptive Clip goes from last-in-every-row to best-in-19-rows on identical (ε, T, arch, dataset).
+- **[inferred]** Momentum is a partial substitute for a learned schedule, not a competitor to it. Averaged over the 16 FMNIST cells where both arms are complete, the m0.9 − m0.0 accuracy gain is:
+
+  | method | mean gain (pts) |
+  |---|---|
+  | Adaptive Clip | **+8.46** |
+  | Dynamic-DPSGD | +1.95 |
+  | Constant | +1.33 |
+  | **Learned** | **+0.25** |
+
+  and the gain is concentrated at small T (Constant: +3.39 at T=2000 → −0.32 at T=7000; Learned: +0.57 → −0.04). Read this as: **the learned schedule already extracts most of what momentum provides; the baselines need momentum to catch up.** Assumes the two arms are otherwise matched — which is exactly what is *not* documented (see below).
+- **[not shown]** Whether the inner learning rate was re-tuned when momentum was turned on. With m=0.9 the effective step is ~10× larger at fixed lr, so an un-retuned lr is a live confound for the whole cross-arm comparison.
 
 ### Rigor concerns
-- **Multiple comparisons / bolding is meaningless here.** 32 rows × 4 methods, each row bolds a winner, and in most rows the top-3 overlap within one standard deviation. "Adaptive Clip wins 19/32" should not be reported as a finding without a paired test across seeds.
-- **The two arms disagree so violently that at least one is mis-specified.** Adaptive Clip moves from −10 pts to +0.3 pts against Constant purely from momentum. That is not a plausible property of the method; it is a symptom that one arm's baseline configuration is wrong.
-- **n = 6–8 seeds is uneven across cells** (from `scalars.parquet`: MNIST ε=3 T=5000 has 6 Learned seeds, Fashion ε=10 T=5000 has 6). The caption gives the range, not the per-cell n, so a reader cannot tell which cells are thin.
 
----
-
-## `plots/{sgd-m0.0,sgd-m0.9}/shape_variants/{sigma,clip}_shape__T_sweep__by_T.png`
-
-**Setup:** Learned σ (and clip) vs normalised step t/T ∈ [0,1]. Rows = ε ∈ {3,5,8,10}, columns = {fashion-mnist, mnist}. Bold line = seed mean, thin lines = individual seeds. Colour = T.
-
-### What it shows — this is the strongest artifact in the set
-- **[shown]** A consistent **inverted-U**: σ starts near 0, rises over the first 20–40 % of training, plateaus, and decays back toward ~0 at t/T = 1. Reproduced in all 8 (ε, dataset) panels × both arms × all four T. Clip follows the same shape (σ and clip are coupled through the schedule parametrisation).
-- **[shown]** σ scales **down with T** exactly as GDP composition predicts. m0.0 MNIST ε=5 peak: T=2000 → 4.7, T=3000 → 4.2, T=5000 → 3.5, T=7000 → 3.0. Ratios 4.7/3.0 = 1.57 vs √(7000/2000) = 1.87 — same direction, somewhat shallower than √T.
-- **[shown]** σ scales **down with ε**: m0.0 MNIST T=2000 peak 5.2 (ε=3) → 4.7 (ε=5) → 4.3 (ε=8) → 4.2 (ε=10).
-- **[shown]** **Seed agreement is excellent** in the plateau region — thin per-seed lines are visually indistinguishable from the mean for t/T > 0.25 in most panels. Disagreement is confined to t/T < 0.2.
-- **[shown]** **Scale differs ~10× between arms**: m0.0 σ peaks at 3–6 and clip at 6–11; m0.9 σ peaks at 0.3–0.9 and clip at 1.0–1.8.
-- **[shown]** **Skew differs between arms**: m0.0 Fashion-MNIST peaks at t/T ≈ 0.4–0.5 (roughly symmetric); m0.9 Fashion-MNIST peaks at t/T ≈ 0.25–0.30 with a long right tail.
-- **[shown]** m0.9 MNIST panels have an odd boundary artefact: σ starts *high* (≈ 0.3), dips at t/T ≈ 0.05, then rises into the hump.
-- **[inferred]** The 10× scale gap is the momentum gain 1/(1−0.9) = 10 — the optimiser found the same *effective* step size in both arms, with (σ, C) jointly rescaled. Assumes the decoupled schedule leaves the absolute (σ, C) scale free with only the ratio privacy-constrained (which is what `decoupled-sigma-and-clip` does). **This is a good consistency check and worth stating explicitly in the write-up.**
-- **[inferred]** The early-training instability (thin lines diverging, spikes to σ = 13 and σ = 330) is the outer loop still moving before the schedule settles — assumes early t/T control points get weak gradient signal.
-- **[not shown]** No overlay of what Constant / Dynamic-DPSGD / Adaptive Clip actually use, so the reader cannot see *how far* the learned shape departs from the baselines it is being compared to.
-- **[not shown]** No functional form fitted. The shape is clean enough to be worth a closed form (this is the input the SR pipeline wants).
-
-### Rigor concerns
-- **`plots/sgd-m0.9/sigma_shape.png` is unreadable.** A single CIFAR-10 seed reaching σ ≈ 330 sets the y-limit, flattening all three panels to a line at zero. That figure conveys no information and should be re-rendered with a robust y-limit or on a log axis. The m0.0 version has the same problem in milder form (a σ = 13 outlier in the Fashion-MNIST panel).
-- **The aggregate `sigma_shape.png` / `clip_shape.png` pool over ε, T, seed, and arch simultaneously.** The `by_T` variants are strictly more informative; the pooled versions mostly show variance.
-- **Shape ≠ benefit.** These plots show the schedule is *reproducible*; they say nothing about whether it *helps*. The accuracy tables say it helps only at small T in the m=0.0 arm. Do not let the crispness of these curves carry an efficacy claim.
-
----
-
-## `plots/{sgd-m0.0,sgd-m0.9}/ladders/*/table.csv` + `ladders/overall/arch_forest_delta.png`
-
-**Setup:** Fixed T = 5000, ε = 10. Three ladders — mlp-width (64/128/512), cnn-width (8x16 / 16x32 / 32x64), cnn-depth (1–4 conv blocks) — × three datasets. Forest plot: x = Learned − Constant Δ accuracy (pts), diamond = seed mean, dots = per seed, line = 95 % CI, dashed = 0.
-
-### What it shows
-- **[shown] m0.0 arm:** Learned beats Constant in 26 of 29 ladder rows. The largest wins are on **CIFAR-10 cnn-depth**: +4.0 (16x16x16) and +2.1 (16x16x16x16) pts. It *loses* on **CIFAR-10 cnn-width**: −1.8, −2.1, −1.3 pts across the three rungs, with CIs excluding zero.
-- **[shown]** Adaptive Clip is again last in every one of the 29 m0.0 rows, and degrades with depth (CIFAR 45.2 → 36.2 as depth goes 1 → 4).
-- **[shown] m0.9 arm:** the CIFAR-10 panel of the forest plot needs an x-range of **−50 to +10** (vs −4 to +5 for m0.0). Individual seeds sit at −48, −37, −27 pts.
-- **[shown]** Diverged m0.9 cells: `cifar-10 cnn-16x16x16 46.393 ± 19.253`, `cnn-16x16x16x16 35.808 ± 14.374`, `mlp-128 35.850 ± 10.481`, `mlp-512 36.213 ± 10.310`.
-- **[shown]** From `scalars.parquet`, **11 of 464** m0.9 Learned runs land > 5 pts below their cell median. **All 11 are CIFAR-10, arch-sweep, ε = 10.** Accuracies: 8.95 (chance is 10), 17.65, 18.10, 19.15, 19.40, 19.60, 19.90, 22.30, 22.75, 22.90, 41.90. The m0.0 arm has **0 such runs out of 437**.
-- **[shown]** **CIFAR-10 arch-sweep runs are systematically under-trained in the outer loop.** Median `final_outer_step` for Learned: CIFAR-10 703 (m0.0) / 725 (m0.9), minimum 124 / 55 — versus 1000 for MNIST and Fashion-MNIST. 27 % of all arch-sweep Learned runs stopped before step 1000.
-- **[inferred]** The m0.9 CIFAR failures are outer-loop divergence (schedule blow-up), not inner-loop noise — supported by the σ ≈ 330 trace in `sgd-m0.9/sigma_shape.png` and by accuracy landing at chance. Assumes the σ outlier and the 8.95 % run are the same run family; not directly verified.
-- **[inferred]** The mean ± std cells above are **means over a bimodal mixture** (a converged mode near 57–59 and a diverged mode near 10–23), so both the mean and the std are meaningless summaries there.
-- **[not shown]** No divergence/failure-rate column. A reader of `ladders/cnn-depth/table.csv` sees `46.393 ± 19.253` and cannot tell it is "6 runs at ~59 and 2 at ~18."
-
-### Rigor concerns
-- **Under-training is confounded with dataset.** CIFAR-10 is exactly (a) the hardest dataset, (b) the one where Learned loses, and (c) the one where the outer loop ran ~30 % fewer steps. Any claim of the form "the learned schedule doesn't transfer to CIFAR" is unidentifiable from this data until the outer budget is matched.
-- **Report failure rate, not just mean ± std**, for any cell containing diverged runs. Better: report median and an explicit "n diverged / n total".
-- **The m0.9 CIFAR forest panel is uninformative as drawn** — the −50 range needed by the outliers compresses every real effect to invisibility. Split the outliers out or clip the axis with an annotation.
-- **Ladders use a single (ε=10, T=5000) point.** m0.9 CIFAR wants ε=10 σ values that appear to be at the edge of solver stability. Whether the ladder conclusion is architecture-dependent or just ε=10-dependent is untested.
-- **The mlp-width MNIST ladder is missing the `mlp-64` rung in the m0.0 arm** (the table has only mlp-128 and mlp-512). `missing.csv` shows all 8 `sgd-m0.0/dsMNIST/e10/arch-sweep/T=5000/mlp-64/seed=*` runs dropped with *"no test-accuracy rows"* — a whole rung lost, silently, to a logging failure.
+- **The whole-arm result rests on differences smaller than the outer-loop noise** (see the training-curve artifact below). A 0.3 pt table spread is not resolvable by a read-off that samples a ±1 pt band.
+- **Favourable-baseline framing.** `t_sweep_delta_vs_constant.png` is positive everywhere and looks like a clean win for Learned; `t_sweep_delta_vs_dynamic.png` — same data, same arm — is negative everywhere on FMNIST. If only the vs-Constant panel is shown, the reader is handed the flattering comparison. Show both or show neither.
+- **Different y-scaling between arms** makes the two `t_sweep_main.png` figures visually non-comparable: the m0.9 figure's 3 pt window makes a 0.3 pt effect look like the m0.0 figure's 3 pt effect. Any side-by-side presentation needs a shared scale or an explicit warning.
+- **Different read-off convention between arms** (single step 1000 vs mean over 978–1000). The m0.9 numbers are 23-step averages and the m0.0 numbers are single draws; the m0.9 spreads are therefore smaller partly by protocol, not by stability.
 
 ---
 
 ## `plots/sgd-m0.9/curves/t_sweep_acc__mnist.png`
 
-**Setup:** Learned-schedule test accuracy vs **outer step** (0–1000), one panel per ε × T. Single trace per panel (no band).
+**Setup:** x = outer step (0–1000), y = test accuracy, one panel per ε (cols) × T (rows). One line per seed, Learned schedule only, m0.9 arm.
 
 ### What it shows
-- **[shown]** Every panel rises steeply over the first ~25–50 outer steps and is then **flat for the remaining ~950 steps**, oscillating in a ±0.7–1.0 pt band with no visible trend.
-- **[shown]** The oscillation amplitude (≈ ±0.8 pts) is **larger than every effect size in the accuracy tables** (0.1–0.9 pts).
-- **[inferred]** The outer loop converges by step ~50 and the remaining 95 % of the outer budget buys nothing measurable — assumes this MNIST panel is representative (the Fashion-MNIST panels look the same; CIFAR-10 was not plotted this way).
-- **[inferred]** Reading a single outer step therefore samples the oscillation, not the converged value. The m0.0 arm's single-step read-off adds ~±0.8 pt of pure read-off noise on top of seed noise. The m0.9 arm's 976–1000 window averages 25 samples and should be much tighter — **which is itself a systematic difference between the two arms that has nothing to do with momentum.**
-- **[not shown]** No CIFAR-10 training curves, i.e. no visual on the runs that actually diverged.
+
+- **[shown]** Every panel is a dense noise band with **no visible trend after outer step ≈ 50**. T=2000/ε=3 spans roughly 94.5–97.0 across the full 1000 steps; T=7000/ε=10 spans roughly 96.0–97.8. Band width is ≈ 1–2 pts throughout.
+- **[shown]** The initial rise is complete within ~20–50 outer steps in all 16 panels.
+- **[inferred]** **The reported between-method differences (0.1–0.5 pts) are an order of magnitude smaller than the within-run outer-step fluctuation (~1–2 pts).** Averaging over 978–1000 shrinks this, but those 23 steps are adjacent and autocorrelated, so the effective reduction is well short of √23.
+- **[inferred]** ~950 of the 1000 outer steps are buying nothing measurable. If this holds on the other datasets, the outer-step budget is the obvious place to reclaim compute for more seeds — which is what the tables actually need.
+- **[not shown]** The equivalent curve figures exist for FMNIST and for m0.0 but were not checked here; whether the "converged by step 50" pattern is universal is unverified.
 
 ### Rigor concerns
-- **This artifact undermines the read-off convention used by every table above.** Adopt one rule (a trailing-window mean) for both arms and re-generate; some of the m0.0-vs-m0.9 difference may be read-off artefact.
-- **The 1000-step outer budget is ~20× more than needed on MNIST/Fashion-MNIST**, while CIFAR-10 ran short of even that. Compute is being spent where it has no effect and withheld where it does.
+
+- **This figure undercuts the read-off protocol used by every table in the batch.** Any claim resting on a sub-0.5 pt gap needs either (a) a much wider averaging window with a stated autocorrelation argument, or (b) more seeds, or (c) a paired test across seeds at matched outer steps. None of the three is present.
+- One line per seed at full opacity produces solid ink; per-seed behaviour (does *any* seed drift or diverge?) is unreadable. A per-seed rolling median would answer the question the plot is meant to answer.
 
 ---
 
-## `missing.csv`
+## `plots/{sgd-m0.0,sgd-m0.9}/shape_variants/{clip,sigma}_shape__T_sweep__by_T.png`
 
-### What it shows
-- **[shown]** 91 runs dropped; 900 retained (≈ 9.2 % loss).
-- **[shown]** Two distinct failure modes: **51 × "missing 'sigmas'/'clips' artifact"** (W&B artifact upload failure) and **30 × "no test-accuracy / test-loss rows in run history"** (the run never logged evaluation).
-- **[shown]** Losses are **highly non-uniform**: m0.0 loses 39, m0.9 loses 31 on arch; but the "no test-accuracy" mode is 28/30 in the m0.0 arm and clusters hard — 12 in `sgd-m0.0/dsFASHION-MNIST/e10/T-sweep`, 8 in `sgd-m0.0/dsMNIST/e10/arch-sweep/mlp-64` (the entire rung).
-- **[inferred]** These are infrastructure failures (the SLURM job-chain / artifact-upload path), not scientific outcomes — assumes the failures are independent of the schedule being learned. **This assumption is worth checking**: if a run diverged and produced NaN σ, it could fail to upload the `sigmas` artifact, in which case dropping it is survivorship bias that hides exactly the failures reported in the ladder section.
+**Setup:** x = t/T (0–1), y = clip or σ, panels ε (rows) × dataset (cols), colour = T. Thick line = seed mean, thin = per seed. The m0.0 MNIST column is mostly empty (the 108 lost runs).
+
+### What it shows — the most robust result in the batch
+
+- **[shown]** The learned schedule is a clean **concave arch** in both σ and clip: rises from ≈ 0 at t/T = 0, peaks, decays to ≈ 0 at t/T = 1. Per-seed lines sit essentially on top of the mean — **this shape is reproducible across all 8 seeds**, unlike any accuracy number in this batch.
+- **[shown]** Peak height **decreases monotonically in T** at every (ε, dataset, arm). m0.0 FMNIST clip peak: **10.7 / 8.6 / 6.0 / 4.5** at T = 2000/3000/5000/7000 (ε=3). m0.9 FMNIST clip peak: **1.45 / 0.99 / 0.61 / 0.44** (ε=3).
+- **[shown]** Peak height **increases monotonically in ε**, weakly: m0.9 FMNIST T=2000 clip peak 1.45 → 1.57 → 1.77 → 1.83 for ε = 3 → 5 → 8 → 10.
+- **[shown]** **The whole schedule is ~7× smaller under momentum**, in both σ and clip, but the *ratio* is preserved: m0.0 FMNIST ε=3 T=2000 peak clip/σ ≈ 10.7/6.5 = 1.65; m0.9 ≈ 1.45/0.87 = 1.67. At ε=10: 11.4/5.2 = 2.19 vs 1.83/0.83 = 2.20. This is what the accountant requires (σ = C/μ pins C/σ = μ), so it is a **passing internal-consistency check on the privacy projection**, independently in both arms.
+- **[shown]** The *temporal placement* does change with momentum. m0.0: peak at t/T ≈ 0.4–0.5, near-symmetric plateau. m0.9: peak at t/T ≈ 0.25–0.30 with a long asymmetric decay. MNIST peaks later than FMNIST in both arms.
+- **[shown]** m0.0 FMNIST σ has a reproducible **shoulder / double hump** near t/T ≈ 0.12 at ε = 8 and 10 (local max ≈ 4.2, dip, then main peak ≈ 5.2). Absent in m0.9.
+- **[inferred]** Peak clip scales roughly as a power of T. m0.0 ε=3: 10.7/4.5 = 2.4 against a T ratio of 3.5, i.e. ≈ T^(−0.7). m0.9 ε=3: 1.45/0.44 = 3.3, i.e. ≈ T^(−0.95), near 1/T. **This is directly checkable and is the most promising closed-form / symbolic-regression target in the batch** — assumes the B-spline parameterisation isn't itself imposing the arch, which the endpoint behaviour (forced to ≈ 0 at both ends) makes worth confirming.
+- **[not shown]** No overlay of the analytic optimum, the Dynamic-DPSGD shape, or a fitted functional form. The arch is described but not compared to anything.
 
 ### Rigor concerns
-- **Verify the failure mode is not outcome-correlated.** Spot-check 3–4 `missing 'sigmas'` runs in W&B: if their logged test accuracy is at chance, the drop is silently improving the reported numbers.
-- The Fashion-MNIST ε=10 T-sweep column of the m0.0 table is effectively destroyed by these drops (n = 1 and n = 2 cells) and should be marked as such or re-run.
+
+- **`sigma_shape.png` and `clip_shape.png` (the aggregate, not-by-T versions) are unusable for m0.9.** A single CIFAR outlier reaching σ ≈ 330 sets the shared y-axis, flattening the Fashion-MNIST and MNIST panels to a line at zero. The by-T variants carry all the information; the aggregate versions should be dropped or given per-panel y-limits.
+- **The ε colour encoding is defeated by overplotting** in the aggregate figures — ε=10 (yellow) has the most runs and covers everything else. The by-ε-row layout of the `shape_variants` figures is the right design; use it everywhere.
+- **Near-t/T=0 behaviour is unreliable.** m0.9 MNIST mean curves show a non-monotone dip-then-rise below t/T ≈ 0.1, and per-seed lines fan wildly there. This looks like a B-spline boundary artefact rather than a learned feature; it should not be interpreted.
+- **The clip peak values are read from figures, not tables.** The scaling exponents above are read-off estimates (±5–10%). If this becomes a claim, extract from `schedules.parquet` and fit properly.
+
+---
+
+## `plots/{sgd-m0.0,sgd-m0.9}/ladders/{mlp-width,cnn-width,cnn-depth}/table.csv` + `main.png` + `ladders/overall/arch_forest_delta.png`
+
+**Setup:** Fixed ε = 10, T = 5000. Rows = ladder rung (arch), columns = four methods. Forest plot: y = rung grouped by ladder, x = Learned − Constant Δ accuracy, diamond = seed mean, dots = per seed, line = 95% CI, one panel per dataset (**shared x-axis across the three panels**).
+
+### What it shows
+
+- **[shown] m0.0, structure by ladder type.** On CIFAR-10 the sign of Learned − Constant depends on which ladder you walk:
+  - `cnn-width`: **−2.05 / −2.05 / −1.30** (8x16 / 16x32 / 32x64) — negative at all three widths, CIs excluding zero, per-seed dots tightly clustered.
+  - `cnn-depth`: **−0.14 / +1.59 / +4.02 / +2.08** (1 / 2 / 3 / 4 blocks) — positive and peaking at 3 blocks.
+  - `mlp-width`: −0.16 / +0.11 / −0.71.
+- **[shown] m0.0, FMNIST and MNIST.** All rungs ≥ 0 and small: FMNIST +0.19 to +1.38, largest at the deepest CNNs; MNIST ≈ 0 everywhere except mlp-128 (+0.79) and mlp-512 (+1.25).
+- **[shown] m0.0 Adaptive Clip is again catastrophic** — CIFAR `cnn-16x16x16x16`: 36.19 vs 52.8–54.9 for the others; FMNIST deepest rung 77.00 vs 84.5–85.9.
+- **[shown] m0.9 CIFAR Learned blows up on the deep/wide rungs**: `mlp-128` 35.850 ± 10.481, `mlp-512` 36.213 ± 10.310, `cnn-16x16x16` 46.393 ± 19.253, `cnn-16x16x16x16` 35.808 ± 14.374, against 44–60 for all three baselines.
+- **[shown]** Those blowups are **bimodal, not noisy**. Per-seed Learned accuracy, m0.9 CIFAR `cnn-16x16x16` (with each run's final outer step): 59.2 @496, 58.3 @716, **8.95 @128**, 58.2 @469, **22.9 @93**, 57.3 @724, 59.2 @723. `mlp-512`: 44–45% for five seeds (all @~135), **19.2 / 22.8 / 19.6** for three seeds (also @~135).
+- **[inferred]** Two distinct failure modes are being averaged into one cell: (a) runs truncated so early the schedule is effectively untrained (steps 55–128), and (b) genuine outer-loop divergence at ~step 690–708 on the deepest CNN. `mlp-512` shows (b) exists independently of (a) — all eight seeds stopped at the same step ~135, yet split 5 good / 3 collapsed. Assumes the evaluation is deterministic given the schedule, which `n_reps=1` makes only approximately true.
+- **[inferred]** The m0.0 `cnn-width` negative result is **not** a truncation artefact: `cnn-8x16-head64` has zero incomplete runs in that arm and still shows −2.05 with a tight CI. Something about widening a CNN at fixed depth genuinely defeats the learned schedule on CIFAR. This is the most interesting unexplained finding in the batch.
+- **[not shown]** `arch_param_count` is in `scalars.parquet` but is not used as an x-axis anywhere. The width/depth ladders confound parameter count with structure; a Δ-vs-param-count plot would separate them and is nearly free to produce.
+
+### Rigor concerns
+
+- **`plots/sgd-m0.9/ladders/overall/arch_forest_delta.png` is unreadable for two of its three datasets.** The shared x-axis is stretched to −50…+10 by the CIFAR outliers, so the Fashion-MNIST and MNIST panels are a vertical line at 0. The m0.0 version (±4) is fine. Give each panel its own x-limits, or clip and annotate the outliers.
+- **Mean ± std over a bimodal population is the wrong summary.** `46.393 ± 19.253` describes no run that actually happened. Report median + per-seed dots, or split the modes and report the failure rate explicitly ("3 of 8 seeds collapsed") — the forest plot's per-seed dots already do this honestly and should be the primary artifact.
+- **The read-off is not matched across seeds within a cell.** The m0.9 cnn-depth caption reads "outer steps 55–1000": some seeds contribute a schedule after 55 outer updates, others after 1000, and they are averaged together. The m0.0 equivalent is 426–1000. **A cell should be read at one step for all its seeds, or truncated runs should be excluded** — currently the cell mean blends trained and untrained schedules, and the two arms' ladders are read at different points of outer training, which makes the m0.0-vs-m0.9 arch comparison invalid as presented.
+- **CIFAR is the dataset where the compute ran out, and it is also the dataset carrying the most interesting claims.** 116 of 119 truncated runs are CIFAR arch runs; only `cnn-8x16-head64` and `mlp-64` are fully trained. Every other CIFAR row needs "not trained to completion" attached to it, or a re-run.
+- **Caption/legend overlap** again in every `main.png` — the n and read-off statement is illegible.
+- **No metric-direction marker** (↑) and no caption at all in the `.tex` files (bare `tabular`, no `\caption`), so n, read-off, and direction are lost the moment a table is pasted into a document.
 
 ---
 
 ## Synthesis
 
-**Agreements**
-- The **learned σ/clip shape is real and reproducible**: inverted-U, peaking at t/T ≈ 0.25–0.5, decaying to ~0 at the end. It holds across both momentum arms, all four ε, all four T, both MNIST-family datasets, and across seeds with visually tight agreement. It scales the right way with both T and ε.
-- The **10× (σ, C) rescaling between the m=0.0 and m=0.9 arms matches the momentum gain 1/(1−0.9)** — an independent consistency check that the decoupled parametrisation and the projection are behaving as designed.
-- Both the T-sweep table and the delta plot agree that in the m=0.0 arm the Learned advantage is **large at small T and vanishes by T ≈ 5000**.
+### Agreements
 
-**Contradictions**
-- **The two arms disagree about which method wins, and about Adaptive Clip by 10 accuracy points.** At m=0.0 Adaptive Clip is last in all 61 rows; at m=0.9 it is first in 19 of 32 T-sweep rows. Trust neither until the baseline configuration is audited: a correctly-implemented Andrew-et-al. adaptive clip should not lose to *constant* σ/clip by 10 pts under any momentum setting. My read is that the **m=0.0 arm's Adaptive Clip is mis-tuned**, and correspondingly that the m=0.0 arm's Learned margins are inflated against a straw baseline.
-- The shape plots show a *highly stable* learned schedule; the m0.9 CIFAR ladder shows 11 outright divergences. Both are true — stability holds on MNIST/Fashion-MNIST and breaks on CIFAR-10 at ε=10 with momentum.
+- **The learned schedule's advantage is real but conditional on the inner optimiser being weak.** The m0.0 T-sweep (+2.5 to +2.9 vs Constant at T=2000), the m0.0 arch ladders (positive on FMNIST/MNIST, +4 on CIFAR cnn-depth), and the cross-arm momentum-gain table (Learned +0.25 vs Constant +1.33, Dynamic +1.95, Adaptive Clip +8.46) all say the same thing from different directions.
+- **The advantage decays with T** in the m0.0 arm across all 8 (ε, dataset) delta panels, monotonically, crossing zero around T ≈ 5000.
+- **The learned shape is a concave arch whose peak falls monotonically in T and rises weakly in ε**, reproducibly across seeds, in both arms, in both σ and clip.
+- **The privacy projection is behaving.** Peak clip/σ matches to within 1% across arms at fixed ε — an independent check that the GDP constraint is enforced identically regardless of optimiser.
 
-**Strongest supported claim**
-> The gradient-learned schedule converges to a reproducible inverted-U in σ (and clip) that scales correctly with T and ε, and — **in the no-momentum arm** — delivers up to +2.9 pts over a constant schedule at short training horizons (T = 2000), with the advantage decaying monotonically to zero by T ≈ 5000.
+### Contradictions
 
-Everything past that sentence is currently under-supported.
+- **The T-trend of Learned − Constant reverses between arms**: decreasing in T at m0.0 (+2.6 → 0.0), increasing in T at m0.9 (0.0 → +0.6/+1.4). Trust the m0.0 trend more — its effect sizes (2–3 pts) exceed both the error bars and the outer-step noise band, whereas the m0.9 effects (0.1–0.6 pts) sit inside both. The m0.9 "trend" may be a read-off artefact.
+- **Adaptive Clip is either the worst method by 10 pts or the best method, depending only on inner momentum.** Both cannot be a property of the method. The m0.9 behaviour (competitive) is the plausible one; the m0.0 behaviour is a mis-tuning signature. Until that is resolved, **every margin computed against Adaptive Clip in the m0.0 arm is inflated**.
+- **`delta_vs_constant` and `delta_vs_dynamic` disagree on whether Learned wins in the m0.9 arm** (positive everywhere vs negative everywhere on FMNIST). Both are correct; the conclusion depends entirely on baseline choice.
 
-**Weakest link**
-The **m=0.9 arm's headline conclusion** ("Adaptive Clip ≥ Dynamic-DPSGD ≥ Learned > Constant"). It rests on 32 rows where all four methods sit inside a 0.3–0.8 pt band, with 6–8 seeds, no paired test, per-row bolding across 4 methods (guaranteeing spurious "winners"), a different read-off rule from the arm it's being compared to, and a baseline that behaves completely differently one directory over. It will not survive a paired seed-level test.
+### Strongest supported claim
 
-Close second: the **CIFAR-10 ladder results**, which confound dataset difficulty with a ~30 % shorter outer-loop budget and a bimodal converged/diverged run mixture summarised as `mean ± std`.
+*At small inner-loop budgets (T ≈ 2000–3000) and without inner momentum, a learned σ/clip schedule beats constant σ/clip and Dynamic-DPSGD by 1.5–3 accuracy points on Fashion-MNIST, across ε ∈ {3, 5, 8, 10}, with n = 8 seeds and non-overlapping error bars; and the learned schedule is a reproducible concave arch whose peak scales down with T.* This survives every rigor check applied here. Two supporting facts belong alongside it: the advantage vanishes by T ≈ 5000–7000, and it is largely a substitute for inner-loop momentum rather than an addition to it.
 
-**Open questions to resolve before relying on any of this**
-1. **Audit the Adaptive Clip baseline at m=0.0.** Was its clip-quantile / clip-learning-rate tuned per arm, or inherited from the momentum arm? A 10-pt loss to Constant is a bug signature.
-2. **Unify the read-off convention** (trailing-window mean over the last ~25 outer steps) across both arms and re-generate every table. Some m0.0-vs-m0.9 difference may be read-off artefact.
-3. **Run a paired per-seed test** (Learned − Constant per seed, then a sign test or Wilcoxon across seeds) instead of bolding row maxima. The forest plots already contain the paired data; the tables discard it.
-4. **Was the inner learning rate re-tuned per momentum arm?** If not, the m=0.0 arm is running at ~10× too small an effective step and its "Learned helps" result may just be "Learned recovers a mis-set learning rate" — consistent with the near-total ε-invariance at m=0.0.
-5. **Check whether `missing 'sigmas' artifact` runs are diverged runs.** If so, 51 dropped runs are survivorship bias in the same direction as the CIFAR divergences.
-6. **Re-run the n = 1 and n = 2 cells** (m0.0 Fashion-MNIST ε=10, T ∈ {5000, 7000}) and the lost m0.0 MNIST `mlp-64` rung.
-7. **Match the outer-loop budget on CIFAR-10** (median 703–725 vs 1000 elsewhere) before drawing any conclusion about architecture or dataset transfer.
-8. **Diagnose the m0.9 CIFAR ε=10 divergences** (σ → 330). Does the projection lose its footing at large ε with small σ? This is adjacent to the known `project_inverse_sigmas` overflow regime for σ ≲ 0.11 — and m0.9 σ values live at 0.3–0.9, uncomfortably close.
-9. **Overlay the baseline σ/clip schedules on the shape plots** so the reader can see how far the learned shape departs from what it beats.
-10. **Re-render `sgd-m0.9/sigma_shape.png`** with a robust y-limit — as shipped it is blank.
+### Weakest link
+
+**The m0.9 CIFAR-10 arch rows.** They combine (a) 116 truncated runs, (b) a within-cell read-off spanning outer steps 55–1000, (c) bimodal per-seed outcomes summarised as mean ± std, and (d) `n_reps=1` on the very column that is collapsing. `46.393 ± 19.253` is not a measurement. It should be reported as a stability finding ("3 of 8 seeds collapse") or withheld.
+
+Running it close: **the entire m0.9 T-sweep**, where the reported effects (0.1–0.5 pts) are smaller than the outer-step noise band visible in `curves/t_sweep_acc__mnist.png` (~1–2 pts). That table may be measuring nothing.
+
+### Open questions
+
+1. **Re-fetch the 108 lost m0.0 MNIST T-sweep runs.** They failed with `HTTP 500: parquet: could not read footer` — a W&B download error, not a training failure. That is 108 completed runs of compute currently invisible, and it is why the m0.0 arm has 3 MNIST cells instead of 16. Highest value per unit effort in this batch.
+2. **Was the inner learning rate re-tuned between arms?** With m=0.9 the effective step is ~10× larger at fixed lr. If it was not re-tuned, the entire cross-arm comparison — including the momentum-gain table above — is confounded.
+3. **Was Adaptive Clip tuned at all in the m0.0 arm?** A 10 pt gap below constant σ/clip, closing to a win under momentum, is a tuning signature. Until this is settled, do not report m0.0 margins against it.
+4. **Fix the read-off protocol before re-plotting.** One step for all seeds in a cell; the same step (or window) in both arms; exclude runs that did not reach it. The current per-run "last available step" rule silently averages trained and untrained schedules.
+5. **Is 1000 outer steps needed?** The training curves converge by ~50 and then wander over a ~1–2 pt band. Reallocating outer steps to seeds and to `n_reps` on the Learned column would directly fix the two biggest statistical weaknesses.
+6. **Populate `learned_acc_8rep`.** The column exists and is null in all 3404 rows; filling it makes the `±` columns comparable and removes the "Learned's error bars are wider by construction" caveat.
+7. **Why does widening a CNN at fixed depth defeat the learned schedule on CIFAR (m0.0, −1.3 to −2.1 at all three widths) while deepening it helps (up to +4.0)?** `cnn-8x16-head64` is fully trained and shows the effect cleanly, so this is not truncation. Plot Δ against `arch_param_count` (already in `scalars.parquet`) to separate parameter count from structure.
+8. **Fit the peak-clip scaling law.** Read-off estimates suggest peak clip ∝ T^(−0.7) at m=0.0 and ≈ T^(−1) at m=0.9. Extract from `schedules.parquet` and fit properly — the cleanest closed-form candidate the sweep has produced.
+9. **Regenerate or delete the stale top-level `t_sweep_table.csv`** (Jul 31; 9 of 32 rows disagree with the current m0.9 table).
+10. **Fix the figure captions.** Caption text overlaps the legend in every `t_sweep_main.png`, delta plot, and ladder `main.png`; the `.tex` tables have no caption at all, so n, read-off window, and metric direction do not survive being pasted into a document.
