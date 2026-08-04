@@ -57,17 +57,12 @@ sys.path.insert(0, os.environ["PROJECT_SOURCE_ROOT"])
 from transfer_launch import (
     ProducerArgs,
     array_sbatch,
-    check_on_grid,
     condition_grid,
-    curve_jobs,
-    drop_finished,
-    equation_jobs,
     expand_targets,
     manifest_text,
+    plan_jobs,
     preflight_command,
-    reference_jobs,
     serial_sbatch,
-    source_regimes,
 )
 
 # Per-stage wall clocks. Reference is the long pole: it sweeps a reference's
@@ -82,8 +77,6 @@ _WALLTIMES = {
 
 # Rough per-task GPU-hours, used only for the --dry-run estimate (analytic, ±3×).
 _GPU_HOURS = {"curve": 0.6, "equation": 1.2, "reference": 1.7}
-
-_REFERENCES = ("Constant", "Dynamic-DPSGD", "Median")
 
 
 @dataclass
@@ -139,41 +132,13 @@ class TransferSlurmConfig:
 
 
 def build_stage_jobs(conf: TransferSlurmConfig) -> dict[str, list]:
-    """The surviving jobs for each requested stage, after validation and skipping.
-
-    Off-grid targets are fatal for the equation stage and a warning for the others
-    (curve off-grid is the experiment). The skip filter is applied last, so the
-    printed counts are what will actually be submitted.
-    """
-    targets = expand_targets(
-        conf.target_datasets, conf.target_eps, conf.target_T, conf.target_delta
+    """The surviving jobs for each requested stage — see ``transfer_launch.plan_jobs``."""
+    return plan_jobs(
+        conf.stages,
+        expand_targets(conf.target_datasets, conf.target_eps, conf.target_T, conf.target_delta),
+        conf.producer_args,
+        condition_grid(Path(conf.eval_dir) / "category_map.json") if conf.eval_dir else set(),
     )
-    grid = condition_grid(Path(conf.eval_dir) / "category_map.json") if conf.eval_dir else set()
-
-    jobs: dict[str, list] = {}
-    for stage in conf.stages:
-        check_on_grid(targets, grid, stage)
-        if stage == "curve":
-            if not conf.schedules_parquet:
-                raise SystemExit("--schedules_parquet is required for the curve stage")
-            built = curve_jobs(source_regimes(conf.schedules_parquet), targets, conf.producer_args)
-        elif stage == "equation":
-            if not conf.eval_dir:
-                raise SystemExit("--eval_dir is required for the equation stage")
-            from sr_category import load_category_map
-
-            category_map = load_category_map(Path(conf.eval_dir) / "category_map.json")
-            built = equation_jobs(category_map, targets, conf.producer_args)
-        elif stage == "reference":
-            built = reference_jobs(_REFERENCES, targets, conf.producer_args)
-        else:
-            raise SystemExit(f"unknown stage {stage!r}")
-
-        surviving = drop_finished(built, conf.cache_root)
-        skipped = len(built) - len(surviving)
-        print(f"  {stage}: {len(surviving)} task(s) to run ({skipped} already done)")
-        jobs[stage] = surviving
-    return jobs
 
 
 # ---------------------------------------------------------------------------

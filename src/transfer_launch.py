@@ -331,6 +331,48 @@ def drop_finished(jobs: list[Job], cache_root) -> list[Job]:
     return [job for job in jobs if not all((root / cell).exists() for cell in job.cells)]
 
 
+REFERENCES = ("Constant", "Dynamic-DPSGD", "Median")
+
+
+def plan_jobs(
+    stages: tuple[str, ...],
+    targets: list[Target],
+    args: ProducerArgs,
+    grid: set = frozenset(),
+) -> dict[str, list[Job]]:
+    """The surviving jobs for each requested stage, after validation and skipping.
+
+    Shared by the SLURM launcher and the local runner, so the two can never disagree
+    about what a stage's task list is. Off-grid targets are fatal for the equation
+    stage and a warning for the others (curve off-grid is the experiment), and the
+    skip filter is applied last, so the printed counts are what will actually run.
+    """
+    jobs: dict[str, list[Job]] = {}
+    for stage in stages:
+        check_on_grid(targets, set(grid), stage)
+        if stage == "curve":
+            if not args.schedules_parquet:
+                raise SystemExit("--schedules_parquet is required for the curve stage")
+            built = curve_jobs(source_regimes(args.schedules_parquet), targets, args)
+        elif stage == "equation":
+            if not args.eval_dir:
+                raise SystemExit("--eval_dir is required for the equation stage")
+            from sr_category import load_category_map
+
+            category_map = load_category_map(pathlib.Path(args.eval_dir) / "category_map.json")
+            built = equation_jobs(category_map, targets, args)
+        elif stage == "reference":
+            built = reference_jobs(REFERENCES, targets, args)
+        else:
+            raise SystemExit(f"unknown stage {stage!r}")
+
+        surviving = drop_finished(built, args.cache_root)
+        skipped = len(built) - len(surviving)
+        print(f"  {stage}: {len(surviving)} task(s) to run ({skipped} already done)")
+        jobs[stage] = surviving
+    return jobs
+
+
 def manifest_text(jobs: list[Job]) -> str:
     """Render the jobs as an array manifest — one command per line.
 
