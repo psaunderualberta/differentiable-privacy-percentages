@@ -5,7 +5,10 @@ The launcher's job is to turn a target cross-product into a per-stage manifest o
 These are the pure parts; `_submit()` is integration glue and is not unit-tested.
 """
 
+import importlib.util
 import itertools
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +17,7 @@ from transfer_launch import (
     ProducerArgs,
     SourceRegime,
     Target,
+    absolute_path,
     array_sbatch,
     cell_filename,
     check_on_grid,
@@ -429,6 +433,87 @@ class TestSerialSbatch:
         script = self._script(name="plot", prerequisites=("11", "22", "33"))
 
         assert "#SBATCH --dependency=afterok:11,22,33" in script
+
+
+_LAUNCHERS = {
+    "slurm": Path(__file__).resolve().parents[2] / "cc" / "slurm" / "transfer-run-starter.py",
+    "local": Path(__file__).resolve().parents[2] / "cc" / "local" / "transfer-local.py",
+}
+
+
+def _load_launcher(path: Path):
+    """Load a launcher by path — its filename is not a valid identifier.
+
+    Same device as ``test_run_starter.py``; the parent dir goes on the path for the
+    launcher's sibling imports (``_slurm_account``).
+    """
+    sys.path.insert(0, str(path.parent))
+    try:
+        spec = importlib.util.spec_from_file_location(path.stem.replace("-", "_"), path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.path.remove(str(path.parent))
+
+
+class TestProducerPathsAreAbsolute:
+    """Both launchers must absolutise the paths they hand to producers.
+
+    A producer runs with its cwd pinned to ``src/`` (``#SBATCH --chdir`` on the
+    cluster, ``cwd=`` for the local pool) while the launcher is invoked from wherever
+    the user happens to be — normally the repo root. A relative path therefore names
+    one file to the launcher and a different one to the producer. This is not
+    hypothetical: a 744-task curve array was submitted with a relative
+    ``--schedules_parquet`` that the launcher read fine, and every single task died
+    on ``src/./src/cache/.../schedules.parquet`` seconds after starting.
+    """
+
+    def test_empty_stays_empty_so_an_unrequested_stage_is_still_unrequested(self):
+        # plan_jobs tests `if not args.eval_dir`, and abspath("") is the cwd — which
+        # would turn "stage not requested" into a real, wrong directory.
+        assert absolute_path("") == ""
+
+    def test_a_relative_path_resolves_against_the_invoking_cwd(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+
+        assert absolute_path("./cache/x.parquet") == str(tmp_path / "cache" / "x.parquet")
+
+    @pytest.mark.parametrize("launcher", sorted(_LAUNCHERS))
+    def test_launcher_hands_producers_absolute_paths(self, launcher, tmp_path, monkeypatch):
+        module = _load_launcher(_LAUNCHERS[launcher])
+        config_cls = next(
+            getattr(module, name)
+            for name in ("TransferSlurmConfig", "TransferLocalConfig")
+            if hasattr(module, name)
+        )
+        monkeypatch.chdir(tmp_path)
+
+        args = config_cls(
+            cache_root="out/transfer",
+            schedules_parquet="./src/cache/results/sweep/schedules.parquet",
+            eval_dir="cache/pysr_eval/slug",
+        ).producer_args
+
+        assert args.cache_root == str(tmp_path / "out" / "transfer")
+        assert args.schedules_parquet == str(
+            tmp_path / "src" / "cache" / "results" / "sweep" / "schedules.parquet"
+        )
+        assert args.eval_dir == str(tmp_path / "cache" / "pysr_eval" / "slug")
+
+    @pytest.mark.parametrize("launcher", sorted(_LAUNCHERS))
+    def test_launcher_leaves_an_unrequested_stage_empty(self, launcher, tmp_path, monkeypatch):
+        module = _load_launcher(_LAUNCHERS[launcher])
+        config_cls = next(
+            getattr(module, name)
+            for name in ("TransferSlurmConfig", "TransferLocalConfig")
+            if hasattr(module, name)
+        )
+        monkeypatch.chdir(tmp_path)
+
+        args = config_cls(cache_root="out").producer_args
+
+        assert (args.schedules_parquet, args.eval_dir) == ("", "")
 
 
 class TestPreflightCommand:

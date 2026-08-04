@@ -14,6 +14,7 @@ the producers' writes can never disagree about where a cell lives.
 """
 
 import dataclasses
+import os
 import pathlib
 import shlex
 
@@ -182,6 +183,23 @@ def condition_grid(category_map_path) -> set:
 # ---------------------------------------------------------------------------
 # Jobs: one array task each, plus the skip filter and the manifest
 # ---------------------------------------------------------------------------
+
+
+def absolute_path(path: str) -> str:
+    """Resolve a user-supplied path against the invoking cwd, keeping ``""`` as ``""``.
+
+    Load-bearing for both launchers. A producer runs with its cwd set to ``src/``
+    (``#SBATCH --chdir`` on the cluster, ``cwd=`` on the local pool) while the
+    launcher is invoked from anywhere — usually the repo root. So a relative
+    ``--cache_root`` would have the skip filter testing one directory and the
+    producer writing another, and a relative ``--schedules_parquet`` that the
+    launcher reads fine resolves on the node to ``src/<what you typed>`` and dies
+    there, minutes into a submitted array.
+
+    Empty means "stage not requested" to :func:`plan_jobs`, and ``abspath("")``
+    would turn that into a real directory, so it is passed through untouched.
+    """
+    return os.path.abspath(path) if path else ""
 
 
 @dataclasses.dataclass(frozen=True)

@@ -55,6 +55,7 @@ sys.path.insert(0, os.environ["PROJECT_SOURCE_ROOT"])
 from transfer_launch import (
     Job,
     ProducerArgs,
+    absolute_path,
     condition_grid,
     expand_targets,
     plan_jobs,
@@ -99,27 +100,18 @@ class TransferLocalConfig:
 
     @property
     def producer_args(self) -> ProducerArgs:
-        # Absolute, always. Workers run with cwd=src/ while you invoke this from
-        # anywhere, so a relative --cache_root would have the skip filter testing one
-        # directory and the producer writing another — silently, and only for the
-        # cells that had already been computed.
+        # Absolute, always — see transfer_launch.absolute_path. Workers run with
+        # cwd=src/ while you invoke this from anywhere, so a relative --cache_root
+        # would have the skip filter testing one directory and the producer writing
+        # another — silently, and only for the cells already computed.
         return ProducerArgs(
-            cache_root=_absolute(self.cache_root),
-            schedules_parquet=_absolute(self.schedules_parquet),
-            eval_dir=_absolute(self.eval_dir),
+            cache_root=absolute_path(self.cache_root),
+            schedules_parquet=absolute_path(self.schedules_parquet),
+            eval_dir=absolute_path(self.eval_dir),
             num_reps=self.num_reps,
             seed=self.seed,
             batch_size=self.batch_size,
         )
-
-
-def _absolute(path: str) -> str:
-    """Resolve a user-supplied path against the invoking cwd, keeping "" as "".
-
-    Empty means "stage not requested" to :func:`plan_jobs`, and ``abspath("")``
-    would turn that into a real directory.
-    """
-    return os.path.abspath(path) if path else ""
 
 
 def worker_env(gpu: int, workers_per_gpu: int) -> dict[str, str]:

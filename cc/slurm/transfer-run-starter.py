@@ -56,6 +56,7 @@ os.environ["PROJECT_SOURCE_ROOT"] = os.path.abspath(
 sys.path.insert(0, os.environ["PROJECT_SOURCE_ROOT"])
 from transfer_launch import (
     ProducerArgs,
+    absolute_path,
     array_sbatch,
     condition_grid,
     expand_targets,
@@ -121,10 +122,14 @@ class TransferSlurmConfig:
 
     @property
     def producer_args(self) -> ProducerArgs:
+        # Absolute, always — see transfer_launch.absolute_path. The array tasks run
+        # under `#SBATCH --chdir=src/` while this launcher is invoked from wherever
+        # you happen to be, so a relative path means one thing here and another on
+        # the compute node.
         return ProducerArgs(
-            cache_root=self.cache_root,
-            schedules_parquet=self.schedules_parquet,
-            eval_dir=self.eval_dir,
+            cache_root=absolute_path(self.cache_root),
+            schedules_parquet=absolute_path(self.schedules_parquet),
+            eval_dir=absolute_path(self.eval_dir),
             num_reps=self.num_reps,
             seed=self.seed,
             batch_size=self.batch_size,
@@ -133,11 +138,12 @@ class TransferSlurmConfig:
 
 def build_stage_jobs(conf: TransferSlurmConfig) -> dict[str, list]:
     """The surviving jobs for each requested stage — see ``transfer_launch.plan_jobs``."""
+    args = conf.producer_args
     return plan_jobs(
         conf.stages,
         expand_targets(conf.target_datasets, conf.target_eps, conf.target_T, conf.target_delta),
-        conf.producer_args,
-        condition_grid(Path(conf.eval_dir) / "category_map.json") if conf.eval_dir else set(),
+        args,
+        condition_grid(Path(args.eval_dir) / "category_map.json") if args.eval_dir else set(),
     )
 
 
@@ -264,7 +270,10 @@ def main(conf: TransferSlurmConfig) -> None:
         _submit(
             serial_sbatch(
                 name="plot",
-                command=f"uv run --no-sync transfer_plot.py --cache_root {conf.cache_root}",
+                command=(
+                    "uv run --no-sync transfer_plot.py"
+                    f" --cache_root {conf.producer_args.cache_root}"
+                ),
                 walltime=_WALLTIMES["plot"],
                 project_dir=conf.project_dir,
                 account=conf.account,
