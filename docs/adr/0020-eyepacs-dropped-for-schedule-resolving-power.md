@@ -151,12 +151,14 @@ chosen so the 256×256 input is downsampled properly rather than crushed by a si
 | arch | params | lr | val | test | train loss |
 |---|---|---|---|---|---|
 | `cnn-16x32-head32` (surrogate) | 241,909 | 0.3 / 0.1 / 0.03 | 73.982% | 75.360% | 1.659 → 0.75–0.78 |
-| `deep3` | 466,661 | 0.3 | 73.982% | 75.360% | 1.611 → 1.21 |
+| `deep3` | 466,661 | 0.3 / 0.1 / 0.03 | 73.982% | 75.360% | 1.611 → 1.21–1.30 |
 
 The larger network returns **the identical majority rate, to three decimals, on both
-splits**. Capacity is not the binding constraint.
+splits, at every learning rate** — six independent runs across a 1.9× capacity range and
+a decade of learning rate, all returning one number. Capacity is not the binding
+constraint.
 
-One honest caveat: `deep3`'s train loss (1.21) is still *above* the 0.873 class-prior
+One honest caveat: `deep3`'s train loss (1.21–1.30) is still *above* the 0.873 class-prior
 entropy at 5,000 steps, so on its own it could be dismissed as undertrained. The
 surrogate is what closes that gap — it reaches 0.75–0.78, i.e. it fits the training set
 *beyond* the marginal label distribution, and still returns exactly the majority rate on

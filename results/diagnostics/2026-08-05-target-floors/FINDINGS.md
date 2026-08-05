@@ -111,17 +111,22 @@ stride-2 blocks, **466,661 params vs the surrogate's 241,909 (1.9×)** — sized
 |---|---|---|---|---|---|---|
 | `cnn-16x32-head32` | 241,909 | 0.3 | 0 | 73.982% | 75.360% | 1.659 → 0.7665 |
 | `deep3` | 466,661 | 0.3 | 0 | 73.982% | 75.360% | 1.611 → 1.21 |
+| `deep3` | 466,661 | 0.1 | 0 | 73.982% | 75.360% | 1.611 → 1.291 |
+| `deep3` | 466,661 | 0.03 | 0 | 73.982% | 75.360% | 1.611 → 1.295 |
 
-Identical on both splits, to three decimals. **Capacity is not the binding constraint.**
+Identical on both splits, to three decimals, at **every** learning rate on both
+architectures — six independent runs returning one number.
+**Capacity is not the binding constraint.**
 Caveat worth stating: `deep3`'s train loss is still *above* the 0.873 prior entropy at
 5,000 steps, so in isolation it could be called undertrained — it is the surrogate,
 which gets *below* the prior on train and still returns exactly the majority rate on
 held-out data, that closes the argument. The small net learns something on train that
 generalises to nothing; the large net does not get that far in the step budget.
 
-Run: `arch_control.py --arch deep3 --lrs 0.3 0.1 0.03 --T 5000` (lr 0.3 shown; 0.1 and
-0.03 were still running when this was written — the surrogate returned the same value at
-all three, and any deviation here would be recorded as an amendment).
+Run: `arch_control.py --arch deep3 --lrs 0.3 0.1 0.03 --T 5000`. All three completed
+2026-08-05; an earlier version of this section showed lr=0.3 only and undertook to record
+any deviation as an amendment. There was none — 0.1 and 0.03 returned the same two
+numbers, and the sweep is now shown in full above.
 
 **ImageNet-32** — chance 1.0%, floor 1.125%:
 
