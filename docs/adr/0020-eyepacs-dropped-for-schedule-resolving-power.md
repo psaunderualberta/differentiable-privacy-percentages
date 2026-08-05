@@ -81,6 +81,9 @@ evidence of the wrong kind:
    | CheXpert | 1.093 pp | 0.356 pp | 3.07 | F = 23.1, p = 4.9e-06 |
    | ImageNet-32 | 8.138 pp | 0.945 pp | **8.61** | F = 174.5, p = 8.3e-14 |
 
+   Note this is one budget point out of the three the grid spans; the other four target
+   regimes are handled by a pre-commitment in Consequences rather than by a second gate.
+
 **The EyePACS decision turns only on part 1**, which is measured, unambiguous, and
 independent of anything the other two do. A target with zero headroom cannot have
 separation, so no further measurement could rescue it.
@@ -325,6 +328,29 @@ off.
   would still have been technically uncontaminated, but the sequence would no longer
   *demonstrate* that, and demonstrability is the entire point of the forking-paths section
   above. Both targets' curve cells are now unblocked.
+- **The four budget points that have no reference stage yet are pre-committed, here and
+  now, to being reported whatever they show.** Separation was measured at (ε=10, T=5000)
+  only, and the criterion above is worded per *target regime*, so on a literal reading
+  T=2000 and T=7000 are unqualified on both datasets. Their reference cells come out of
+  the same DAG submission as their curve cells, which means admissibility evidence and
+  transfer results arrive together — the arrangement the ImageNet-32 gate above exists to
+  avoid.
+
+  Gating them the same way is rejected. It buys a second queue round-trip on a question
+  that is nearly determined: headroom is a property of the *dataset*, not of the budget
+  point, and it is settled for both survivors; T is a knob on the budget, not a change of
+  instrument. What replaces the gate is cheaper and strictly stronger — a commitment made
+  before the cells exist that **all six regimes are reported, and per-regime separation is
+  an interpretive diagnostic attached to a column, never a filter that removes one.**
+
+  Concretely: a column whose references come back tightly bunched is reported as a column
+  whose references do not separate, and a column that lands on its floor is reported as
+  floored. Both are findings about the target at that budget, and both stay in. The
+  EyePACS-style remedy — removal on resolving-power grounds — is available only *before*
+  a regime's curve cells are launched, which for these four is now, and it is not being
+  exercised. Nothing observed after this point can shrink the matrix. That is what makes
+  running the two stages concurrently safe; without the commitment, launching them
+  together would leave a drop decision live with the results already in hand.
 - **ADR 0007's validation order is reversed and reassigned**: validate the pipeline
   end-to-end on **CheXpert first, then ImageNet-32**. Both now have a complete post-fix
   reference stage at (ε=10, T=5000) and both demonstrate separation, so the tie-break is
