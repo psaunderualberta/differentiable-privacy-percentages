@@ -83,16 +83,22 @@ DP arms are seated exactly on the ε=10 boundary: constant σ\* solving
 `T·exp((C/σ)²) = (μ/p)² + T` (verified `spent/bound = 1.000000`, and
 `project_inverse_sigmas` leaves it unchanged).
 
-**EyePACS** — floor 73.982%. Floors at every LR *with no DP at all*:
+**EyePACS** — floor 73.982%. Floors at every LR, in **both** arms:
 
-| arm | lr | val | test |
-|---|---|---|---|
-| non-private | 0.3 | 73.982% | 75.360% |
-| non-private | 0.1 | 73.982% | 75.360% |
-| non-private | 0.03 | 73.982% | 75.360% |
+| arm | lr | σ | val | test | train loss min |
+|---|---|---|---|---|---|
+| non-private | 0.3 | 0 | 73.982% | 75.360% | 0.7665 |
+| non-private | 0.1 | 0 | 73.982% | 75.360% | 0.7482 |
+| non-private | 0.03 | 0 | 73.982% | 75.360% | 0.7821 |
+| DP ε=10 | 0.3 | 0.6832 | 73.982% | 75.360% | 0.7663 |
+| DP ε=10 | 0.1 | 0.6832 | 73.982% | 75.360% | 0.7485 |
+| DP ε=10 | 0.03 | 0.6832 | 73.982% | 75.360% | 0.7858 |
 
-Train loss falls 1.659 → ~0.75–0.78, but the **class-prior entropy is 0.873** — the
-model barely learns more than the marginal label distribution.
+Every cell lands on the identical accuracy, and the DP arm's train loss matches the
+non-private arm's to ~3 decimal places — removing the privacy mechanism entirely
+changes *nothing*. Train loss falls 1.659 → ~0.75–0.78, but the **class-prior entropy
+is 0.873**, so the model barely learns more than the marginal label distribution.
+Noise is not the binding constraint here; the task and surrogate architecture are.
 
 **ImageNet-32** — chance 1.0%, floor 1.125%:
 
@@ -175,7 +181,9 @@ The target has ample resolving power.
 
 **EyePACS — drop as a measurement instrument.** This is the handoff's first branch and
 it does not depend on the bug: EyePACS floors at 73.982% with **no DP at all**, at
-every learning rate, with train loss barely below the class-prior entropy. Per ADR
+every learning rate, and the ε=10 arm is indistinguishable from the non-private one in
+both accuracy and train loss — there is no privacy cost to measure because there is no
+signal to degrade. Train loss stays barely below the class-prior entropy. Per ADR
 0007's own criterion for rejecting full ImageNet — "from-scratch private accuracy is a
 floor, so per-curve transfer differences would be unresolvable noise" — EyePACS now
 meets that same bar. Lead with resolving power, not cost. From-scratch EyePACS
