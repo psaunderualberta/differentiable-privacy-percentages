@@ -4,9 +4,16 @@ ADR 0008 requires that **every** source policy be transferred, so that the trans
 is read off rather than selected from. Applied to FirSweep that is 851 policies × 12 target
 columns ≈ 21,000 GPU-hours, which does not fit the remaining schedule. Curve transfer is
 therefore restricted to the **T-sweep axis**, to regimes carrying at least four seeds in an
-arm, and to a **fixed four seeds per regime-arm** chosen by seed index — 49 regime-arms,
-196 policies, 6 target columns, ≈ 1,650 GPU-hours. Both arms are kept, and the **arm
-becomes part of the regime identity**.
+arm, and to a **fixed four seeds per regime-arm** chosen by seed index. Both arms are kept,
+and the **arm becomes part of the regime identity**.
+
+> **Counts refreshed 2026-08-05.** The figures below were taken when the m0.0 arm had 131
+> runs at `cnn-16x32-head32`; a later fetch brought it to 239, completing the mnist grid.
+> The rule is unchanged, but it now admits **62 regime-arms (32 m0.9, 30 m0.0) → 248
+> policies × 6 target columns = 1,488 curve cells**, not 49 / 196 / 1,176. Only
+> `fashion-mnist` at `eps=10, T∈{5000,7000}` still falls below the four-seed floor, so the
+> momentum contrast is now paired across 14 of 16 fashion-mnist points *and* all 16 mnist
+> ones rather than three isolated mnist regimes.
 
 ## Status
 
@@ -71,5 +78,6 @@ the original cost — could never gain an equation counterpart or appear in the 
   noise. This is a plot-side change only and re-runs nothing.
 - `num_reps` drops from 8 to 3. It now only has to stabilise a cell mean, because the
   consistency estimate draws its samples from the regime's policies.
-- The matrix has 49 rows rather than 62 regimes' worth, and no row at an architecture other
-  than `cnn-16x32-head32`. Any architecture-transfer claim needs a later, separate run.
+- The matrix has one row per surviving regime-arm (62 as of the refresh above), and no row
+  at an architecture other than `cnn-16x32-head32`. Any architecture-transfer claim needs a
+  later, separate run.

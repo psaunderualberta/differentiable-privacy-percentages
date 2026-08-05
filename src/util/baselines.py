@@ -12,7 +12,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import tqdm
 import wandb
-from jaxtyping import Array, PRNGKeyArray
+from jaxtyping import PRNGKeyArray
 
 from environments.dp import (
     DPTrainingParams,
@@ -53,6 +53,39 @@ REFERENCES = (
     "Dynamic-DPSGD",
     "Constant σ/clip",
 )
+
+
+NUM_SWEEP_CANDIDATES = 20
+"""Candidates in a reference's random search. Kept at 20 through ADR 0019's split:
+shrinking it is the cheap alternative that would make the references a straw man."""
+
+SWEEP_SCORING_ITERATIONS = 3
+"""Inner trainings per candidate when scoring. Was 10; ADR 0019 cut it so one
+(reference x target x candidate) SLURM task fits ~1.3h. Selection is noisier but
+unbiased, and the winner is re-evaluated cleanly for the reported number."""
+
+_SWEEP_SCORING_STREAM = 7919
+"""Fold-in constant separating the candidate-scoring draws from the final evaluation's,
+so a winner's reported accuracy is not the same draw that selected it."""
+
+
+def describe_schedule(schedule) -> dict[str, object]:
+    """The drawn parameters of a candidate, for the sweep's printout.
+
+    These schedules store their constructor arguments as same-named fields, so the
+    signature recovers what was drawn. ``privacy_params`` is dropped (shared by every
+    candidate) and a nested base schedule is reduced to its mean value, which is what
+    a constant σ/clip candidate is actually characterised by.
+    """
+    from policy.base_schedules.abstract import AbstractSchedule
+
+    def summarise(value):
+        if isinstance(value, AbstractSchedule):
+            return float(np.mean(np.asarray(value.get_valid_schedule())))
+        return value
+
+    names = (n for n in inspect.signature(type(schedule)).parameters if n != "privacy_params")
+    return {n: summarise(getattr(schedule, n)) for n in names if hasattr(schedule, n)}
 
 
 def reference_sweep_keys(key: PRNGKeyArray) -> dict[str, PRNGKeyArray]:
@@ -316,46 +349,144 @@ class Baseline:
         # Create a copy of baseline data, then another to be modified
         return df
 
+    def candidate_schedules(
+        self,
+        reference: str,
+        key: PRNGKeyArray,
+        num_candidates: int = NUM_SWEEP_CANDIDATES,
+    ) -> list[AbstractNoiseAndClipSchedule | AbstractStatefulNoiseAndClipSchedule]:
+        """The schedules ``reference``'s random search evaluates, in sweep order.
+
+        A pure function of ``(reference, key, index)``: candidate *i* is the same
+        schedule whether it is reached by enumerating twenty of them in one process
+        or by asking for the first eight in another. That is what lets ADR 0019 run
+        one SLURM task per candidate without changing the search — the full
+        20-candidate space is preserved, only its packaging changes.
+
+        The draw order per reference is the one the monolithic sweep has always
+        used, so the search space itself is unchanged.
+        """
+        schedules = []
+        if reference == "Constant σ/clip":
+            # project() rescales sigma to satisfy the budget while holding the sampled
+            # clip fixed, so the search effectively explores constant clip thresholds.
+            T = int(self.privacy_params.T)
+            for _ in range(num_candidates):
+                key, sigma_key, clip_key = jr.split(key, 3)
+                schedules.append(
+                    SigmaAndClipSchedule(
+                        ConstantSchedule(
+                            jr.uniform(sigma_key, shape=(), minval=0.1, maxval=5.0), T
+                        ),
+                        ConstantSchedule(jr.uniform(clip_key, shape=(), minval=0.1, maxval=5.0), T),
+                        self.privacy_params,
+                    ).project()
+                )
+            return schedules
+
+        params, schedule_class = self._search_space(reference)
+        for _ in range(num_candidates):
+            key, _key = jr.split(key)
+            param_keys = jr.split(_key, len(params))
+            schedules.append(
+                schedule_class(*(fun(param_key) for fun, param_key in zip(params, param_keys)))
+            )
+        return schedules
+
+    def _search_space(
+        self, reference: str
+    ) -> tuple[
+        list[Callable[[PRNGKeyArray], Any]],
+        type[AbstractNoiseAndClipSchedule] | type[AbstractStatefulNoiseAndClipSchedule],
+    ]:
+        """One reference's per-parameter samplers and the schedule they construct.
+
+        Order is load-bearing: the sampler list is zipped against ``jr.split``'s
+        output, so reordering it would silently change every candidate drawn.
+        """
+        if reference == "Adaptive Clip (Andrew et al.)":
+            return [
+                lambda key: jr.uniform(key, shape=(), minval=0.01, maxval=5.0),  # c_0
+                lambda key: jr.uniform(key, shape=(), minval=0.01, maxval=1.0),  # eta_C
+                lambda _: self.privacy_params,  # privacy_params
+            ], StatefulMedianGradientNoiseAndClipSchedule
+        if reference == "Dynamic-DPSGD":
+            return [
+                lambda key: jr.uniform(key, shape=(), minval=0.5, maxval=5.0),  # rho_mu
+                lambda key: jr.uniform(key, shape=(), minval=0.5, maxval=5.0),  # rho_c
+                lambda key: jr.uniform(key, shape=(), minval=0.5, maxval=5.0),  # c_0
+                lambda _: self.privacy_params,  # privacy_params
+            ], DynamicDPSGDSchedule
+        raise ValueError(f"unknown reference {reference!r}; expected one of {REFERENCES}")
+
+    def score_candidate(
+        self,
+        schedule: AbstractNoiseAndClipSchedule | AbstractStatefulNoiseAndClipSchedule,
+        name: str,
+        iterations: int = SWEEP_SCORING_ITERATIONS,
+    ) -> float:
+        """A candidate's mean validation accuracy over ``iterations`` inner trainings.
+
+        Every candidate is scored under the *same* key, so the comparison between
+        them is a common-random-numbers one and a candidate cannot win on a lucky
+        draw of initialisations. That key is deliberately **not** the one
+        :meth:`evaluate_candidate` reports on: reusing it would make the winner's
+        reported number the very draw that selected it (ADR 0019).
+        """
+        df = self.generate_schedule_data(
+            schedule,
+            name,
+            key=jr.fold_in(self.schedule_data_generation_key, _SWEEP_SCORING_STREAM),
+            with_progress_bar=False,
+            iterations=iterations,
+        )
+        return float(df["accuracy"].mean())
+
+    def evaluate_candidate(
+        self,
+        schedule: AbstractNoiseAndClipSchedule | AbstractStatefulNoiseAndClipSchedule,
+        name: str,
+        with_progress_bar: bool = True,
+    ) -> pd.DataFrame:
+        """The reported final evaluation of a chosen candidate, on the held-out split.
+
+        Uses the Baseline's own generation key — the same one the curve and equation
+        transfer producers evaluate their schedules under — so a reference cell and
+        the transferred cells it is compared against see common random numbers.
+        """
+        return self.generate_schedule_data(
+            schedule, name, with_progress_bar=with_progress_bar, test_data=True
+        )
+
     def baseline_sweep(
         self,
         key: PRNGKeyArray,
-        params: list[Callable[[PRNGKeyArray], Array]],
         name: str,
-        schedule_class: type[AbstractNoiseAndClipSchedule]
-        | type[AbstractStatefulNoiseAndClipSchedule],
-        num_runs_in_sweep: int = 20,
+        num_runs_in_sweep: int = NUM_SWEEP_CANDIDATES,
         with_progress_bar: bool = True,
+        iterations: int = SWEEP_SCORING_ITERATIONS,
     ) -> tuple[pd.DataFrame, AbstractNoiseAndClipSchedule | AbstractStatefulNoiseAndClipSchedule]:
-        num_params = len(params)
-        best_params = []
-        best_run_accuracy = 0
-        for _ in tqdm.tqdm(range(num_runs_in_sweep), desc=f"Sweep: {name}"):
-            run_params = []
-            key, _key = jr.split(key)
-            param_keys = jr.split(_key, num_params)
-            for param_fun, param_key in zip(params, param_keys):
-                run_params.append(param_fun(param_key))
+        """Random-search one reference's hyperparameters and evaluate the winner.
 
-            schedule = schedule_class(*run_params)
-            df = self.generate_schedule_data(schedule, name, with_progress_bar=False, iterations=10)
+        The whole search in one process. ADR 0019 splits exactly this loop across
+        SLURM tasks for transfer, which is why the candidate enumeration and the two
+        evaluation halves are separate methods — the split path calls the same three.
+        """
+        schedules = self.candidate_schedules(name, key, num_runs_in_sweep)
+        scores = [
+            self.score_candidate(schedule, name, iterations)
+            for schedule in tqdm.tqdm(
+                schedules, desc=f"Sweep: {name}", disable=not with_progress_bar
+            )
+        ]
+        best = schedules[int(np.argmax(scores))]
 
-            run_accuracy = df["accuracy"].mean()
-            if df["accuracy"].mean() > best_run_accuracy:
-                best_run_accuracy = run_accuracy
-                best_params = run_params
+        print(f"Best Accuracy for {name}: {max(scores):0.4f}")
+        print(f"Best Parameters for {name}:")
+        for param_name, value in describe_schedule(best).items():
+            print(f"\t{param_name} = {value}")
 
-        # Print sweep results w/ argument names
-        class_params = inspect.signature(schedule_class).parameters
-        print(f"Best Accuracy for {schedule_class.__name__}: {best_run_accuracy:0.4f}")
-        print(f"Best Parameters for {schedule_class.__name__}:")
-        for param_name, param in zip(class_params, best_params):
-            print(f"\t{param_name} = {param}")
-
-        schedule = schedule_class(*best_params)
-
-        return self.generate_schedule_data(
-            schedule, name, key, with_progress_bar=with_progress_bar, test_data=True
-        ), schedule
+        return self.evaluate_candidate(best, name, with_progress_bar=with_progress_bar), best
 
     def log_comparison(
         self,
@@ -404,62 +535,6 @@ class Baseline:
             multi_line_plotter(clip_df, col_name="clip", color_indicator="type"),
         )
 
-    def _constant_schedule_sweep(
-        self,
-        key: PRNGKeyArray,
-        name: str = "Constant σ/clip",
-        num_runs_in_sweep: int = 20,
-        with_progress_bar: bool = True,
-    ) -> pd.DataFrame:
-        """Sweep over constant σ/clip values and return data for the best setting.
-
-        `project()` rescales σ to satisfy the privacy budget while keeping the
-        sampled clip value fixed, so the sweep effectively explores different
-        constant clip thresholds.
-        """
-        T = int(self.privacy_params.T)
-        best_sigma: Array | None = None
-        best_clip: Array | None = None
-        best_run_accuracy = 0.0
-
-        for _ in tqdm.tqdm(range(num_runs_in_sweep), desc=f"Sweep: {name}"):
-            key, sigma_key, clip_key = jr.split(key, 3)
-            sigma_val = jr.uniform(sigma_key, shape=(), minval=0.1, maxval=5.0)
-            clip_val = jr.uniform(clip_key, shape=(), minval=0.1, maxval=5.0)
-
-            schedule = SigmaAndClipSchedule(
-                ConstantSchedule(sigma_val, T),
-                ConstantSchedule(clip_val, T),
-                self.privacy_params,
-            ).project()
-
-            # Update to values post-projection
-            sigma_val = schedule.get_private_noise_scales().mean()
-            clip_val = schedule.get_private_clips().mean()
-
-            df = self.generate_schedule_data(schedule, name, with_progress_bar=False, iterations=10)
-
-            run_accuracy = float(df["accuracy"].mean())
-            if run_accuracy > best_run_accuracy:
-                best_run_accuracy = run_accuracy
-                best_sigma = sigma_val
-                best_clip = clip_val
-
-        print(f"Best Accuracy for {name}: {best_run_accuracy:0.4f}")
-        print(f"Best Parameters for {name}:")
-        print(f"\tsigma = {best_sigma}")
-        print(f"\tclip  = {best_clip}")
-
-        best_schedule = SigmaAndClipSchedule(
-            ConstantSchedule(best_sigma, T),
-            ConstantSchedule(best_clip, T),
-            self.privacy_params,
-        )
-
-        return self.generate_schedule_data(
-            best_schedule, name, with_progress_bar=with_progress_bar, test_data=True
-        )
-
     def sweep_reference(
         self,
         reference: str,
@@ -474,44 +549,13 @@ class Baseline:
         ``key`` comes from :func:`reference_sweep_keys`, so a reference swept alone
         sees exactly the key it would have seen in the combined sweep.
         """
-        if reference == "Adaptive Clip (Andrew et al.)":
-            params = [
-                lambda key: jr.uniform(key, shape=(), minval=0.01, maxval=5.0),  # c_0
-                lambda key: jr.uniform(key, shape=(), minval=0.01, maxval=1.0),  # eta_C
-                lambda _: self.privacy_params,  # privacy_params
-            ]
-            df, _ = self.baseline_sweep(
-                key,
-                params,
-                reference,
-                StatefulMedianGradientNoiseAndClipSchedule,
-                with_progress_bar=with_progress_bar,
-            )
-            return df
+        if reference not in REFERENCES:
+            raise ValueError(f"unknown reference {reference!r}; expected one of {REFERENCES}")
 
+        df, best = self.baseline_sweep(key, reference, with_progress_bar=with_progress_bar)
         if reference == "Dynamic-DPSGD":
-            params = [
-                lambda key: jr.uniform(key, shape=(), minval=0.5, maxval=5.0),  # rho_mu
-                lambda key: jr.uniform(key, shape=(), minval=0.5, maxval=5.0),  # rho_c
-                lambda key: jr.uniform(key, shape=(), minval=0.5, maxval=5.0),  # c_0
-                lambda _: self.privacy_params,  # privacy_params
-            ]
-            df, dynamic_schedule = self.baseline_sweep(
-                key,
-                params,
-                reference,
-                DynamicDPSGDSchedule,
-                with_progress_bar=with_progress_bar,
-            )
-            self.best_dynamic_schedule: DynamicDPSGDSchedule = cast(
-                DynamicDPSGDSchedule, dynamic_schedule
-            )
-            return df
-
-        if reference == "Constant σ/clip":
-            return self._constant_schedule_sweep(key, with_progress_bar=with_progress_bar)
-
-        raise ValueError(f"unknown reference {reference!r}; expected one of {REFERENCES}")
+            self.best_dynamic_schedule: DynamicDPSGDSchedule = cast(DynamicDPSGDSchedule, best)
+        return df
 
     def generate_baseline_data(
         self,

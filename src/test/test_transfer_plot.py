@@ -4,7 +4,15 @@ import pytest
 from transfer_plot import nearest_source, overlay_cells, overlay_stats, transfer_matrix
 
 
-def _rows(source_id, seeds_accs, producer="curve", target="mnist", t_eps=1.0, t_T=200):
+def _rows(
+    source_id,
+    seeds_accs,
+    producer="curve",
+    target="mnist",
+    t_eps=1.0,
+    t_T=200,
+    arm="sgd-m0.9",
+):
     """Per-seed transfer rows for one source×target cell (schema of util.transfer)."""
     return pd.DataFrame(
         {
@@ -16,6 +24,7 @@ def _rows(source_id, seeds_accs, producer="curve", target="mnist", t_eps=1.0, t_
             "source_T": 200,
             "source_p": 0.01,
             "source_arch": "cnn",
+            "source_arm": arm,
             "target": target,
             "target_eps": t_eps,
             "target_delta": 1e-7,
@@ -29,11 +38,90 @@ def _rows(source_id, seeds_accs, producer="curve", target="mnist", t_eps=1.0, t_
 
 
 class TestTransferMatrixIsReadOff:
-    """The descriptive matrix is read off, not selected (ADR 0008): every source
-    policy becomes a matrix row, and each cell reports the spread across its
-    transferred seeds (generalization consistency) — never a selected best seed."""
+    """The descriptive matrix is read off, not selected (ADR 0008), and its row unit
+    is the source **regime-arm** (ADR 0018): a cell pools every policy in the regime
+    so its ± is generalization consistency — the spread across source policies —
+    rather than evaluation noise, the spread across one policy's own reps."""
 
-    def test_every_source_kept_with_seed_spread_not_a_selected_best(self):
+    def test_a_regimes_policies_pool_into_one_cell_whose_spread_is_across_them(self):
+        # Two policies of the same regime-arm, each internally consistent. The cell
+        # must report a spread driven by the gap BETWEEN them, which a per-policy
+        # grouping would have reported as zero.
+        assembled = pd.concat(
+            [
+                _rows("runA", [(0, 0.80), (1, 0.80)]),
+                _rows("runB", [(0, 0.60), (1, 0.60)]),
+            ],
+            ignore_index=True,
+        )
+
+        matrix = transfer_matrix(assembled)
+
+        # One row: one regime-arm × one target, not one row per policy.
+        assert len(matrix) == 1
+        (cell,) = matrix.to_dict("records")
+        assert cell["mean_acc"] == pytest.approx(0.70)
+        assert cell["n"] == 4
+        # Both policies are internally identical, so any spread here is across them.
+        assert cell["spread"] == pytest.approx(0.10)
+
+    def test_the_two_arms_of_one_regime_stay_separate_rows(self):
+        # Pooling the arms would report an 8.5x median-sigma difference (ADR 0016) as
+        # this regime's generalization consistency.
+        assembled = pd.concat(
+            [
+                _rows("m09", [(0, 0.80)], arm="sgd-m0.9"),
+                _rows("m00", [(0, 0.40)], arm="sgd-m0.0"),
+            ],
+            ignore_index=True,
+        )
+
+        matrix = transfer_matrix(assembled)
+
+        assert sorted(matrix["source_arm"]) == ["sgd-m0.0", "sgd-m0.9"]
+        assert sorted(matrix["mean_acc"]) == [pytest.approx(0.40), pytest.approx(0.80)]
+
+    def test_the_three_references_stay_three_rows(self):
+        # A native reference's source_* provenance mirrors its TARGET (there is no
+        # source run), so all three share one degenerate "regime" and pooling on it
+        # alone would silently average Constant, Dynamic-DPSGD and Median into a
+        # single comparison row. A reference is a mechanism, not a regime (CONTEXT.md):
+        # its source_id IS its row unit.
+        assembled = pd.concat(
+            [
+                _rows("Constant", [(0, 0.50)], producer="reference", arm=""),
+                _rows("Dynamic-DPSGD", [(0, 0.60)], producer="reference", arm=""),
+                _rows("Median", [(0, 0.70)], producer="reference", arm=""),
+            ],
+            ignore_index=True,
+        )
+
+        matrix = transfer_matrix(assembled)
+
+        assert len(matrix) == 3
+        assert sorted(matrix["source_label"]) == ["Constant", "Dynamic-DPSGD", "Median"]
+
+    def test_a_curve_cells_label_names_its_regime_arm_not_a_run_id(self):
+        # The row unit is the regime-arm, so the label must be readable as one — a
+        # W&B run id would name only one of the policies pooled into the cell.
+        assembled = _rows("wandb_run_1", [(0, 0.7)], producer="curve", arm="sgd-m0.9")
+
+        (label,) = transfer_matrix(assembled)["source_label"]
+
+        assert "wandb_run_1" not in label
+        for part in ("eyepacs", "sgd-m0.9", "200"):
+            assert part in label
+
+
+class TestPolicyMatrixIsEvaluationNoise:
+    """The per-policy view survives alongside the pooled one, because the two ± are
+    different quantities and CONTEXT.md requires naming which one a bar shows: here
+    the spread is across one policy's evaluation reps — DP-SGD's own run-to-run
+    variance — not across the regime's policies."""
+
+    def test_every_source_policy_is_its_own_row_with_its_own_rep_spread(self):
+        from transfer_plot import policy_matrix
+
         assembled = pd.concat(
             [
                 _rows("runA", [(0, 0.80), (1, 0.90)]),
@@ -42,17 +130,14 @@ class TestTransferMatrixIsReadOff:
             ignore_index=True,
         )
 
-        matrix = transfer_matrix(assembled)
+        matrix = policy_matrix(assembled).set_index("source_id")
 
-        # One row per (source_id, target cell) — every source is kept.
-        cells = matrix.set_index("source_id")
-        assert set(cells.index) == {"runA", "runB"}
-        # Cell value is the mean across seeds, and the spread is reported.
-        assert cells.loc["runA", "mean_acc"] == pytest.approx(0.85)
-        assert cells.loc["runA", "n"] == 2
-        assert cells.loc["runA", "spread"] > 0.0
-        # runB's seeds agree, so its generalization spread is zero.
-        assert cells.loc["runB", "spread"] == 0.0
+        assert set(matrix.index) == {"runA", "runB"}
+        assert matrix.loc["runA", "mean_acc"] == pytest.approx(0.85)
+        assert matrix.loc["runA", "n"] == 2
+        assert matrix.loc["runA", "spread"] > 0.0
+        # runB's reps agree, so its evaluation noise is zero.
+        assert matrix.loc["runB", "spread"] == 0.0
 
 
 def _src_at(source_id, s_eps, s_T):
@@ -121,7 +206,21 @@ class TestOverlayCells:
         cells = overlay_cells(producers)
 
         # One cell — the shared regime — despite three distinct source_ids.
-        assert cells == [("eyepacs", 1.0, 200, "cnn", "mnist", 1.0, 200)]
+        assert cells == [("eyepacs", 1.0, 200, "cnn", "sgd-m0.9", "mnist", 1.0, 200)]
+
+    def test_a_curve_regime_from_the_other_arm_never_overlays(self):
+        # Syntheses are scoped to one arm (ADR 0016), so the m0.0 sources have no
+        # equation counterpart. Without the arm in the join key they would silently
+        # overlay the m0.9 synthesis — comparing a curve against a closed form
+        # distilled from a different arm's shapes entirely.
+        producers = {
+            "curve": _rows("wandb_m00", [(0, 0.7)], producer="curve", arm="sgd-m0.0"),
+            "equation": _rows(
+                "eyepacs_eps1_T200_cnn_cat1", [(0, 0.8)], producer="equation", arm="sgd-m0.9"
+            ),
+        }
+
+        assert overlay_cells(producers) == []
 
     def test_a_regime_only_one_producer_has_is_not_drawn(self):
         curve = _rows("wandb_run_1", [(0, 0.7)], producer="curve")
@@ -151,7 +250,7 @@ class TestOverlayStats:
             ],
             ignore_index=True,
         )
-        cell = ("eyepacs", 1.0, 200, "cnn", "mnist", 1.0, 200)
+        cell = ("eyepacs", 1.0, 200, "cnn", "sgd-m0.9", "mnist", 1.0, 200)
 
         mean, spread = overlay_stats(assembled, cell)
 
@@ -170,6 +269,8 @@ class TestOverlayStats:
             ignore_index=True,
         )
 
-        mean, _ = overlay_stats(assembled, ("eyepacs", 1.0, 200, "cnn", "mnist", 1.0, 200))
+        mean, _ = overlay_stats(
+            assembled, ("eyepacs", 1.0, 200, "cnn", "sgd-m0.9", "mnist", 1.0, 200)
+        )
 
         assert mean == pytest.approx(0.4)

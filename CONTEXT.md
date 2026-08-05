@@ -227,16 +227,25 @@ _Avoid_: using "regime" for the three Constant / DynamicDPSGD / StatefulMedianGr
 schedules — those are **transfer references**.
 
 **Transfer matrix**:
-The full descriptive source-policy × target-dataset grid of matched-privacy
-downstream accuracies. Read off, not selected from; no per-target winner is picked
-by target accuracy. **Every** source policy is transferred — there is no best-of-regime
+The full descriptive source × target-dataset grid of matched-privacy downstream
+accuracies. Read off, not selected from; no per-target winner is picked by target
+accuracy. **Every** source policy in scope is transferred — there is no best-of-regime
 selection step (selecting on a source accuracy number would bias toward source-overfit
-shapes that transfer worst). Rows are grouped by regime, and each regime reports its
-**generalization consistency**.
+shapes that transfer worst). Its **row unit is the source regime-arm**, not the source
+policy: a cell pools the regime's policies so its ± is that regime's **generalization
+consistency**. `transfer_plot.policy_matrix` renders the same cells split by policy,
+where the ± is evaluation noise instead — a diagnostic companion, not the matrix.
+
+A native reference has no regime (its source provenance mirrors its target), so its
+row unit is the reference itself; `source_label` carries whichever applies.
+
+Which policies are *in scope* is ADR 0018: the T-sweep arch axis, both arms, regime-arms
+carrying ≥4 seeds, capped at the four lowest seed indices. The cap is a subsample —
+independent of every accuracy number — not the selection ADR 0008 prohibits.
 _Avoid_: transfer grid, results table.
 
 **Generalization consistency**:
-The spread of transfer accuracies across the *source policies* of one regime at one
+The spread of transfer accuracies across the *source policies* of one regime-arm at one
 target — how reproducibly that regime's learned shape transfers. Distinct from
 **evaluation noise**, the spread across the evaluation reps of a *single* policy,
 which measures only DP-SGD's own run-to-run variance. Both are standard deviations
@@ -268,6 +277,21 @@ target at the target budget. They are distinct and must not be conflated:
 - **StatefulMedianGradient** (Andrew et al., NeurIPS 2021) — a *runtime-adaptive*
   schedule that drives C toward the quantile target using the **within-clip fraction**,
   and sets σ = C/μ_grad.
+
+**Candidate**:
+One point in a transfer reference's 20-point random hyperparameter search, and the
+unit its sweep is split into for SLURM (ADR 0019): each candidate is scored on its own
+task at `SWEEP_SCORING_ITERATIONS` inner trainings, writing a **candidate record** —
+an intermediate artifact under `<cache_root>/transfer_candidates/`, deliberately
+outside the `transfer/` tree so it can never be read as a matrix cell. A **selector**
+task then picks the winner by mean scored accuracy and runs the final evaluation, and
+its output is the only `producer="reference"` cell.
+
+Candidate enumeration is a pure function of (reference, key, index), so a candidate
+scored in isolation is the one the monolithic sweep would have evaluated at that
+position. Scoring and final evaluation use disjoint keys, so a winner's reported
+number is never the draw that selected it.
+_Avoid_: trial, sweep run, sample (reserve "sample" for minibatch sampling).
 
 ### Adaptive clipping
 

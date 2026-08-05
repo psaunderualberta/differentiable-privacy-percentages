@@ -53,8 +53,10 @@ os.environ["PROJECT_SOURCE_ROOT"] = os.path.abspath(
 
 sys.path.insert(0, os.environ["PROJECT_SOURCE_ROOT"])
 from transfer_launch import (
+    STAGE_PREREQUISITE_STAGE,
     Job,
     ProducerArgs,
+    SourceScope,
     absolute_path,
     condition_grid,
     expand_targets,
@@ -80,11 +82,18 @@ class TransferLocalConfig:
     eval_dir: str = ""
     """SR eval dir (equations.csv + category_map.json). Required for the equation stage."""
 
+    source_arch: str = SourceScope.arch
+    """Curve sources are scoped to this arch axis (ADR 0018); empty keeps every arch."""
+    source_min_seeds: int = SourceScope.min_seeds
+    """Drop a source regime-arm carrying fewer seeds than this; 0 disables the floor."""
+    source_max_seeds: int = SourceScope.max_seeds
+    """Transfer at most this many seeds per regime-arm, lowest index first; 0 disables."""
+
     stages: tuple[str, ...] = ("curve", "equation", "reference")
     with_plot: bool = False
     """Also run the assembler once every producer job has succeeded."""
 
-    num_reps: int = 8
+    num_reps: int = 3
     seed: int = 0
     batch_size: int = 250
 
@@ -212,16 +221,30 @@ def main(conf: TransferLocalConfig) -> None:
     )
     args = conf.producer_args
     grid = condition_grid(Path(args.eval_dir) / "category_map.json") if args.eval_dir else set()
-    jobs = plan_jobs(conf.stages, targets, args, grid)
+    jobs = plan_jobs(
+        conf.stages,
+        targets,
+        args,
+        grid,
+        SourceScope(
+            arch=conf.source_arch,
+            min_seeds=conf.source_min_seeds,
+            max_seeds=conf.source_max_seeds,
+        ),
+    )
 
-    # Stage order is preserved but stages are *not* barriered: the three producers
-    # are independent (they share only the preflight), so holding GPUs idle at a
-    # stage boundary would buy nothing.
-    tasks = [
-        (stage, index, job)
-        for stage in conf.stages
-        for index, job in enumerate(jobs.get(stage, []))
+    # Stages are *not* barriered against each other: the producers are independent
+    # (they share only the preflight), so holding GPUs idle at a stage boundary would
+    # buy nothing. The one exception is the reference selector, which must see every
+    # candidate's score before it picks a winner (ADR 0019) — so it runs in a second
+    # wave, the local equivalent of the SLURM `afterok` edge.
+    planned = [stage for stage in jobs if jobs[stage]]
+    deferred = {stage for stage in planned if jobs.get(STAGE_PREREQUISITE_STAGE.get(stage, ""))}
+    waves = [
+        [(s, i, job) for s in planned if s not in deferred for i, job in enumerate(jobs[s])],
+        [(s, i, job) for s in planned if s in deferred for i, job in enumerate(jobs[s])],
     ]
+    tasks = [task for wave in waves for task in wave]
     if not tasks:
         raise SystemExit("nothing to do: every requested cell already exists")
 
@@ -250,8 +273,16 @@ def main(conf: TransferLocalConfig) -> None:
             raise SystemExit(f"preflight failed (exit {code}); see {logdir / 'preflight.log'}")
         print("  preflight ok")
 
-    print(f"\n=== producers ({len(tasks)} tasks) ===")
-    failures = run_pool(tasks, conf.gpu_ids, conf.workers_per_gpu, logdir)
+    failures = []
+    for wave_number, wave in enumerate(wave for wave in waves if wave):
+        label = "producers" if wave_number == 0 else "producers (gated on the wave above)"
+        print(f"\n=== {label} ({len(wave)} tasks) ===")
+        failures += run_pool(wave, conf.gpu_ids, conf.workers_per_gpu, logdir)
+        if failures and wave_number == 0:
+            # A selector run against a partially-failed candidate wave would pick a
+            # winner from an incomplete score set and report it as tuned.
+            print(f"\n{len(failures)} task(s) failed in the first wave; not running the rest")
+            break
 
     if failures:
         print(f"\n{len(failures)} task(s) failed:")

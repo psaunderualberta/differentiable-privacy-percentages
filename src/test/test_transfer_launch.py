@@ -19,6 +19,7 @@ from transfer_launch import (
     Target,
     absolute_path,
     array_sbatch,
+    candidate_jobs,
     cell_filename,
     check_on_grid,
     condition_grid,
@@ -30,6 +31,7 @@ from transfer_launch import (
     manifest_text,
     preflight_command,
     reference_jobs,
+    scope_regimes,
     serial_sbatch,
     source_regimes,
 )
@@ -78,23 +80,25 @@ class TestCellFilenameMatchesTheProducers:
         assert written.name == predicted
 
 
+def _run(run_id, dataset="mnist", eps=1.0, T=200, arch="cnn", optimizer="sgd-m0.9", seed=0):
+    """One run's regime-arm identity, as schedules.parquet records it."""
+    return {
+        "run_id": run_id,
+        "dataset": dataset,
+        "eps": eps,
+        "T": T,
+        "arch_label": arch,
+        "optimizer": optimizer,
+        "seed": seed,
+    }
+
+
 def _schedules_parquet(tmp_path, runs):
-    """A minimal schedules.parquet: (run_id, regime) pairs, 2 inner steps each."""
+    """A minimal schedules.parquet: one run per :func:`_run` dict, 2 inner steps each."""
     import pandas as pd
 
     rows = [
-        {
-            "run_id": run_id,
-            "inner_step": step,
-            "dataset": dataset,
-            "eps": eps,
-            "T": T,
-            "arch_label": arch,
-            "sigma": 1.0,
-            "clip": 1.0,
-        }
-        for run_id, dataset, eps, T, arch in runs
-        for step in (0, 1)
+        {**run, "inner_step": step, "sigma": 1.0, "clip": 1.0} for run in runs for step in (0, 1)
     ]
     path = tmp_path / "schedules.parquet"
     pd.DataFrame(rows).to_parquet(path, index=False)
@@ -111,9 +115,9 @@ class TestSourceRegimeEnumeration:
         parquet = _schedules_parquet(
             tmp_path,
             [
-                ("runA", "mnist", 1.0, 200, "cnn"),
-                ("runB", "mnist", 1.0, 200, "cnn"),
-                ("runC", "mnist", 1.0, 200, "mlp"),
+                _run("runA", arch="cnn"),
+                _run("runB", arch="cnn"),
+                _run("runC", arch="mlp"),
             ],
         )
 
@@ -128,6 +132,138 @@ class TestSourceRegimeEnumeration:
         assert by_arch["mlp"].dataset == "mnist"
         assert by_arch["mlp"].eps == 1.0
         assert by_arch["mlp"].T == 200
+
+    def test_the_two_momentum_arms_are_separate_regimes(self, tmp_path):
+        # `_REGIME_COLUMNS` omitted `optimizer`, so ADR 0011's move of the arm onto the
+        # run silently turned a "16-seed regime" into eight m0.9 runs plus eight m0.0
+        # ones — whose median σ differs by 8.5× (ADR 0016). Pooling them would report
+        # arm separation as generalization consistency.
+        parquet = _schedules_parquet(
+            tmp_path,
+            [
+                _run("m09a", optimizer="sgd-m0.9"),
+                _run("m09b", optimizer="sgd-m0.9"),
+                _run("m00a", optimizer="sgd-m0.0"),
+            ],
+        )
+
+        regimes = source_regimes(parquet)
+
+        by_arm = {r.arm: r for r in regimes}
+        assert set(by_arm) == {"sgd-m0.9", "sgd-m0.0"}
+        assert by_arm["sgd-m0.9"].run_ids == ("m09a", "m09b")
+        assert by_arm["sgd-m0.0"].run_ids == ("m00a",)
+
+
+def _regime(arch="cnn-16x32-head32", arm="sgd-m0.9", seeds=(0, 1, 2, 3)):
+    return SourceRegime(
+        dataset="mnist",
+        eps=1.0,
+        T=200,
+        arch=arch,
+        arm=arm,
+        run_ids=tuple(f"{arm}-{arch}-s{s}" for s in seeds),
+        seeds=tuple(seeds),
+    )
+
+
+class TestSourceScope:
+    """ADR 0018 scopes curve transfer to the T-sweep axis at four seeds per
+    regime-arm: every source policy is still transferred (read off), but from a
+    smaller pool, because the unscoped 851 policies × 12 columns is ~21,000
+    GPU-hours."""
+
+    def test_regimes_off_the_scoped_arch_axis_are_dropped(self):
+        # The arch axis exists only at the single point (eps=10, T=5000) and is out
+        # of scope for every synthesis (ADR 0016), so those policies could never gain
+        # an equation counterpart or appear in the overlay.
+        regimes = [_regime(arch="cnn-16x32-head32"), _regime(arch="mlp-512")]
+
+        scoped = scope_regimes(regimes, arch="cnn-16x32-head32")
+
+        assert [r.arch for r in scoped] == ["cnn-16x32-head32"]
+
+    def test_both_momentum_arms_survive_the_scope(self):
+        # Scoping to sgd-m0.9 alone would be cheaper, but it discards a real
+        # experimental contrast (ADR 0018) — the momentum arm is a row dimension.
+        regimes = [_regime(arm="sgd-m0.9"), _regime(arm="sgd-m0.0")]
+
+        scoped = scope_regimes(regimes, arch="cnn-16x32-head32", min_seeds=4, max_seeds=4)
+
+        assert sorted(r.arm for r in scoped) == ["sgd-m0.0", "sgd-m0.9"]
+
+    def test_a_regime_arm_below_the_seed_floor_is_dropped_whole(self):
+        # The floor is per *arm*: the m0.0 arm is unevenly populated, and admitting a
+        # regime-arm at n=2 would render a two-sample range identically to a
+        # four-sample spread in the same heatmap.
+        regimes = [
+            _regime(arm="sgd-m0.9", seeds=(0, 1, 2, 3)),
+            _regime(arm="sgd-m0.0", seeds=(0, 1)),
+        ]
+
+        scoped = scope_regimes(regimes, min_seeds=4)
+
+        assert [r.arm for r in scoped] == ["sgd-m0.9"]
+
+    def test_a_full_regime_arm_is_capped_at_its_lowest_seed_indices(self):
+        # A subsample, not a selection (ADR 0008): the seed index is fixed before
+        # training, so capping on it cannot bias toward source-overfit shapes the way
+        # picking a per-regime representative by accuracy would.
+        regime = _regime(arm="sgd-m0.9", seeds=(0, 1, 2, 3, 4, 5, 6, 7))
+
+        (scoped,) = scope_regimes([regime], min_seeds=4, max_seeds=4)
+
+        assert scoped.seeds == (0, 1, 2, 3)
+        assert scoped.run_ids == regime.run_ids[:4]
+
+    def test_the_curve_stage_launches_only_the_scoped_policies(self, tmp_path):
+        # The scope has to reach the manifest, not just exist as a function: this is
+        # what decides whether 1,488 tasks or 5,000 get submitted.
+        from transfer_launch import SourceScope, plan_jobs
+
+        parquet = _schedules_parquet(
+            tmp_path,
+            [
+                _run(f"m09-s{s}", arch="cnn-16x32-head32", optimizer="sgd-m0.9", seed=s)
+                for s in range(8)
+            ]
+            + [
+                _run(f"m00-s{s}", arch="cnn-16x32-head32", optimizer="sgd-m0.0", seed=s)
+                for s in range(2)
+            ]
+            + [_run("ladder", arch="mlp-512", optimizer="sgd-m0.9", seed=0)],
+        )
+        args = ProducerArgs(cache_root=str(tmp_path), schedules_parquet=str(parquet))
+
+        jobs = plan_jobs(
+            ("curve",),
+            [Target("eyepacs", eps=8.0, T=5000)],
+            args,
+            scope=SourceScope(arch="cnn-16x32-head32", min_seeds=4, max_seeds=4),
+        )
+
+        # 4 seeds of the m0.9 arm only: the m0.0 arm is below the floor here and the
+        # mlp ladder run is off the scoped axis.
+        assert len(jobs["curve"]) == 4
+        assert all("m09-s" in job.cells[0] for job in jobs["curve"])
+
+    def test_capping_is_by_seed_index_not_run_id_order(self):
+        # run_ids are W&B ids, so their sort order carries no experimental meaning;
+        # taking "the first four" off that order would be an arbitrary draw.
+        regime = SourceRegime(
+            dataset="mnist",
+            eps=1.0,
+            T=200,
+            arch="cnn",
+            arm="sgd-m0.9",
+            run_ids=("aaa", "bbb", "ccc", "ddd"),
+            seeds=(5, 3, 1, 0),
+        )
+
+        (scoped,) = scope_regimes([regime], max_seeds=2)
+
+        assert scoped.seeds == (0, 1)
+        assert scoped.run_ids == ("ddd", "ccc")
 
 
 class TestOnGridValidation:
@@ -220,8 +356,8 @@ class TestCurveJobs:
         from transfer_curve import CurveCellConfig
 
         regimes = [
-            SourceRegime("mnist", 1.0, 200, "cnn", ("runA", "runB")),
-            SourceRegime("mnist", 8.0, 200, "mlp", ("runC",)),
+            SourceRegime("mnist", 1.0, 200, "cnn", "sgd-m0.9", ("runA", "runB")),
+            SourceRegime("mnist", 8.0, 200, "mlp", "sgd-m0.9", ("runC",)),
         ]
         targets = [Target("eyepacs", eps=4.0, T=5000), Target("chexpert", eps=4.0, T=5000)]
 
@@ -238,7 +374,7 @@ class TestCurveJobs:
         assert conf.cache_root == "/c"
 
     def test_a_job_owns_exactly_the_cell_its_policy_writes(self):
-        regimes = [SourceRegime("mnist", 1.0, 200, "cnn", ("runA", "runB"))]
+        regimes = [SourceRegime("mnist", 1.0, 200, "cnn", "sgd-m0.9", ("runA", "runB"))]
         targets = [Target("eyepacs", eps=4.0, T=5000)]
 
         jobs = curve_jobs(regimes, targets, ProducerArgs(cache_root="/c"))
@@ -251,7 +387,7 @@ class TestCurveJobs:
     def test_a_finished_policy_is_skipped_without_holding_back_its_regime(self, tmp_path):
         # The point of per-policy jobs: one seed timing out no longer forces its
         # regime-mates to be recomputed on the relaunch.
-        regimes = [SourceRegime("mnist", 1.0, 200, "cnn", ("runA", "runB"))]
+        regimes = [SourceRegime("mnist", 1.0, 200, "cnn", "sgd-m0.9", ("runA", "runB"))]
         targets = [Target("eyepacs", eps=4.0, T=5000)]
         done = tmp_path / "transfer" / "curve"
         done.mkdir(parents=True)
@@ -272,25 +408,42 @@ _CONDITIONS = [
 
 
 class TestEquationJobs:
-    """An equation job is one target (ε, T): it carries *every* distilled condition
-    at that budget in a single invocation (read off, not selected — ADR 0008), so
-    it owns one cell per matching condition."""
+    """An equation job is one target × one distilled condition. Every condition at
+    the target's exact (ε, T) is still transferred (read off, not selected — ADR
+    0008), but one task per *target* would loop them serially: at ~1.4h a condition,
+    two conditions leave 8 minutes of margin against a 2:55 wall."""
 
-    def test_one_job_per_target_owning_a_cell_per_matching_condition(self):
+    def test_one_job_per_target_and_matching_condition(self):
         from transfer_equation import EquationCellConfig
 
         targets = [Target("eyepacs", eps=1.0, T=200)]
 
-        (job,) = equation_jobs(_CONDITIONS, targets, ProducerArgs(cache_root="/c", eval_dir="/e"))
+        jobs = equation_jobs(_CONDITIONS, targets, ProducerArgs(cache_root="/c", eval_dir="/e"))
 
-        conf = _parse(EquationCellConfig, job)
+        # Both conditions at (1.0, 200) get their own task; the (8.0, 5000) one does not.
+        assert len(jobs) == 2
+        conf = _parse(EquationCellConfig, jobs[0])
         assert (conf.target, conf.target_eps, conf.target_T) == ("eyepacs", 1.0, 200)
         assert conf.eval_dir == "/e"
-        # Both conditions at (1.0, 200) get a cell; the (8.0, 5000) one does not.
-        assert job.cells == (
-            "transfer/equation/fashion-mnist_eps1_T200_cnn_cat1__eyepacs__eps1_T200.parquet",
-            "transfer/equation/fashion-mnist_eps1_T200_mlp_cat2__eyepacs__eps1_T200.parquet",
-        )
+        assert conf.category == 1
+        assert [job.cells for job in jobs] == [
+            ("transfer/equation/fashion-mnist_eps1_T200_cnn_cat1__eyepacs__eps1_T200.parquet",),
+            ("transfer/equation/fashion-mnist_eps1_T200_mlp_cat2__eyepacs__eps1_T200.parquet",),
+        ]
+
+    def test_a_finished_condition_is_skipped_without_holding_back_the_others(self, tmp_path):
+        # The point of per-condition tasks: one condition timing out no longer forces
+        # its target's other conditions to be recomputed on the relaunch.
+        targets = [Target("eyepacs", eps=1.0, T=200)]
+        done = tmp_path / "transfer" / "equation"
+        done.mkdir(parents=True)
+        (done / "fashion-mnist_eps1_T200_cnn_cat1__eyepacs__eps1_T200.parquet").touch()
+
+        jobs = equation_jobs(_CONDITIONS, targets, ProducerArgs(cache_root=str(tmp_path)))
+
+        assert [job.cells for job in drop_finished(jobs, tmp_path)] == [
+            ("transfer/equation/fashion-mnist_eps1_T200_mlp_cat2__eyepacs__eps1_T200.parquet",)
+        ]
 
     def test_a_target_with_no_matching_condition_produces_no_job(self):
         # Off-grid is fatal at validation time; if a caller skips that, an
@@ -301,10 +454,13 @@ class TestEquationJobs:
 
 
 class TestReferenceJobs:
-    """A reference job is one native reference × one target, so the three
-    references fan out rather than sharing one long serial job."""
+    """The reference stage is two-phase (ADR 0019): one task per (reference × target
+    × candidate) scoring the sweep, then a selector task per (reference × target)
+    that picks the winner and writes the only transfer cell. As one blocking sweep
+    it was 203 inner trainings — ~87 GPU-h against an 11:55 wall — so every task
+    would have been killed at ~13% of its work with nothing checkpointed."""
 
-    def test_one_job_per_reference_and_target(self):
+    def test_the_selector_is_the_only_job_that_writes_a_transfer_cell(self):
         from transfer_reference import ReferenceCellConfig
 
         targets = [Target("eyepacs", eps=1.0, T=200), Target("chexpert", eps=1.0, T=200)]
@@ -315,8 +471,60 @@ class TestReferenceJobs:
         conf = _parse(ReferenceCellConfig, jobs[0])
         assert conf.reference == "Constant"
         assert (conf.target, conf.target_eps, conf.target_T) == ("eyepacs", 1.0, 200)
-        # A reference job writes exactly its own regime's cell.
+        # The selector phase: no --candidate, so the producer selects and evaluates.
+        assert conf.candidate == -1
         assert jobs[0].cells == ("transfer/reference/Constant__eyepacs__eps1_T200.parquet",)
+
+    def test_one_candidate_job_per_reference_target_and_candidate(self):
+        from transfer_reference import ReferenceCellConfig
+
+        targets = [Target("eyepacs", eps=1.0, T=200)]
+
+        jobs = candidate_jobs(
+            ("Constant", "Median"), targets, ProducerArgs(cache_root="/c"), num_candidates=20
+        )
+
+        assert len(jobs) == 40
+        conf = _parse(ReferenceCellConfig, jobs[0])
+        assert (conf.reference, conf.candidate) == ("Constant", 0)
+
+    def test_a_candidate_job_owns_a_record_outside_the_transfer_tree(self):
+        # Its output is an intermediate artifact, not a matrix row: a candidate file
+        # under transfer/ would be globbed by the assembler as a producer.
+        targets = [Target("eyepacs", eps=1.0, T=200)]
+
+        jobs = candidate_jobs(("Constant",), targets, ProducerArgs(cache_root="/c"), 2)
+
+        assert [job.cells for job in jobs] == [
+            ("transfer_candidates/Constant__eyepacs__eps1_T200__cand00.json",),
+            ("transfer_candidates/Constant__eyepacs__eps1_T200__cand01.json",),
+        ]
+
+    def test_a_finished_candidate_is_skipped_independently_of_its_selector(self, tmp_path):
+        # The second resumption granularity ADR 0019 asks for: a partial reference
+        # stage resumes at candidate level rather than restarting the whole sweep.
+        targets = [Target("eyepacs", eps=1.0, T=200)]
+        args = ProducerArgs(cache_root=str(tmp_path))
+        done = tmp_path / "transfer_candidates"
+        done.mkdir(parents=True)
+        (done / "Constant__eyepacs__eps1_T200__cand00.json").touch()
+
+        jobs = candidate_jobs(("Constant",), targets, args, 3)
+        surviving = drop_finished(jobs, tmp_path)
+
+        assert [job.cells[0].rsplit("__", 1)[-1] for job in surviving] == [
+            "cand01.json",
+            "cand02.json",
+        ]
+        # The selector is still outstanding: its cell does not exist.
+        assert drop_finished(reference_jobs(("Constant",), targets, args), tmp_path)
+
+    def test_the_selector_waits_on_the_candidate_stage(self):
+        # The stage's DAG edge. Without it the selector would run against an empty
+        # score set and raise, or worse, against a partial one and pick a wrong winner.
+        from transfer_launch import STAGE_PREREQUISITE_STAGE
+
+        assert STAGE_PREREQUISITE_STAGE["reference"] == "reference-candidate"
 
 
 class TestSkipFilter:
@@ -545,6 +753,41 @@ class TestProducerPathsAreAbsolute:
         args = config_cls(cache_root="out").producer_args
 
         assert (args.schedules_parquet, args.eval_dir) == ("", "")
+
+
+class TestWalltimes:
+    """Wall clocks are a launch-time flag, not a source constant: they are calibrated
+    against measured per-task cost, and a stage whose cost moves (a longer target T, a
+    slower node) has to be adjustable without editing the launcher."""
+
+    def _config(self, **kwargs):
+        module = _load_launcher(_LAUNCHERS["slurm"])
+        return module.TransferSlurmConfig(cache_root="/c", **kwargs)
+
+    def test_an_unspecified_stage_keeps_its_default_clock(self):
+        assert self._config().walltime("curve").endswith(":00")
+
+    def test_an_override_replaces_only_that_stage(self):
+        conf = self._config(walltimes={"curve": "00-01:30:00"})
+
+        assert conf.walltime("curve") == "00-01:30:00"
+        assert conf.walltime("equation") == self._config().walltime("equation")
+
+    def test_a_typo_in_a_stage_name_fails_the_launch(self):
+        # Silently ignoring it would submit the stage on its default clock, which is
+        # exactly the clock the operator was trying to change.
+        with pytest.raises(SystemExit):
+            self._config(walltimes={"currve": "00-01:30:00"}).walltime("curve")
+
+    def test_every_producer_stage_fits_the_short_queue(self):
+        # ADR 0019 moved the reference stage into the <=3h queue where scheduling
+        # priority is best; item 6 did the same for equation. A stage that quietly
+        # regains an 11:55 clock loses that.
+        conf = self._config()
+        for stage in ("curve", "equation", "reference-candidate", "reference"):
+            days, clock = conf.walltime(stage).split("-")
+            hours = int(days) * 24 + int(clock.split(":")[0])
+            assert hours <= 3, stage
 
 
 class TestPreflightCommand:

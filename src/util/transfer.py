@@ -8,6 +8,7 @@ budget before it is evaluated.
 """
 
 import dataclasses
+import json
 import os
 import tempfile
 from collections.abc import Iterable
@@ -37,6 +38,15 @@ class SourcePolicy:
     T: int
     p: float
     arch: str
+    arm: str = ""
+    """Which momentum arm the policy was learned in (``sgd-m0.9`` / ``sgd-m0.0``).
+
+    Part of the source regime's identity (ADR 0018): both arms are transferred and
+    their shapes differ enough that pooling them would report arm separation as
+    generalization consistency. ``""`` means "no arm" — a native reference is not
+    learned in one at all — and is an empty *string* rather than NaN because the
+    arm is a grouping/join key, and NaN never compares equal to itself.
+    """
 
 
 @dataclasses.dataclass(frozen=True)
@@ -60,6 +70,7 @@ _TRANSFER_COLUMNS = [
     "source_T",
     "source_p",
     "source_arch",
+    "source_arm",
     "target",
     "target_eps",
     "target_delta",
@@ -92,6 +103,7 @@ def transfer_rows(
             "source_T": source.T,
             "source_p": source.p,
             "source_arch": source.arch,
+            "source_arm": source.arm,
             "target": target.name,
             "target_eps": target.eps,
             "target_delta": target.delta,
@@ -146,6 +158,82 @@ def write_transfer_cell(df: pd.DataFrame, cache_root: Path | str) -> Path:
         tmp_path.unlink(missing_ok=True)
         raise
     return out_path
+
+
+def _candidate_dir(cache_root: Path | str) -> Path:
+    from transfer_launch import CANDIDATE_DIR
+
+    return Path(cache_root) / CANDIDATE_DIR
+
+
+def write_candidate_record(
+    reference: str,
+    target: "TargetSpec",
+    candidate: int,
+    mean_accuracy: float,
+    n: int,
+    cache_root: Path | str,
+) -> Path:
+    """Record one reference-sweep candidate's score (ADR 0019).
+
+    An *intermediate* artifact, not a transfer cell: it lives outside
+    ``<cache_root>/transfer/`` so the assembler cannot mistake nineteen
+    deliberately under-evaluated candidates for nineteen extra reference columns.
+    Only :func:`write_transfer_cell` produces matrix rows.
+
+    Atomic, for the same reason cell writes are: an array task killed at the wall
+    clock must not leave a half-written score that the skip filter reads as done.
+    """
+    from transfer_launch import Target, candidate_filename
+
+    out_dir = _candidate_dir(cache_root)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / candidate_filename(
+        reference, Target(dataset=target.name, eps=target.eps, T=target.T), candidate
+    )
+    payload = {
+        "reference": reference,
+        "target": target.name,
+        "target_eps": float(target.eps),
+        "target_T": int(target.T),
+        "candidate": int(candidate),
+        "mean_accuracy": float(mean_accuracy),
+        "n": int(n),
+    }
+
+    with tempfile.NamedTemporaryFile(
+        "w", dir=out_dir, suffix=".json", delete=False, encoding="utf-8"
+    ) as tmp:
+        json.dump(payload, tmp)
+        tmp_path = Path(tmp.name)
+    try:
+        os.replace(tmp_path, out_path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    return out_path
+
+
+def read_candidate_records(
+    reference: str, target: "TargetSpec", cache_root: Path | str
+) -> list[dict]:
+    """Every scored candidate for one (reference × target), in candidate order.
+
+    The selector's input. Ordered by candidate index so the winner is a
+    deterministic function of what is on disk, whatever order the tasks finished in.
+    """
+    from transfer_launch import Target, candidate_filename
+
+    out_dir = _candidate_dir(cache_root)
+    if not out_dir.is_dir():
+        return []
+    launch_target = Target(dataset=target.name, eps=target.eps, T=target.T)
+    prefix = candidate_filename(reference, launch_target, 0).rsplit("__cand", 1)[0]
+    records = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(out_dir.glob(f"{prefix}__cand*.json"))
+    ]
+    return sorted(records, key=lambda record: record["candidate"])
 
 
 def assemble_transfer(producer: str, cache_root: Path | str) -> pd.DataFrame:

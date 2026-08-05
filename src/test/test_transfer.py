@@ -23,6 +23,7 @@ _EXPECTED_COLUMNS = [
     "source_T",
     "source_p",
     "source_arch",
+    "source_arm",
     "target",
     "target_eps",
     "target_delta",
@@ -43,6 +44,7 @@ def _source() -> SourcePolicy:
         T=100,
         p=0.01,
         arch="cnn-16x32-head32",
+        arm="sgd-m0.9",
     )
 
 
@@ -113,6 +115,15 @@ class TestSchemaAdapter:
         assert df["seed"].tolist() == [0, 1, 2]
         assert df["accuracy"].tolist() == [0.81, 0.79, 0.80]
         assert df["source_p"].tolist() == [0.01, 0.01, 0.01]
+
+    def test_the_arm_is_recorded_so_the_two_momentum_arms_stay_distinguishable(self):
+        # Both arms are sources (ADR 0018) and source_id is a W&B run id, so without
+        # this column recovering the arm off-disk means rejoining schedules.parquet —
+        # and a matrix grouped without it reports arm separation as generalization
+        # consistency.
+        df = transfer_rows("curve", _source(), _target(), [(0, 0.81, 0.42)])
+
+        assert df["source_arm"].tolist() == ["sgd-m0.9"]
 
 
 class TestCellWriteAndAssemble:

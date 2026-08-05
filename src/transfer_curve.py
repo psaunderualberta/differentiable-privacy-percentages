@@ -35,7 +35,9 @@ def load_source_policies(
     One record per source ``run_id``; the length-T sigma/clip curves are ordered by
     ``inner_step``. ``delta`` and ``p`` are source-side provenance that the parquet
     does not carry (only the target's budget matters for seating), so they default
-    to NaN.
+    to NaN. The arm comes off the ``optimizer`` column (ADR 0011); a parquet
+    predating that column yields ``""``, the same "no arm" value a native reference
+    carries.
     """
     df = pd.read_parquet(schedules_parquet)
     records: list[tuple[SourcePolicy, np.ndarray, np.ndarray]] = []
@@ -50,6 +52,7 @@ def load_source_policies(
             T=int(first["T"]),
             p=float("nan"),
             arch=str(first["arch_label"]),
+            arm=str(first["optimizer"]) if "optimizer" in group else "",
         )
         sigmas = group["sigma"].to_numpy(dtype=float)
         clips = group["clip"].to_numpy(dtype=float)
@@ -150,7 +153,7 @@ def run_curve_cell(
     target: TargetSpec,
     cache_root: Path | str,
     batch_size: int = 250,
-    num_reps: int = 8,
+    num_reps: int = 3,
     seed: int = 0,
 ) -> Path:
     """Transfer one source policy onto the target and write its per-seed cell.
@@ -198,7 +201,7 @@ class CurveCellConfig:
     """Arch label recorded on the cell rows; the arch itself is auto-derived from the dataset."""
     batch_size: int = 250
     cache_root: str = "cache"
-    num_reps: int = 8
+    num_reps: int = 3
     seed: int = 0
 
     # --- Source selection ------------------------------------------------------------

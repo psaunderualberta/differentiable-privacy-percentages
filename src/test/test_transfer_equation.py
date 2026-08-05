@@ -98,3 +98,35 @@ class TestConditionBecomesItsOwnSourceCell:
         assert src_a.run_id != src_b.run_id
         for run_id in (src_a.run_id, src_b.run_id):
             assert "/" not in run_id and " " not in run_id
+
+
+class TestSynthesisArm:
+    """A synthesis is scoped to a single arm (ADR 0016), but the *condition* is
+    (dataset, eps, T, arch) and carries no arm — so an equation cell's arm comes from
+    the synthesis that produced it, read off the eval dir's manifest. It has to be
+    there: `_OVERLAY_KEYS` includes the arm, so an equation cell tagged with the wrong
+    one would never overlay the curve cells it was distilled from."""
+
+    def _manifest(self, tmp_path, optimizers):
+        import json
+
+        (tmp_path / "manifest.json").write_text(json.dumps({"config": {"optimizers": optimizers}}))
+        return tmp_path
+
+    def test_a_single_arm_synthesis_reports_that_arm(self, tmp_path):
+        from transfer_equation import synthesis_arm
+
+        assert synthesis_arm(self._manifest(tmp_path, ["sgd-m0.9"])) == "sgd-m0.9"
+
+    def test_an_unscoped_synthesis_reports_no_arm(self, tmp_path):
+        # `optimizers: []` means the fit was not filtered by arm, so its conditions
+        # pool both — there is no single arm to claim, and "" keeps it out of the
+        # per-arm overlay rather than mislabelling it as one arm's.
+        from transfer_equation import synthesis_arm
+
+        assert synthesis_arm(self._manifest(tmp_path, [])) == ""
+
+    def test_the_arm_lands_on_the_equation_cells_source_policy(self, tmp_path):
+        condition = {"dataset": "cifar-10", "eps": 1.0, "T": 200, "arch_label": "cnn"}
+
+        assert equation_source(1, condition, arm="sgd-m0.9").arm == "sgd-m0.9"

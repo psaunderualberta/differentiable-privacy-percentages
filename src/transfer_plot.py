@@ -18,38 +18,105 @@ import tyro
 
 from util.transfer import assemble_transfer
 
-# A source×target cell is keyed by the source policy and the target regime.
-_CELL_KEYS = ["producer", "source_id", "target", "target_eps", "target_T"]
+# A matrix cell is keyed by the source REGIME-ARM and the target regime (ADR 0018) —
+# not by source_id. The regime is the row unit of analysis, so pooling its policies is
+# what makes the printed ± generalization consistency rather than evaluation noise.
+_CELL_KEYS = [
+    "producer",
+    "source_dataset",
+    "source_eps",
+    "source_T",
+    "source_arch",
+    "source_arm",
+    "source_label",
+    "target",
+    "target_eps",
+    "target_T",
+]
+
+# The per-policy view: the same cell split by source policy. Its spread is across one
+# policy's evaluation reps, which is a different quantity (CONTEXT.md).
+_POLICY_KEYS = ["producer", "source_id", "target", "target_eps", "target_T"]
 
 # The cell identity shared across producers: a curve cell and an equation cell
 # overlay iff they agree on the source REGIME and the target (ADR 0015). NOT
 # source_id — curve's is a W&B run id and equation's is a condition slug, so they can
 # never compare equal; and a distilled condition has no per-seed identity to match
 # on anyway. target_arch is excluded: ADR 0007 derives it from the target dataset, so
-# it adds nothing but a chance of spurious label mismatch.
+# it adds nothing but a chance of spurious label mismatch. source_arm IS included
+# (ADR 0018): a synthesis is scoped to one arm (ADR 0016), so the other arm's curve
+# cells have no equation counterpart and must simply not overlay — without it they
+# would be compared against a closed form distilled from different shapes entirely.
 _OVERLAY_KEYS = [
     "source_dataset",
     "source_eps",
     "source_T",
     "source_arch",
+    "source_arm",
     "target",
     "target_eps",
     "target_T",
 ]
 
 
-def transfer_matrix(assembled: pd.DataFrame) -> pd.DataFrame:
-    """Collapse per-seed transfer rows to one row per source×target cell.
-
-    Read off, not selected: every ``source_id`` is kept and each cell reports the
-    mean accuracy plus the spread (std) across its transferred seeds — the
-    generalization-consistency measure, never a selected best seed.
-    """
+def _collapse(assembled: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
+    """Mean / spread / count of ``accuracy`` over ``keys``."""
     return (
-        assembled.groupby(_CELL_KEYS, dropna=False)["accuracy"]
+        assembled.groupby(keys, dropna=False)["accuracy"]
         .agg(mean_acc="mean", spread=lambda s: float(s.std(ddof=0)), n="count")
         .reset_index()
     )
+
+
+def source_labels(assembled: pd.DataFrame) -> pd.Series:
+    """The row identity each transfer row pools into.
+
+    Curve rows pool by source **regime-arm**: the regime's seed-policies are what a
+    cell averages, so its label names the regime, not one of the run ids inside it.
+    Every other producer's ``source_id`` already *is* its row unit — a distilled
+    condition has no seeds (ADR 0015), and a native reference is a mechanism rather
+    than a regime (CONTEXT.md), so the three references must not merge just because
+    their source provenance all mirrors the same target.
+    """
+    regime = (
+        assembled["source_dataset"].astype(str)
+        + " ε="
+        + assembled["source_eps"].map(lambda e: f"{float(e):g}")
+        + " T="
+        + assembled["source_T"].map(lambda t: str(int(t)))
+        + " "
+        + assembled["source_arch"].astype(str)
+        + " "
+        + assembled["source_arm"].astype(str)
+    ).str.strip()
+    return regime.where(assembled["producer"] == "curve", assembled["source_id"].astype(str))
+
+
+def transfer_matrix(assembled: pd.DataFrame) -> pd.DataFrame:
+    """Collapse per-seed transfer rows to one row per source regime-arm × target.
+
+    Read off, not selected: every regime-arm is kept, and its cell reports the mean
+    accuracy plus the spread over **all** of its rows — every policy in the regime
+    crossed with every evaluation rep. That spread is the regime's *generalization
+    consistency* (CONTEXT.md).
+
+    Grouping on ``source_id`` instead — as this did before ADR 0018 — makes the ±
+    the spread across one policy's reps, i.e. DP-SGD's own run-to-run noise, which
+    is a different and much smaller quantity than the one the matrix claims to
+    report. That view is still available as :func:`policy_matrix`.
+    """
+    return _collapse(assembled.assign(source_label=source_labels(assembled)), _CELL_KEYS)
+
+
+def policy_matrix(assembled: pd.DataFrame) -> pd.DataFrame:
+    """Collapse per-seed transfer rows to one row per source *policy* × target.
+
+    The diagnostic companion to :func:`transfer_matrix`: same cells, split by source
+    policy, so each row's spread is that policy's **evaluation noise** rather than
+    its regime's generalization consistency. Kept distinct because CONTEXT.md
+    requires every ± to name which of the two it is.
+    """
+    return _collapse(assembled, _POLICY_KEYS)
 
 
 def nearest_source(assembled: pd.DataFrame, target_eps: float, target_T: int) -> str:
@@ -139,19 +206,34 @@ def load_producers(cache_root: Path | str) -> dict[str, pd.DataFrame]:
     return producers
 
 
-def plot_matrix(assembled: pd.DataFrame, producer: str, out_stem: Path) -> None:
+def plot_matrix(
+    assembled: pd.DataFrame,
+    producer: str,
+    out_stem: Path,
+    by_policy: bool = False,
+) -> None:
     """Descriptive source × target accuracy matrix for one producer.
 
-    Rows are source policies, columns are target regimes; each cell shows mean
-    transfer accuracy with the generalization-consistency spread beneath it. Every
-    column is annotated (in its title) with the source nearest it in (ε, T) — read
-    off, not selected.
+    Rows are source regime-arms, columns are target regimes; each cell shows mean
+    transfer accuracy with the **generalization-consistency** spread beneath it —
+    the spread across the regime's source policies (ADR 0018). Every column is
+    annotated (in its title) with the source nearest it in (ε, T) — read off, not
+    selected.
+
+    ``by_policy`` draws the diagnostic companion instead: one row per source policy,
+    whose ± is that policy's **evaluation noise**. The two are different quantities
+    and the title says which is being shown.
     """
     if assembled.empty:
         print(f"  [skip] no cells for producer={producer}")
         return
 
-    matrix = transfer_matrix(assembled)
+    if by_policy:
+        matrix = policy_matrix(assembled).rename(columns={"source_id": "source_label"})
+        spread_name = "policy evaluation noise"
+    else:
+        matrix = transfer_matrix(assembled)
+        spread_name = "regime generalization consistency"
     matrix = matrix[matrix["producer"] == producer]
     if matrix.empty:
         print(f"  [skip] no cells for producer={producer}")
@@ -163,7 +245,7 @@ def plot_matrix(assembled: pd.DataFrame, producer: str, out_stem: Path) -> None:
             for t, e, tt in zip(matrix["target"], matrix["target_eps"], matrix["target_T"])
         ]
     )
-    sources = sorted(matrix["source_id"].unique())
+    sources = sorted(matrix["source_label"].unique())
     columns = sorted(matrix["_col"].unique())
     row_of = {s: i for i, s in enumerate(sources)}
     col_of = {c: j for j, c in enumerate(columns)}
@@ -171,7 +253,7 @@ def plot_matrix(assembled: pd.DataFrame, producer: str, out_stem: Path) -> None:
     grid = np.full((len(sources), len(columns)), np.nan)
     text = np.full((len(sources), len(columns)), "", dtype=object)
     for _, r in matrix.iterrows():
-        i, j = row_of[r["source_id"]], col_of[r["_col"]]
+        i, j = row_of[r["source_label"]], col_of[r["_col"]]
         grid[i, j] = r["mean_acc"]
         text[i, j] = f"{r['mean_acc']:.3f}\n±{r['spread']:.3f}"
 
@@ -190,12 +272,12 @@ def plot_matrix(assembled: pd.DataFrame, producer: str, out_stem: Path) -> None:
     ax.set_xticklabels(col_titles, fontsize=7, rotation=30, ha="right")
     ax.set_yticks(range(len(sources)))
     ax.set_yticklabels(sources, fontsize=7)
-    ax.set_ylabel("source policy")
+    ax.set_ylabel("source policy" if by_policy else "source regime-arm")
     for i in range(len(sources)):
         for j in range(len(columns)):
             if text[i, j]:
                 ax.text(j, i, text[i, j], ha="center", va="center", fontsize=6, color="white")
-    ax.set_title(f"Transfer matrix — {producer} (mean ± seed spread)", fontsize=10)
+    ax.set_title(f"Transfer matrix — {producer} (mean ± {spread_name})", fontsize=10)
     fig.tight_layout()
     _save(fig, out_stem)
 
@@ -215,8 +297,8 @@ def plot_overlay(producers: dict[str, pd.DataFrame], out_stem: Path) -> None:
         return
 
     labels = [
-        f"{s_ds} ε={s_eps:g} T={int(s_T)} {s_arch}\n→ {_target_label(t, e, tt)}"
-        for (s_ds, s_eps, s_T, s_arch, t, e, tt) in cells
+        f"{s_ds} ε={s_eps:g} T={int(s_T)} {s_arch} {s_arm}\n→ {_target_label(t, e, tt)}"
+        for (s_ds, s_eps, s_T, s_arch, s_arm, t, e, tt) in cells
     ]
     x = np.arange(len(cells))
     curve_mu, curve_sd = zip(*(overlay_stats(producers["curve"], c) for c in cells))
@@ -267,6 +349,9 @@ def main(conf: PlotConfig) -> None:
         print(f"\n=== producer: {producer} ===")
         plot_matrix(assembled, producer, out_root / f"matrix_{producer}")
         transfer_matrix(assembled).to_csv(out_root / f"matrix_{producer}.csv", index=False)
+        # The per-policy companion: same cells, but its ± is evaluation noise.
+        plot_matrix(assembled, producer, out_root / f"matrix_{producer}_by_policy", by_policy=True)
+        policy_matrix(assembled).to_csv(out_root / f"matrix_{producer}_by_policy.csv", index=False)
 
     print("\n=== overlay ===")
     plot_overlay(producers, out_root / "curve_vs_equation")

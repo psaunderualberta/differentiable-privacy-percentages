@@ -68,50 +68,154 @@ def cell_filename(source_id: str, target: Target) -> str:
     return f"{source_id}__{target.dataset}__eps{target.eps:g}_T{int(target.T)}.parquet"
 
 
+# Where a reference sweep's per-candidate scores live. Deliberately a *sibling* of
+# `transfer/`, not a subdirectory of it: `transfer_plot.load_producers` treats every
+# subdirectory of `transfer/` as a producer, so a candidate directory nested there
+# would surface 19 under-evaluated schedules as extra matrix rows (ADR 0019).
+CANDIDATE_DIR = "transfer_candidates"
+
+NUM_SWEEP_CANDIDATES = 20
+"""Candidates in a reference's random search. Mirrors ``util.baselines`` so the
+launcher can size the candidate array without importing jax (see this module's
+docstring); the producer validates the index it is handed against the real sweep."""
+
+# The reference stage is the DAG's only two-phase producer: its selector cannot run
+# until every candidate has scored, or it would pick a winner from a partial — or
+# empty — score set. Consulted by both launchers when wiring `afterok`.
+STAGE_PREREQUISITE_STAGE = {"reference": "reference-candidate"}
+
+
+def candidate_filename(reference: str, target: Target, candidate: int) -> str:
+    """The file one (reference × target × candidate) score is written to.
+
+    The launcher's skip filter tests for exactly this path, which is what gives the
+    reference stage its second resumption granularity: a finished candidate is
+    skipped independently of its selector.
+    """
+    return (
+        f"{reference}__{target.dataset}__eps{target.eps:g}_T{int(target.T)}"
+        f"__cand{int(candidate):02d}.json"
+    )
+
+
 # ---------------------------------------------------------------------------
 # What there is to transfer: source regimes (curve) and conditions (equation)
 # ---------------------------------------------------------------------------
 
-# The schedules.parquet columns that identify a source regime (CONTEXT.md).
-_REGIME_COLUMNS = ["dataset", "eps", "T", "arch_label"]
+# The schedules.parquet columns that identify a source regime (CONTEXT.md). ADR 0018
+# adds `optimizer`: the arm is part of a source regime's identity, and omitting it made
+# a "16-seed regime" eight sgd-m0.9 runs pooled with eight sgd-m0.0 ones.
+_REGIME_COLUMNS = ["dataset", "eps", "T", "arch_label", "optimizer"]
 
 
 @dataclasses.dataclass(frozen=True, order=True)
 class SourceRegime:
-    """One source regime and the seed-policies learned under it.
+    """One source regime-arm and the seed-policies learned under it.
 
-    The unit of a curve-transfer job: ADR 0008 transfers *every* policy in the
-    regime (read off, not selected) and reports their spread as that regime's
-    generalization consistency, so they belong to the same job.
+    The unit of *analysis* for curve transfer: ADR 0008 transfers every policy in
+    the regime (read off, not selected) and reports their spread as that regime's
+    generalization consistency. Scheduling is per policy (see :func:`curve_jobs`).
     """
 
     dataset: str
     eps: float
     T: int
     arch: str
+    arm: str
     run_ids: tuple[str, ...]
+    seeds: tuple[int, ...] = ()
+    """The seed index of each entry of ``run_ids``, positionally aligned.
+
+    Carried so :func:`scope_regimes` can apply ADR 0018's seed floor and cap on the
+    *seed index* rather than on run-id order, which is a W&B artefact.
+    """
 
 
 def source_regimes(schedules_parquet) -> list[SourceRegime]:
-    """Group ``schedules.parquet``'s runs into the source regimes to transfer.
+    """Group ``schedules.parquet``'s runs into the source regime-arms to transfer.
 
     Sorted by regime, with each regime's ``run_ids`` sorted, so the curve
     manifest's line order is stable across relaunches.
     """
     import pandas as pd
 
-    df = pd.read_parquet(schedules_parquet, columns=[*_REGIME_COLUMNS, "run_id"])
+    df = pd.read_parquet(schedules_parquet, columns=[*_REGIME_COLUMNS, "run_id", "seed"])
     keyed = df.drop_duplicates(subset=["run_id"]).groupby(_REGIME_COLUMNS, sort=True)
-    return sorted(
-        SourceRegime(
-            dataset=str(dataset),
-            eps=float(eps),
-            T=int(T),
-            arch=str(arch),
-            run_ids=tuple(sorted(str(r) for r in group["run_id"])),
+    regimes = []
+    for (dataset, eps, T, arch, optimizer), group in keyed:
+        ordered = sorted((str(r), int(s)) for r, s in zip(group["run_id"], group["seed"]))
+        regimes.append(
+            SourceRegime(
+                dataset=str(dataset),
+                eps=float(eps),
+                T=int(T),
+                arch=str(arch),
+                arm=str(optimizer),
+                run_ids=tuple(run_id for run_id, _ in ordered),
+                seeds=tuple(seed for _, seed in ordered),
+            )
         )
-        for (dataset, eps, T, arch), group in keyed
-    )
+    return sorted(regimes)
+
+
+@dataclasses.dataclass(frozen=True)
+class SourceScope:
+    """How much of the source sweep curve transfer runs (ADR 0018).
+
+    Defaults are FirSweep's: the T-sweep axis, both arms, four seeds per regime-arm.
+    """
+
+    arch: str = "cnn-16x32-head32"
+    """Keep only this arch axis; empty keeps every arch."""
+    min_seeds: int = 4
+    """Drop a regime-arm carrying fewer seeds than this; 0 disables the floor."""
+    max_seeds: int = 4
+    """Keep at most this many seeds per regime-arm, lowest index first; 0 disables."""
+
+
+def scope_regimes(
+    regimes: list[SourceRegime],
+    arch: str = "",
+    min_seeds: int = 0,
+    max_seeds: int = 0,
+) -> list[SourceRegime]:
+    """Narrow the source regime-arms curve transfer will run (ADR 0018).
+
+    ADR 0008 requires the matrix be *read off*, never selected — and every filter
+    here is independent of any accuracy number, so it subsamples the pool without
+    biasing it:
+
+    * ``arch`` keeps only the scoped axis. The arch axis exists at a single (ε, T)
+      point and is out of scope for every synthesis (ADR 0016), so its policies
+      could never gain an equation counterpart.
+    * ``min_seeds`` is a floor applied **within an arm**. A regime-arm below it is
+      dropped whole rather than admitted with a smaller n: its ± would render
+      identically to a full one in the same heatmap while being a range rather than
+      a consistency measure.
+    * ``max_seeds`` caps the survivors at their **lowest seed indices**. The seed
+      index is assigned before training and is independent of every accuracy
+      number, so this is a subsample, not the best-of-regime selection ADR 0008
+      prohibits.
+
+    A zero/empty argument disables that filter.
+    """
+    scoped = []
+    for regime in regimes:
+        if arch and regime.arch != arch:
+            continue
+        if len(regime.run_ids) < min_seeds:
+            continue
+        kept = sorted(zip(regime.seeds, regime.run_ids))
+        if max_seeds:
+            kept = kept[:max_seeds]
+        scoped.append(
+            dataclasses.replace(
+                regime,
+                run_ids=tuple(run_id for _, run_id in kept),
+                seeds=tuple(seed for seed, _ in kept),
+            )
+        )
+    return scoped
 
 
 def check_on_grid(targets: list[Target], grid: set, stage: str) -> list[Target]:
@@ -214,7 +318,10 @@ class ProducerArgs:
     cache_root: str
     schedules_parquet: str = ""
     eval_dir: str = ""
-    num_reps: int = 8
+    num_reps: int = 3
+    """Evaluation reps per cell. 3, not 8 (ADR 0018): a cell's ± is now the spread
+    across its regime's four source policies, so the reps only have to stabilise a
+    cell mean rather than carry the consistency estimate themselves."""
     seed: int = 0
     batch_size: int = 250
 
@@ -291,43 +398,83 @@ def curve_jobs(regimes: list[SourceRegime], targets: list[Target], args: Produce
 
 
 def equation_jobs(category_map, targets: list[Target], args: ProducerArgs) -> list[Job]:
-    """One equation job per target budget, covering every condition trained there.
+    """One equation job per target × distilled condition.
 
     ADR 0008 transfers every condition at the target's exact ``(eps, T)`` — read
-    off, not selected — and the producer already loops them internally, so one
-    invocation per target is the natural unit. A target with no matching condition
-    yields no job at all: off-grid is fatal at validation time, and an array task
-    that provably cannot write a cell should never be submitted.
+    off, not selected — but they are not the unit of *scheduling*. The producer
+    walks its conditions serially, so a target-sized task costs (conditions × one
+    evaluation): at roughly 1.4h a condition, the two conditions of a FirSweep target
+    leave eight minutes of margin against a 2:55 wall clock. One condition per task
+    bounds the cost at a single evaluation and, since a task then owns exactly one
+    cell, lets :func:`drop_finished` resume at cell granularity.
+
+    A target with no matching condition yields no job at all: off-grid is fatal at
+    validation time, and an array task that provably cannot write a cell should never
+    be submitted.
     """
-    jobs = []
-    for target in targets:
-        conditions = conditions_at(category_map, target.eps, target.T)
-        if not conditions:
-            continue
-        source_ids = [condition_source_id(cat, cond) for cat, cond in conditions]
-        jobs.append(
-            Job(
-                stage="equation",
-                args=(
-                    "uv run --no-sync transfer_equation.py"
-                    f" --eval_dir {shlex.quote(args.eval_dir)}"
-                    f" {_target_flags(target)}"
-                    f" {args.shared_flags()}"
-                ),
-                cells=_cells("equation", source_ids, target),
-            )
+    return [
+        Job(
+            stage="equation",
+            args=(
+                "uv run --no-sync transfer_equation.py"
+                f" --eval_dir {shlex.quote(args.eval_dir)}"
+                f" --category {category}"
+                f" {_target_flags(target)}"
+                f" {args.shared_flags()}"
+            ),
+            cells=_cells("equation", [condition_source_id(category, condition)], target),
         )
-    return jobs
+        for target in targets
+        for category, condition in conditions_at(category_map, target.eps, target.T)
+    ]
+
+
+def candidate_jobs(
+    references: tuple[str, ...],
+    targets: list[Target],
+    args: ProducerArgs,
+    num_candidates: int = NUM_SWEEP_CANDIDATES,
+) -> list[Job]:
+    """One scoring job per native reference × target × sweep candidate (ADR 0019).
+
+    The reference stage's first phase. A reference's search is 20 candidates and, run
+    as one blocking sweep, ~87 GPU-hours per target — against an 11:55 wall, and with
+    no producer-side checkpointing, every task would have died at ~13% of its work
+    having saved nothing. One task per candidate bounds a task at ~1.3h without
+    shrinking the search: total compute is unchanged, only its packaging.
+
+    A candidate task owns its score record, not a transfer cell, so :func:`drop_finished`
+    resumes a partial reference stage at candidate granularity.
+    """
+    return [
+        Job(
+            stage="reference-candidate",
+            args=(
+                "uv run --no-sync transfer_reference.py"
+                f" --reference {shlex.quote(reference)}"
+                f" --candidate {candidate}"
+                f" {_target_flags(target)}"
+                f" {args.shared_flags()}"
+            ),
+            cells=(f"{CANDIDATE_DIR}/{candidate_filename(reference, target, candidate)}",),
+        )
+        for reference in references
+        for target in targets
+        for candidate in range(num_candidates)
+    ]
 
 
 def reference_jobs(
     references: tuple[str, ...], targets: list[Target], args: ProducerArgs
 ) -> list[Job]:
-    """One reference job per native reference × target.
+    """One selector job per native reference × target — the stage's second phase.
 
-    The three references are swept independently rather than in one invocation so
-    they fan out across the cluster: a reference sweep is the longest-running stage,
-    and sharing a job would serialise three of them behind one wall clock.
+    Reads every candidate's score, picks the winner and runs the final evaluation.
+    This is the only reference job that writes a ``producer="reference"`` cell; the
+    candidate records it consumes are intermediate and must never reach the assembler.
+
+    The three references are selected independently rather than in one invocation so
+    they fan out across the cluster.
     """
     return [
         Job(
@@ -366,6 +513,7 @@ def plan_jobs(
     targets: list[Target],
     args: ProducerArgs,
     grid: set = frozenset(),
+    scope: SourceScope | None = None,
 ) -> dict[str, list[Job]]:
     """The surviving jobs for each requested stage, after validation and skipping.
 
@@ -377,10 +525,34 @@ def plan_jobs(
     jobs: dict[str, list[Job]] = {}
     for stage in stages:
         check_on_grid(targets, set(grid), stage)
+        if stage == "reference":
+            # Two-phase (ADR 0019): asking for "reference" plans both its candidate
+            # array and its selector array, inserted in dependency order so a launcher
+            # that iterates the result submits the candidates first.
+            for phase, built_phase in (
+                ("reference-candidate", candidate_jobs(REFERENCES, targets, args)),
+                ("reference", reference_jobs(REFERENCES, targets, args)),
+            ):
+                surviving_phase = drop_finished(built_phase, args.cache_root)
+                skipped_phase = len(built_phase) - len(surviving_phase)
+                print(
+                    f"  {phase}: {len(surviving_phase)} task(s) to run "
+                    f"({skipped_phase} already done)"
+                )
+                jobs[phase] = surviving_phase
+            continue
         if stage == "curve":
             if not args.schedules_parquet:
                 raise SystemExit("--schedules_parquet is required for the curve stage")
-            built = curve_jobs(source_regimes(args.schedules_parquet), targets, args)
+            regimes = source_regimes(args.schedules_parquet)
+            scoped = scope or SourceScope()
+            regimes = scope_regimes(
+                regimes,
+                arch=scoped.arch,
+                min_seeds=scoped.min_seeds,
+                max_seeds=scoped.max_seeds,
+            )
+            built = curve_jobs(regimes, targets, args)
         elif stage == "equation":
             if not args.eval_dir:
                 raise SystemExit("--eval_dir is required for the equation stage")
@@ -388,8 +560,6 @@ def plan_jobs(
 
             category_map = load_category_map(pathlib.Path(args.eval_dir) / "category_map.json")
             built = equation_jobs(category_map, targets, args)
-        elif stage == "reference":
-            built = reference_jobs(REFERENCES, targets, args)
         else:
             raise SystemExit(f"unknown stage {stage!r}")
 

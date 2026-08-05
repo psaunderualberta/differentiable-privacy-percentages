@@ -25,14 +25,34 @@ from transfer_launch import condition_source_id
 from util.transfer import SourcePolicy, TargetSpec
 
 
-def equation_source(category: int, condition: dict) -> SourcePolicy:
+def synthesis_arm(eval_dir: Path | str) -> str:
+    """The momentum arm the synthesis behind ``eval_dir`` was scoped to (ADR 0016).
+
+    A *condition* is ``(dataset, eps, T, arch)`` and carries no arm, but a synthesis
+    is fitted over one arm's runs — so the arm belongs to the fit, and is read off
+    the run's ``manifest.json`` (``config.optimizers``, the ADR 0011 arm filter).
+    Exactly one entry means the fit is scoped to that arm; empty or several means it
+    pooled them, and ``""`` keeps those cells out of the per-arm overlay rather than
+    mislabelling them as one arm's.
+    """
+    import json
+
+    manifest_path = Path(eval_dir) / "manifest.json"
+    if not manifest_path.is_file():
+        return ""
+    optimizers = json.loads(manifest_path.read_text()).get("config", {}).get("optimizers", [])
+    return str(optimizers[0]) if len(optimizers) == 1 else ""
+
+
+def equation_source(category: int, condition: dict, arm: str = "") -> SourcePolicy:
     """The ``SourcePolicy`` for a distilled condition transferred as an equation.
 
     A condition is not a single learned run, so its provenance IS the condition
     ``(dataset, eps, T, arch)``, tagged by an fs-safe id from
     ``transfer_launch.condition_source_id`` — shared with the SLURM launcher, whose
     skip filter must predict the cell filename this id becomes part of. ``delta``
-    and ``p`` are NaN: a category map carries neither.
+    and ``p`` are NaN: a category map carries neither. ``arm`` comes from the
+    synthesis rather than the condition (:func:`synthesis_arm`).
     """
     dataset, arch = condition["dataset"], condition["arch_label"]
     return SourcePolicy(
@@ -43,6 +63,7 @@ def equation_source(category: int, condition: dict) -> SourcePolicy:
         T=int(condition["T"]),
         p=float("nan"),
         arch=str(arch),
+        arm=arm,
     )
 
 
@@ -86,10 +107,11 @@ def run_equation_cell(
     target: TargetSpec,
     cache_root: Path | str = "cache",
     batch_size: int = 250,
-    num_reps: int = 8,
+    num_reps: int = 3,
     seed: int = 0,
+    category: int = 0,
 ) -> list[Path]:
-    """Transfer every distilled condition at the target ``(eps, T)`` and write its cell.
+    """Transfer the distilled condition(s) at the target ``(eps, T)`` and write cells.
 
     Loads the sigma and clip closed forms from an SR ``eval_dir``, and for each
     condition present at the exact target ``(eps, T)`` (read off, not selected):
@@ -97,6 +119,11 @@ def run_equation_cell(
     target budget, carries the distilled clip, evaluates natively on the target for
     ``num_reps`` seeds via the shared eval core, and writes a ``producer="equation"``
     cell. Raises if the target is off-grid or the run lacks a clip equation.
+
+    ``category`` narrows the run to a single condition — the launcher gives each its
+    own task so a task's cost is one evaluation rather than one per condition. It
+    changes nothing about which cell is written, only how many per invocation; 0
+    keeps every matching condition.
     """
     from conf.scope import RunContext, using
     from conf.singleton_conf import SingletonConfig
@@ -124,6 +151,13 @@ def run_equation_cell(
             "equation transfer is on-grid only (the template constants are indexed "
             "by discrete condition, not a function of eps/T)"
         )
+    if category:
+        conditions = [(cat, cond) for cat, cond in conditions if cat == category]
+        if not conditions:
+            raise SystemExit(
+                f"category {category} is not among the conditions trained at "
+                f"(eps={target.eps:g}, T={target.T})"
+            )
 
     sigma_model = _load_target(eval_dir, "sigma")
     clip_model = _load_target(eval_dir, "clip")
@@ -133,6 +167,7 @@ def run_equation_cell(
             "re-run symbolic_regression.py with --targets sigma clip"
         )
 
+    arm = synthesis_arm(eval_dir)
     config = build_target_config(target, batch_size)
     target_T = int(target.T)
     paths: list[Path] = []
@@ -149,7 +184,7 @@ def run_equation_cell(
             sigmas = seat_on_budget(sigma_shape, gdp_params)
             schedule = RawArraySchedule(sigmas, clip_shape)
 
-            source = equation_source(category, condition)
+            source = equation_source(category, condition, arm=arm)
             baseline = Baseline(env_params, gdp_params, jr.PRNGKey(seed), num_reps=num_reps)
             df = baseline.generate_schedule_data(
                 schedule, name=f"Equation Transfer ({source.run_id})"
@@ -174,8 +209,10 @@ class EquationCellConfig:
     """Arch label recorded on the cell rows; the arch itself is auto-derived from the dataset."""
     batch_size: int = 250
     cache_root: str = "cache"
-    num_reps: int = 8
+    num_reps: int = 3
     seed: int = 0
+    category: int = 0
+    """Transfer only this condition category; 0 = every condition at the target (eps, T)."""
 
 
 def main(conf: EquationCellConfig) -> None:
@@ -193,6 +230,7 @@ def main(conf: EquationCellConfig) -> None:
         batch_size=conf.batch_size,
         num_reps=conf.num_reps,
         seed=conf.seed,
+        category=conf.category,
     ):
         print(f"wrote {out}")
 

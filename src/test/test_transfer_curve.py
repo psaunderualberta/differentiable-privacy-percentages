@@ -33,7 +33,7 @@ class TestResampleCurve:
         np.testing.assert_allclose(out, expected, rtol=1e-6)
 
 
-def _schedule_rows(run_id, dataset, eps, T, arch, seed, sigmas, clips):
+def _schedule_rows(run_id, dataset, eps, T, arch, seed, sigmas, clips, optimizer="sgd-m0.9"):
     """Rows as compile_results_fetch writes them: one per (run_id, inner_step)."""
     return [
         {
@@ -43,6 +43,7 @@ def _schedule_rows(run_id, dataset, eps, T, arch, seed, sigmas, clips):
             "T": T,
             "arch_label": arch,
             "seed": seed,
+            "optimizer": optimizer,
             "inner_step": i,
             "step_norm": i / T,
             "sigma": s,
@@ -98,6 +99,23 @@ class TestLoadSourcePolicies:
         # delta/p are source-side provenance absent from the parquet → NaN.
         assert math.isnan(src_a.delta)
         assert math.isnan(src_a.p)
+
+    def test_the_arm_comes_from_the_optimizer_column(self, tmp_path):
+        # ADR 0011 encodes the momentum arm in `optimizer`; ADR 0018 makes it part of
+        # the source regime's identity, so the policy must carry it off the parquet
+        # rather than leaving the matrix to rejoin on run_id later.
+        rows = _schedule_rows(
+            "m09", "mnist", 0.5, 2, "cnn", 0, [2.0, 3.0], [0.5, 0.6], optimizer="sgd-m0.9"
+        )
+        rows += _schedule_rows(
+            "m00", "mnist", 0.5, 2, "cnn", 0, [2.0, 3.0], [0.5, 0.6], optimizer="sgd-m0.0"
+        )
+        path = tmp_path / "schedules.parquet"
+        pd.DataFrame(rows).to_parquet(path, index=False)
+
+        arms = {src.run_id: src.arm for src, _, _ in load_source_policies(path)}
+
+        assert arms == {"m09": "sgd-m0.9", "m00": "sgd-m0.0"}
 
 
 class TestBuildCurveSchedule:
