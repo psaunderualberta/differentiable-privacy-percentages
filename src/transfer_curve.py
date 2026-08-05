@@ -120,10 +120,17 @@ def build_curve_schedule(
     target's DP-PSAC boundary (``seat_on_budget``) — its magnitude is set entirely
     by the target ε. The clip curve is a privacy-neutral per-step LR multiplier, so
     it is resampled and carried across untouched.
+
+    ``seat_on_budget`` works in *multiplier* units ``s = sigma/clip`` (the budget is
+    ``sum_i exp((C_i/sigma_i)^2)``, so the clips are part of the constraint), hence
+    the divide-then-multiply around it. Seating the raw sigma instead substitutes
+    ``C_i := 1``, which for a real learned curve overflows ``exp(1/sigma^2)``, leaves
+    the bisection unable to bracket a root, and over-noises the schedule ~10x.
     """
     target_T = int(privacy_params.T)
-    sigmas = seat_on_budget(resample_curve(source_sigmas, target_T), privacy_params)
     clips = resample_curve(source_clips, target_T)
+    multipliers = resample_curve(source_sigmas, target_T) / clips
+    sigmas = seat_on_budget(multipliers, privacy_params) * clips
     return RawArraySchedule(sigmas, clips)
 
 

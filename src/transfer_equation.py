@@ -181,7 +181,10 @@ def run_equation_cell(
         for category, condition in conditions:
             sigma_shape = evaluate_equation_shape(sigma_model.model, category, target_T)
             clip_shape = evaluate_equation_shape(clip_model.model, category, target_T)
-            sigmas = seat_on_budget(sigma_shape, gdp_params)
+            # seat_on_budget takes the multiplier s = sigma/clip, not the raw noise
+            # scale — the GDP budget is sum_i exp((C_i/sigma_i)^2), so the clips are
+            # part of the constraint. Same divide-then-multiply as build_curve_schedule.
+            sigmas = seat_on_budget(sigma_shape / clip_shape, gdp_params) * clip_shape
             schedule = RawArraySchedule(sigmas, clip_shape)
 
             source = equation_source(category, condition, arm=arm)

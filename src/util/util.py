@@ -83,16 +83,25 @@ def sum_clipped_per_example_grads(
     C: Array,
     valid: Array | None = None,
 ) -> eqx.Module:
-    """Return the *sum* of Abadi-clipped per-example gradients (no 1/B factor).
+    """Return the *sum* of DP-PSAC-clipped per-example gradients (no 1/B factor).
 
     Each example's clip multiplier depends only on that example's own global
     gradient norm, so clipping a batch in microbatches and summing the partial
-    sums is exact.  ``clip_grads_abadi`` is just this divided by the batch size;
+    sums is exact.  ``clip_grads_psac`` is just this divided by the batch size;
     microbatched DP-SGD accumulates this sum and divides once at the end.
 
     Applies the smooth global-norm clipping scheme from
     https://proceedings.neurips.cc/paper_files/paper/2023/file/8249b30d877c91611fd8c7aa6ac2b5fe-Paper-Conference.pdf
-    (global L2 norm over all layers, not layer-wise).
+    (global L2 norm over all layers, not layer-wise) — **not** Abadi's
+    ``min(1, C/||g||)``.
+
+    The distinction matters for how ``C`` behaves.  The multiplier is
+    ``C / (||g|| + 1/(||g|| + 1))``, which is **unbounded above**: it approaches
+    ``C`` as ``||g|| -> 0`` rather than being capped at ``||g||``.  So ``C`` is a
+    *scale*, not a ceiling — a large ``C`` amplifies small gradients instead of
+    leaving them untouched, and ``C = 1e6`` diverges rather than disabling
+    clipping.  To run without a privacy mechanism, set sigma to 0 and leave ``C``
+    at a normal value.
 
     Args:
         grads: Per-example gradient pytree with a leading batch dimension.
@@ -123,7 +132,10 @@ def sum_clipped_per_example_grads(
 
 
 def clip_grads_psac(grads: eqx.Module, C: Array, valid: Array | None = None) -> eqx.Module:
-    """Clip per-example gradients using the Abadi smooth global-norm clipping rule.
+    """Clip per-example gradients using the DP-PSAC smooth global-norm clipping rule.
+
+    See :func:`sum_clipped_per_example_grads` for the multiplier and for why ``C``
+    is a scale rather than a ceiling.
 
     Returns the *mean* clipped gradient (sum of clipped per-example gradients
     divided by the batch size). The divisor is the expected batch ``L = batch_size``

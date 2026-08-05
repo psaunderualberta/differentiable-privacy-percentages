@@ -141,12 +141,42 @@ class TestBuildCurveSchedule:
         # Both curves land at the target T.
         assert len(sigmas) == pp.T
         assert len(clips) == pp.T
-        # Matched privacy: the seated sigma curve binds the target DP-PSAC boundary.
+        # Matched privacy: the seated curve binds the target DP-PSAC boundary. The
+        # accountant's per-step weight is w = C/sigma, so the budget is
+        # sum_i exp((C_i/sigma_i)^2) — the clips are part of the constraint, and a
+        # seating that ignores them leaves the run wildly over-noised.
         bound = float((pp.mu / pp.p) ** 2 + pp.T)
-        used = float(jnp.sum(jnp.exp(1.0 / jnp.asarray(sigmas) ** 2)))
+        used = float(jnp.sum(jnp.exp((jnp.asarray(clips) / jnp.asarray(sigmas)) ** 2)))
         np.testing.assert_allclose(used, bound, rtol=1e-4)
         # Clip is privacy-neutral: carried across as the plain resample, untouched by seating.
         np.testing.assert_allclose(clips, resample_curve(source_clips, pp.T), rtol=1e-6)
+
+    def test_a_realistic_learned_curve_spends_its_whole_budget(self):
+        """Regression for the seating units bug.
+
+        A real learned curve has small sigmas (down to ~0.025) and clips well below
+        1. Feeding raw sigma into a seater that assumes multiplier units makes
+        exp(1/sigma^2) overflow, the bracketed bisection finds no sign change and
+        silently returns its ceiling, and every transferred run ends up ~10x
+        over-noised — spending under 1% of the budget it was entitled to.
+        """
+        from jax import numpy as jnp
+
+        from privacy.gdp_privacy import GDPPrivacyParameters
+        from transfer_curve import build_curve_schedule
+
+        # Shape taken from a real FirSweep policy: sigma spans 0.025-0.42.
+        source_sigmas = np.array([0.2865, 0.4062, 0.3672, 0.1500, 0.0252])
+        source_clips = np.array([0.3175, 0.7640, 0.7378, 0.4000, 0.0392])
+        pp = GDPPrivacyParameters(eps=10.0, delta=1e-7, p=0.001953, T=64)
+
+        sched = build_curve_schedule(source_sigmas, source_clips, pp)
+        sigmas = np.asarray(sched.get_private_noise_scales())
+        clips = np.asarray(sched.get_private_clips())
+
+        bound = float((pp.mu / pp.p) ** 2 + pp.T)
+        used = float(jnp.sum(jnp.exp((jnp.asarray(clips) / jnp.asarray(sigmas)) ** 2)))
+        assert used / bound > 0.99, f"only spent {100 * used / bound:.3f}% of the budget"
 
 
 class TestScheduleDataToResults:
