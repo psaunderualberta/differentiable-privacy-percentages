@@ -19,7 +19,9 @@ apples-to-apples with the sources and with each other.
 
 ## Status
 
-accepted
+accepted (the EyePACS target is superseded by ADR 0020 — dropped for having no
+schedule-resolving power; the body below is left as decided, and its "validate on
+EyePACS first" ordering is reassigned there to CheXpert, then ImageNet-32)
 
 ## Why
 

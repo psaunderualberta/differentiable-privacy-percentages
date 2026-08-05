@@ -293,6 +293,22 @@ position. Scoring and final evaluation use disjoint keys, so a winner's reported
 number is never the draw that selected it.
 _Avoid_: trial, sweep run, sample (reserve "sample" for minibatch sampling).
 
+**Schedule-resolving power**:
+Whether a target regime can measure a schedule at all: do differently-shaped schedules
+run natively on it, at its own budget, separate by more than **evaluation noise**? It
+is read off the three **transfer references**, which is the whole instrument — the
+references contain no transferred policy, so a target admitted or rejected on this
+criterion is judged without touching the transfer claim. A target that fails it returns
+the same accuracy whatever schedule it is given, and every cell in its column is
+measuring nothing (ADR 0007).
+
+It is a property of the **target regime**, not the dataset: the surrogate architecture
+is part of the regime, so "no resolving power" always means "under this surrogate", never
+"this dataset is unlearnable". Do **not** measure it as the gap between a non-private
+control and a DP run — those two differ in hyperparameter tuning as well as in privacy,
+so the difference confounds the mechanism with the search.
+_Avoid_: resolving power (unqualified), signal, sensitivity, dynamic range.
+
 ### Adaptive clipping
 
 **Within-clip fraction**:

@@ -59,13 +59,54 @@ _OVERLAY_KEYS = [
 ]
 
 
-def _collapse(assembled: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
-    """Mean / spread / count of ``accuracy`` over ``keys``."""
-    return (
-        assembled.groupby(keys, dropna=False)["accuracy"]
-        .agg(mean_acc="mean", spread=lambda s: float(s.std(ddof=0)), n="count")
+def _collapse(
+    assembled: pd.DataFrame, keys: list[str], unit_key: str | None = None
+) -> pd.DataFrame:
+    """Mean / spread / count of ``accuracy`` over ``keys``.
+
+    Without ``unit_key`` the spread is over the raw rows, which for a per-policy
+    grouping is that policy's evaluation noise.
+
+    With ``unit_key`` the rows are first averaged within each unit and the spread is
+    taken over those unit *means*. This matters: a cell pooling P policies of R reps
+    each has raw-row variance ``sigma_policy^2 + sigma_eval^2``, so a spread over raw
+    rows reports evaluation noise as part of the regime's generalization consistency.
+    Averaging first leaves only ``sigma_policy^2 + sigma_eval^2 / R``. With the measured
+    per-rep sd of ~0.35pp and ``num_reps=3``, that is the difference between an honest
+    consistency figure and one inflated by a third or more.
+
+    A group holding a single unit has no between-unit spread to report — a native
+    reference and a distilled condition are both one unit by construction
+    (CONTEXT.md) — so it falls back to its rep spread rather than reporting a
+    spurious zero. ``spread_of`` names which quantity each row carries, because
+    CONTEXT.md requires every ± to say which of the two it is.
+    """
+    if unit_key is None:
+        collapsed = (
+            assembled.groupby(keys, dropna=False)["accuracy"]
+            .agg(mean_acc="mean", spread=lambda s: float(s.std(ddof=0)), n="count")
+            .reset_index()
+        )
+        collapsed["spread_of"] = "reps"
+        collapsed["n_policies"] = 1
+        return collapsed
+
+    unit_means = assembled.groupby([*keys, unit_key], dropna=False)["accuracy"].mean().reset_index()
+    across_units = (
+        unit_means.groupby(keys, dropna=False)["accuracy"]
+        .agg(mean_acc="mean", spread=lambda s: float(s.std(ddof=0)), n_policies="count")
         .reset_index()
     )
+    over_reps = (
+        assembled.groupby(keys, dropna=False)["accuracy"]
+        .agg(rep_spread=lambda s: float(s.std(ddof=0)), n="count")
+        .reset_index()
+    )
+    collapsed = across_units.merge(over_reps, on=keys, how="left")
+    single = collapsed["n_policies"] <= 1
+    collapsed["spread"] = collapsed["spread"].where(~single, collapsed["rep_spread"])
+    collapsed["spread_of"] = np.where(single, "reps", "policies")
+    return collapsed.drop(columns=["rep_spread"])
 
 
 def source_labels(assembled: pd.DataFrame) -> pd.Series:
@@ -105,7 +146,11 @@ def transfer_matrix(assembled: pd.DataFrame) -> pd.DataFrame:
     is a different and much smaller quantity than the one the matrix claims to
     report. That view is still available as :func:`policy_matrix`.
     """
-    return _collapse(assembled.assign(source_label=source_labels(assembled)), _CELL_KEYS)
+    return _collapse(
+        assembled.assign(source_label=source_labels(assembled)),
+        _CELL_KEYS,
+        unit_key="source_id",
+    )
 
 
 def policy_matrix(assembled: pd.DataFrame) -> pd.DataFrame:
@@ -216,7 +261,8 @@ def plot_matrix(
 
     Rows are source regime-arms, columns are target regimes; each cell shows mean
     transfer accuracy with the **generalization-consistency** spread beneath it —
-    the spread across the regime's source policies (ADR 0018). Every column is
+    the spread across the regime's source policy *means*, so it is not inflated by
+    each policy's own evaluation noise (see ``_collapse``). Every column is
     annotated (in its title) with the source nearest it in (ε, T) — read off, not
     selected.
 

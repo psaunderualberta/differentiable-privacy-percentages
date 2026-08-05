@@ -65,6 +65,41 @@ class TestTransferMatrixIsReadOff:
         # Both policies are internally identical, so any spread here is across them.
         assert cell["spread"] == pytest.approx(0.10)
 
+    def test_the_cell_spread_excludes_each_policys_own_evaluation_noise(self):
+        # Generalization consistency is the spread BETWEEN policies. Two policies
+        # whose means are identical have zero of it, however noisy each policy's own
+        # reps are — pooling raw rows would report that rep noise as the regime's
+        # consistency, which is the quantity CONTEXT.md says the matrix must not mix.
+        assembled = pd.concat(
+            [
+                _rows("runA", [(0, 0.5), (1, 0.9)]),  # mean 0.70, noisy
+                _rows("runB", [(0, 0.6), (1, 0.8)]),  # mean 0.70, less noisy
+            ],
+            ignore_index=True,
+        )
+
+        (cell,) = transfer_matrix(assembled).to_dict("records")
+
+        assert cell["mean_acc"] == pytest.approx(0.70)
+        assert cell["spread"] == pytest.approx(0.0)
+        assert cell["spread_of"] == "policies"
+        assert cell["n_policies"] == 2
+        assert cell["n"] == 4
+
+    def test_a_single_unit_row_reports_its_rep_spread_instead(self):
+        # A native reference has no regime — its row unit is the reference itself
+        # (CONTEXT.md), so there are no sibling policies to spread across and the
+        # honest ± is its evaluation noise. Falling through to zero would claim a
+        # precision the eight reps do not have.
+        assembled = _rows("Constant", [(0, 0.60), (1, 0.80)], producer="reference")
+
+        (cell,) = transfer_matrix(assembled).to_dict("records")
+
+        assert cell["mean_acc"] == pytest.approx(0.70)
+        assert cell["spread"] == pytest.approx(0.10)
+        assert cell["spread_of"] == "reps"
+        assert cell["n_policies"] == 1
+
     def test_the_two_arms_of_one_regime_stay_separate_rows(self):
         # Pooling the arms would report an 8.5x median-sigma difference (ADR 0016) as
         # this regime's generalization consistency.

@@ -32,8 +32,8 @@ Examples:
         --cache_root /scratch/$USER/transfer \\
         --schedules_parquet <cache>/schedules.parquet \\
         --eval_dir <cache>/pysr_eval/<slug> \\
-        --target_datasets eyepacs imagenet chexpert \\
-        --target_eps 1.0 8.0 --target_T 200 5000 --dry-run
+        --target_datasets chexpert imagenet \\
+        --target_eps 10.0 --target_T 2000 5000 7000 --dry-run
 
     # Submit, including the assembler:
     uv run cc/slurm/transfer-run-starter.py ... --with-plot
@@ -82,6 +82,9 @@ from transfer_launch import (
 # The curve clock is measured, not guessed: the slowest probe task (eyepacs, the
 # largest input) took 1:14:11, so 2:55 leaves 2.4x for node-to-node jitter. Keep
 # that headroom — a curve task has no resumption, so an overrun writes nothing.
+# ADR 0020 dropped eyepacs, so the worst remaining case is imagenet at T=7000, an
+# order of magnitude under this clock. Left as-is: the clock costs nothing but queue
+# priority, and it is the one number that must never be tight.
 _WALLTIMES = {
     "preflight": "00-02:55:00",
     "curve": "00-02:55:00",
@@ -102,10 +105,20 @@ _WALLTIMES = {
 # The curve figures are measured (probe wave 2026-08-04, jobs 345104-345106: one
 # cell each at eps=10, T=5000, num_reps=3). A single scalar cannot stand in for the
 # stage: cost tracks the target's input resolution, and eyepacs (256x256) is 46x
-# chexpert (64x64) at identical eps and T. eps and T are held out of the key because
-# every planned target shares T=5000 and cost is flat in eps. Unknown datasets fall
-# back to the eyepacs figure, so a new target over-estimates rather than under-.
+# chexpert (64x64) at identical eps and T. So the key is the dataset, and the two
+# budget axes are handled separately:
+#
+#   - eps is dropped: a step costs the same whatever sigma it uses.
+#   - T is NOT dropped. It was, while every planned target shared T=5000; ADR 0020's
+#     grid spans T=2000..7000, and the inner loop is a scan of exactly T steps, so
+#     cost is linear in T. The figures below are per-task at _MEASURED_T and are
+#     rescaled by T/_MEASURED_T in `_job_gpu_hours`.
+#
+# eyepacs is retained here although ADR 0020 dropped it as a column: it is real
+# measured data and it is the fallback, so an unknown dataset over-estimates rather
+# than under-.
 # The other three stages remain analytic (±3×) until they are measured the same way.
+_MEASURED_T = 5000
 _CURVE_GPU_HOURS = {"eyepacs": 1.24, "imagenet": 0.06, "chexpert": 0.03}
 _GPU_HOURS = {
     "curve": max(_CURVE_GPU_HOURS.values()),
@@ -118,17 +131,21 @@ _GPU_HOURS = {
 def _job_gpu_hours(stage: str, job: Job) -> float:
     """Estimated GPU-hours for one array task.
 
-    Curve tasks are keyed by target dataset (see ``_CURVE_GPU_HOURS``); every other
-    stage is flat per task. The dataset is read back off the manifest line rather
-    than threaded through ``Job``, which stays a stdlib-only record of what to run.
+    Curve tasks are keyed by target dataset (see ``_CURVE_GPU_HOURS``) and scaled
+    linearly by ``--target_T``, since the inner loop is a scan of exactly T steps;
+    every other stage is flat per task. Both are read back off the manifest line
+    rather than threaded through ``Job``, which stays a stdlib-only record of what
+    to run.
     """
     if stage != "curve":
         return _GPU_HOURS.get(stage, 1.0)
     args = shlex.split(job.args)
+    per_task = _GPU_HOURS["curve"]
     if "--target" in args:
-        dataset = args[args.index("--target") + 1]
-        return _CURVE_GPU_HOURS.get(dataset, _GPU_HOURS["curve"])
-    return _GPU_HOURS["curve"]
+        per_task = _CURVE_GPU_HOURS.get(args[args.index("--target") + 1], per_task)
+    if "--target_T" in args:
+        per_task *= int(args[args.index("--target_T") + 1]) / _MEASURED_T
+    return per_task
 
 
 @dataclass
@@ -138,9 +155,15 @@ class TransferSlurmConfig:
     cache_root: str
     """Where cells are written and the skip filter looks. Required, no default."""
 
-    target_datasets: tuple[str, ...] = ("eyepacs", "imagenet", "chexpert")
-    target_eps: tuple[float, ...] = (1.0, 8.0)
-    target_T: tuple[int, ...] = (200, 5000)
+    target_datasets: tuple[str, ...] = ("chexpert", "imagenet")
+    """Target columns, in pipeline-validation order (ADR 0020: CheXpert first, then
+    ImageNet-32). EyePACS was dropped for having no schedule-resolving power."""
+    target_eps: tuple[float, ...] = (10.0,)
+    target_T: tuple[int, ...] = (2000, 5000, 7000)
+    """The grid is a T-spread at fixed eps: eps is nearly inert across the source
+    sweep's 3.3x span, while T is where schedule shape lives. Every value here must
+    be ON the source condition grid (eps in {3,5,8,10}, T in {2000,3000,5000,7000}) —
+    ``check_on_grid`` makes an off-grid target fatal for the equation stage."""
     target_delta: float = 1e-7
 
     schedules_parquet: str = ""
