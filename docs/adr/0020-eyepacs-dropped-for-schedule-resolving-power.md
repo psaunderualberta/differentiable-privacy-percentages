@@ -65,8 +65,10 @@ evidence of the wrong kind:
    capacity, is exactly the floor.
 2. **References actually separate** (sufficient). Do differently-shaped schedules give
    *different* answers? This needs the full reference set. **CheXpert has it** (1.09 pp at
-   p = 1.4e-4). **ImageNet-32 does not yet** — only its Constant reference has been run;
-   the Dynamic-DPSGD and Median cells are outstanding.
+   p = 1.4e-4). **ImageNet-32 does not yet** — its 14.5% comes from a native constant
+   schedule run as a *diagnostic* (`curve_ab.py`), which is criterion-pure for headroom
+   but is not a reference-producer cell. No `producer="reference"` cell exists for
+   ImageNet-32 at any budget point; all three of its references are outstanding.
 
 **The EyePACS decision turns only on part 1**, which is measured, unambiguous, and
 independent of anything ImageNet-32 does. A target with zero headroom cannot have
