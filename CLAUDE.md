@@ -137,7 +137,7 @@ Research/writing notes live in `thesis/notes/`:
 3. Runs `jax.lax.scan` over T steps (`scanned_training_step`), each step:
    - Poisson-samples a minibatch (`sample_batch_uniform`).
    - Computes per-sample gradients via `vmapped_loss`.
-   - Clips gradients (`clip_grads_abadi` — Abadi global norm clipping).
+   - Clips gradients (`clip_grads_psac` — DP-PSAC smooth global-norm clipping, multiplier `C/(‖g‖ + 1/(‖g‖+1))`, **not** Abadi's `min(1, C/‖g‖)`). The multiplier is unbounded above, so `C` is a scale, not a ceiling — a large `C` amplifies rather than disables clipping.
    - Adds spherical Gaussian noise (`get_spherical_noise`).
    - Updates model via optax.
 4. Returns final model, val loss, train losses, train accuracies, val accuracy.
