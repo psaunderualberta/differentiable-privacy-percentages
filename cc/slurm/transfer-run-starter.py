@@ -67,6 +67,7 @@ from transfer_launch import (
     SourceScope,
     absolute_path,
     array_sbatch,
+    chunk_ranges,
     condition_grid,
     expand_targets,
     manifest_text,
@@ -198,6 +199,16 @@ class TransferSlurmConfig:
     batch_size: int = 250
     throttle: int = 8
     """Max concurrently running tasks per array."""
+    max_array_size: int = 1000
+    """Max tasks in one submitted array; larger stages are split across several.
+
+    SLURM rejects `--array=0-1487` outright ("Invalid job array specification") when
+    the cluster's MaxArraySize is 1001, and the curve stage is 248 source policies x
+    6 target regimes = 1,488 tasks. Chunking splits the *submission*, not the work:
+    every chunk reads the same manifest at its own offset, so the manifest stays the
+    one record of what was launched. Check your cluster's value with
+    `scontrol show config | grep MaxArraySize` and set this below it; 0 disables
+    chunking entirely."""
     walltimes: dict[str, str] = field(default_factory=dict)
     """Per-stage wall-clock overrides, e.g. `--walltimes curve 00-01:30:00`."""
 
@@ -357,7 +368,7 @@ def main(conf: TransferSlurmConfig) -> None:
     )
 
     producer_ids = []
-    stage_ids: dict[str, str] = {}
+    stage_ids: dict[str, tuple[str, ...]] = {}
     for stage, stage_jobs in jobs.items():
         print(f"\n=== {stage} ({len(stage_jobs)} tasks) ===")
         manifest = _write_manifest(conf, stage, stage_jobs)
@@ -370,32 +381,48 @@ def main(conf: TransferSlurmConfig) -> None:
         # it picks a winner from a partial score set (ADR 0019). plan_jobs emits the
         # phases in dependency order, so the id is already in hand.
         prerequisites = [preflight_id] if preflight_id else []
-        upstream = stage_ids.get(STAGE_PREREQUISITE_STAGE.get(stage, ""), "")
-        if upstream:
-            prerequisites.append(upstream)
+        upstream = stage_ids.get(STAGE_PREREQUISITE_STAGE.get(stage, ""), ())
+        prerequisites.extend(upstream)
 
-        job_id = _submit(
-            array_sbatch(
-                stage=stage,
-                manifest=manifest,
-                n_jobs=len(stage_jobs),
-                walltime=conf.walltime(stage),
-                project_dir=conf.project_dir,
-                account=conf.account,
-                logfile=os.path.join(conf.logdir, "%A_%a", "%x.log"),
-                throttle=conf.throttle,
-                prerequisites=tuple(prerequisites),
-                cpus_per_task=conf.cpus_per_task,
-                gpus=conf.gpus,
-                mem_per_gpu=conf.mem_per_gpu,
-            ),
-            stage,
-            conf.dry_run,
-            conf.account,
-        )
-        if job_id:
-            stage_ids[stage] = job_id
-            producer_ids.append(job_id)
+        # A stage larger than the cluster's MaxArraySize is submitted as several
+        # arrays over the one manifest, each offset into its own slice. Downstream
+        # stages must gate on ALL of them, so the id bookkeeping is per-chunk.
+        chunks = chunk_ranges(len(stage_jobs), conf.max_array_size)
+        if len(chunks) > 1:
+            print(
+                f"  {len(stage_jobs)} tasks exceeds --max_array_size "
+                f"{conf.max_array_size}; submitting as {len(chunks)} arrays "
+                f"(throttle is per-array, so up to {len(chunks) * conf.throttle} "
+                f"tasks of this stage run at once)"
+            )
+        chunk_ids = []
+        for offset, count in chunks:
+            label = stage if len(chunks) == 1 else f"{stage}[{offset}:{offset + count}]"
+            job_id = _submit(
+                array_sbatch(
+                    stage=stage,
+                    manifest=manifest,
+                    n_jobs=count,
+                    walltime=conf.walltime(stage),
+                    project_dir=conf.project_dir,
+                    account=conf.account,
+                    logfile=os.path.join(conf.logdir, "%A_%a", "%x.log"),
+                    throttle=conf.throttle,
+                    prerequisites=tuple(prerequisites),
+                    cpus_per_task=conf.cpus_per_task,
+                    gpus=conf.gpus,
+                    mem_per_gpu=conf.mem_per_gpu,
+                    offset=offset,
+                ),
+                label,
+                conf.dry_run,
+                conf.account,
+            )
+            if job_id:
+                chunk_ids.append(job_id)
+        if chunk_ids:
+            stage_ids[stage] = tuple(chunk_ids)
+            producer_ids.extend(chunk_ids)
 
     if conf.with_plot:
         print("\n=== plot ===")

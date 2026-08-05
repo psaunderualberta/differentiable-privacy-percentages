@@ -591,10 +591,40 @@ def _dependency_line(prerequisites: tuple[str, ...]) -> str:
     chain-serialisation device (one job per name at a time); on a job array it
     would serialise the whole stage and destroy the fan-out this launcher exists
     for. The transfer DAG's only real ordering constraint is the preflight.
+
+    Job ids are joined with ``:``, not ``,``. SLURM's grammar is
+    ``<type>:<jobid>[:<jobid>...][,<type>:<jobid>...]`` — the comma separates
+    dependency *types*, so ``afterok:11,22`` is a parse error rather than "after
+    both". Every multi-prerequisite job in this DAG (the reference selector, the
+    plot assembler, any chunked stage) depends on the colon form.
     """
     if not prerequisites:
         return ""
-    return "#SBATCH --dependency=afterok:" + ",".join(prerequisites) + "\n"
+    return "#SBATCH --dependency=afterok:" + ":".join(prerequisites) + "\n"
+
+
+def chunk_ranges(n_jobs: int, max_array_size: int) -> list[tuple[int, int]]:
+    """Split ``n_jobs`` array tasks into ``(offset, count)`` chunks SLURM will accept.
+
+    SLURM rejects an array whose largest index reaches ``MaxArraySize`` (commonly
+    1001) with "Invalid job array specification", and it is a *cluster* limit, not a
+    per-stage one. The curve stage is 248 source policies x 6 target regimes = 1,488
+    tasks, so it must be submitted as several arrays over the same manifest, each
+    starting its indices at 0 and offset into its own slice.
+
+    Chunking rather than shrinking the stage is deliberate: the manifest stays the
+    single record of what was launched, and cell-level resumption via
+    :func:`drop_finished` is unaffected, because a task still owns exactly one cell.
+
+    A non-positive ``max_array_size`` disables chunking, for a cluster whose limit is
+    unknown or unlimited.
+    """
+    if max_array_size <= 0:
+        return [(0, n_jobs)]
+    return [
+        (offset, min(max_array_size, n_jobs - offset))
+        for offset in range(0, n_jobs, max_array_size)
+    ]
 
 
 def array_sbatch(
@@ -610,14 +640,21 @@ def array_sbatch(
     cpus_per_task: int = 2,
     gpus: int = 1,
     mem_per_gpu: str = "12G",
+    offset: int = 0,
 ) -> str:
     """The sbatch script submitting one stage as a job array over its manifest.
 
-    Task ``i`` runs manifest line ``i+1`` verbatim, so the manifest is the single
-    record of what was launched and the array index means nothing beyond "which
-    line". ``%<throttle>`` caps concurrent tasks so a large cross-product does not
-    flood the allocation.
+    Task ``i`` runs manifest line ``i + 1 + offset`` verbatim, so the manifest is the
+    single record of what was launched and the array index means nothing beyond
+    "which line". ``%<throttle>`` caps concurrent tasks so a large cross-product does
+    not flood the allocation.
+
+    ``offset`` exists because a stage can exceed SLURM's ``MaxArraySize`` and then
+    has to be submitted as several arrays over the *same* manifest (see
+    :func:`chunk_ranges`). Every array's indices restart at 0, so the offset is what
+    keeps chunk 2 from re-running chunk 1's lines.
     """
+    line_offset = f" + {offset}" if offset else ""
     return f"""#!/bin/bash
 #SBATCH --array=0-{n_jobs - 1}%{throttle}
 #SBATCH --cpus-per-task={cpus_per_task}
@@ -634,8 +671,8 @@ echo "Current working directory: `pwd`"
 echo "Starting transfer '{stage}' task $SLURM_ARRAY_TASK_ID at: `date`"
 echo "CUDA devices: $CUDA_VISIBLE_DEVICES"
 
-# The manifest line IS the task: line (index+1) of the file the launcher wrote.
-CMD=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" {manifest})
+# The manifest line IS the task: line (index+1+offset) of the file the launcher wrote.
+CMD=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1{line_offset}))p" {manifest})
 if [ -z "$CMD" ]; then
     echo "no manifest line for task $SLURM_ARRAY_TASK_ID in {manifest}" >&2
     exit 1

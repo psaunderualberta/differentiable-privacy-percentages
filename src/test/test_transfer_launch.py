@@ -22,6 +22,7 @@ from transfer_launch import (
     candidate_jobs,
     cell_filename,
     check_on_grid,
+    chunk_ranges,
     condition_grid,
     condition_source_id,
     curve_jobs,
@@ -606,6 +607,20 @@ class TestArraySbatch:
         assert "SLURM_ARRAY_TASK_ID" in script
         assert "/m/curve.txt" in script
 
+    def test_a_chunked_array_reads_its_own_slice_of_the_manifest(self):
+        # A stage larger than MaxArraySize is submitted as several arrays over ONE
+        # manifest, so every chunk restarts its indices at 0 and must be told where
+        # its slice begins. Without the offset each chunk would re-run lines 1..n.
+        script = self._script(n_jobs=500, offset=1000, throttle=8)
+
+        assert "#SBATCH --array=0-499%8" in script
+        assert "SLURM_ARRAY_TASK_ID + 1 + 1000" in script
+
+    def test_an_unchunked_array_needs_no_offset_arithmetic(self):
+        script = self._script(n_jobs=4)
+
+        assert "SLURM_ARRAY_TASK_ID + 1)" in script
+
     def test_producer_stages_request_a_gpu(self):
         script = self._script(stage="curve")
 
@@ -620,6 +635,15 @@ class TestArraySbatch:
         assert "#SBATCH --dependency=afterok:12345" in script
         assert "singleton" not in script
 
+    def test_several_prerequisites_are_colon_separated_within_the_afterok(self):
+        # SLURM's grammar is `<type>:<jobid>[:<jobid>...][,<type>:...]` — a comma
+        # separates dependency *types*, not job ids, so "afterok:11,22" is a parse
+        # error. The reference selector gates on preflight AND its candidate array,
+        # so this is the first two-prerequisite job in the DAG.
+        script = self._script(prerequisites=("11", "22"))
+
+        assert "#SBATCH --dependency=afterok:11:22" in script
+
     def test_the_task_exits_with_its_command_status(self):
         # The whole DAG is wired with `afterok`, which reads the task's exit status.
         # A trailing `echo` would make every task exit 0 and a failed producer would
@@ -628,6 +652,36 @@ class TestArraySbatch:
 
         assert script.rstrip().endswith("exit $status")
         assert "status=$?" in script
+
+
+class TestChunkRanges:
+    """SLURM rejects an array whose largest index reaches MaxArraySize (commonly
+    1001), so a stage with more tasks than that is submitted as several arrays over
+    the same manifest. The curve stage is 1,488 tasks and hit exactly this."""
+
+    def test_a_stage_under_the_cap_is_one_array(self):
+        assert chunk_ranges(248, 1000) == [(0, 248)]
+
+    def test_a_stage_over_the_cap_is_split_with_the_remainder_last(self):
+        # 1,488 curve tasks: the real case that failed with "Invalid job array
+        # specification". Offsets must tile the manifest with no gap or overlap.
+        chunks = chunk_ranges(1488, 1000)
+
+        assert chunks == [(0, 1000), (1000, 488)]
+        assert sum(count for _, count in chunks) == 1488
+
+    def test_an_exact_multiple_does_not_emit_an_empty_trailing_chunk(self):
+        assert chunk_ranges(2000, 1000) == [(0, 1000), (1000, 1000)]
+
+    def test_chunking_is_disabled_by_a_non_positive_cap(self):
+        # The escape hatch for a cluster whose MaxArraySize is unknown or unlimited.
+        assert chunk_ranges(1488, 0) == [(0, 1488)]
+
+    @pytest.mark.parametrize("n_jobs", [1, 7, 999, 1000, 1001, 1488, 3000])
+    def test_every_task_is_covered_exactly_once(self, n_jobs):
+        covered = [offset + i for offset, count in chunk_ranges(n_jobs, 1000) for i in range(count)]
+
+        assert covered == list(range(n_jobs))
 
 
 class TestSerialSbatch:
@@ -661,9 +715,11 @@ class TestSerialSbatch:
         assert "uv run --no-sync transfer_plot.py --cache_root /c" in script
 
     def test_plot_waits_for_every_producer_array(self):
+        # Colon-separated: with the curve stage chunked across several arrays, the
+        # plot job now gates on more producer ids than there are stages.
         script = self._script(name="plot", prerequisites=("11", "22", "33"))
 
-        assert "#SBATCH --dependency=afterok:11,22,33" in script
+        assert "#SBATCH --dependency=afterok:11:22:33" in script
 
     def test_the_job_exits_with_its_command_status(self):
         # Same contract as the array script: `afterok` is only meaningful if a
