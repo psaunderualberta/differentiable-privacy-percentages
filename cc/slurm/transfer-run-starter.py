@@ -202,7 +202,12 @@ class TransferSlurmConfig:
     """Host RAM per GPU. The 2026-08-04 probe measured eyepacs at 11.33 GiB peak RSS,
     94% of the 12G this used to default to — close enough that a slightly heavier
     policy or a different node would OOM, and an OOM loses a cell exactly like a
-    timeout does. 20G restores headroom on the one target that needs it."""
+    timeout does. 20G restores headroom on the one target that needs it.
+
+    ADR 0020 dropped eyepacs, so this is now sized for a target that no longer runs
+    and the remaining two are far lighter. Kept anyway, and deliberately: no probe
+    has measured chexpert or imagenet peak RSS, over-requesting costs only queue
+    priority, and under-requesting costs a cell. Re-tighten only against a measurement."""
     project_dir: str = os.environ["PROJECT_SOURCE_ROOT"]
     manifest_dir: str = os.path.join(os.environ["PROJECT_ROOT"], "cc", "manifests")
     logdir: str = os.path.join(os.environ["PROJECT_ROOT"], "cc", "logs", "transfer")

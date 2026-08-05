@@ -156,11 +156,19 @@ off.
 
 ## Consequences
 
-- **The freed third is spent on a third budget, not banked.** The matrix was 3 datasets ×
-  2 budgets = 6 columns; dropping EyePACS leaves 4, and the columns are restored to **6**
-  by widening the budget axis from two points to three. Curve cells stay at **1,488**
-  (248 policies × 6 columns) — the drop is budget-neutral, and buys a budget axis with
-  three points on it instead of two.
+- **The freed compute is spent on a third budget, not banked — and it is far more than
+  one column's worth.** The matrix was 3 datasets × 2 budgets = 6 columns; dropping
+  EyePACS leaves 4, and the columns are restored to **6** by widening the budget axis
+  from two points to three. Cell count is therefore unchanged at **1,488** (248 policies
+  × 6 columns), but *cost* is not, because cells are not fungible: a curve task is priced
+  by input resolution, and at 1.24 GPU-h against ImageNet-32's 0.06 and CheXpert's 0.03,
+  **EyePACS alone was 93% of the curve stage**. The stage goes from ≈660 GPU-h to ≈63 —
+  a 10.6× reduction while measuring the same number of cells across a wider budget axis.
+  The one-column-per-column intuition is the thing to distrust here.
+- **There is consequently substantial unspent headroom**, and it is deliberately left
+  unspent for now. Widening further (more T values, more seeds per cell, a restored ε
+  axis) is cheap in a way it never was while EyePACS set the price, but each option is a
+  separate design question and none of them is blocked by this ADR.
 - **The target grid is a T-spread at fixed ε: ε=10, T ∈ {2000, 5000, 7000}.** ε is held
   constant because the source sweep found it nearly inert — across its 3.3× ε span the
   seated σ moves under 9% — so a second ε would have bought a column that differs from
