@@ -17,8 +17,11 @@ Usage (from src/):
 
 from __future__ import annotations
 
+import contextlib
+import gc
 import itertools
 import json
+import resource
 import shutil
 import tempfile
 import threading
@@ -66,6 +69,30 @@ def _get_api() -> wandb.Api:
         api = wandb.Api()
         _thread_local.api = api
     return api
+
+
+# ---------------------------------------------------------------------------
+# File-descriptor pressure
+# ---------------------------------------------------------------------------
+
+
+def raise_descriptor_limit() -> None:
+    """Lift the soft descriptor limit to the hard one, where the OS allows it.
+
+    Downloading artifacts is descriptor-hungry: wandb fans each artifact out over
+    an internal 64-thread pool, so peak usage scales with ``num_workers`` — around
+    2800 descriptors at the default 8 workers, measured. That is comfortably under
+    a 1048576 limit and comfortably over the 1024 that many shells, containers and
+    schedulers still default to. Raising the soft limit costs nothing and removes
+    the whole class of failure on the hosts that need it.
+
+    Best-effort: a refused raise is not worth aborting a multi-hour fetch over.
+    """
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft >= hard:
+        return
+    with contextlib.suppress(ValueError, OSError):
+        resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
 
 
 @contextmanager
@@ -446,6 +473,36 @@ def _ladder_memberships(tags: list[str]) -> dict[str, bool]:
 # ---------------------------------------------------------------------------
 
 
+def _jsonable(value: Any) -> Any:
+    """Plain-JSON view of a W&B config/summary/history value.
+
+    ``run.summary`` returns nested keys as ``SummarySubDict``, which is neither a
+    ``dict`` nor a ``Mapping``, so ``json.dumps`` rejects it outright and a single
+    run with a nested summary key aborted the entire archive. numpy scalars and
+    arrays arrive from the same place and are rejected for the same reason.
+    Anything still unrecognised degrades to its ``repr`` rather than killing the
+    archive: the manifest is a best-effort record, and losing one exotic summary
+    value is far cheaper than losing the run.
+    """
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return _jsonable(value.tolist())
+    if isinstance(value, (list, tuple, set)):
+        return [_jsonable(v) for v in value]
+    # SummarySubDict and friends: mapping-shaped, but not a Mapping.
+    if hasattr(value, "keys") and hasattr(value, "__getitem__"):
+        # .keys() is load-bearing, not the redundant call SIM118 takes it for:
+        # these objects define __getitem__ but no __iter__, so iterating one
+        # directly falls back to the sequence protocol and yields 0, 1, 2, ...
+        return {str(k): _jsonable(value[k]) for k in value.keys()}  # noqa: SIM118
+    return repr(value)
+
+
 def build_run_manifest(run: Any) -> dict:
     """Serialize the non-artifact state of a run into a JSON-able manifest.
 
@@ -455,8 +512,8 @@ def build_run_manifest(run: Any) -> dict:
     a lossless archive; artifact files are captured separately.
     """
     return {
-        "config": dict(run.config),
-        "summary": dict(run.summary),
+        "config": _jsonable(dict(run.config)),
+        "summary": _jsonable(dict(run.summary)),
         "meta": {
             "id": run.id,
             "name": run.name,
@@ -468,7 +525,7 @@ def build_run_manifest(run: Any) -> dict:
             "created_at": getattr(run, "created_at", None),
             "url": getattr(run, "url", None),
         },
-        "history": [dict(r) for r in run.scan_history(keys=None)],
+        "history": [_jsonable(dict(r)) for r in run.scan_history(keys=None)],
     }
 
 
@@ -487,9 +544,12 @@ class LocalArtifact:
     the sigmas/clips W&B tables) and ``.download(root)`` (for the baseline pkl).
     """
 
-    def __init__(self, name: str, directory: Path):
+    def __init__(self, name: str, directory: Path, metadata: dict | None = None):
         self.name = name
         self._directory = Path(directory)
+        # Carries save_checkpoint's recorded step, which is what the checkpoint
+        # fallback orders on — without it a replay cannot use a checkpoint at all.
+        self.metadata = dict(metadata or {})
 
     def get(self, table_name: str) -> _LocalTable:
         path = self._directory / f"{table_name}.table.json"
@@ -537,7 +597,13 @@ class LocalRun:
             if entry.get("kind") != "logged":
                 continue
             directory = Path(self._artifact_root) / entry["dir"]
-            out.append(LocalArtifact(name=entry["name"], directory=directory))
+            out.append(
+                LocalArtifact(
+                    name=entry["name"],
+                    directory=directory,
+                    metadata=entry.get("metadata"),
+                )
+            )
         return out
 
 
@@ -554,21 +620,53 @@ _MANIFESTS_SUBDIR = "manifests"
 _ARTIFACTS_SUBDIR = "artifacts"
 
 
+def _artifacts_worth_archiving(artifacts: list[Any]) -> list[Any]:
+    """Drop the checkpoints no reader will ever open.
+
+    A run logs a ``checkpoint-<run_id>`` artifact per outer step — 40 of the 55
+    artifacts on a FirSweep run, and the bulk of its bytes. Only ever *one* is
+    read back: ``_schedule_arrays_from_checkpoint`` takes the newest, and only as
+    the fallback for a run whose sigmas/clips tables never uploaded. Archiving
+    the rest cost hours of downloading and gigabytes of staging for bytes nothing
+    reads.
+
+    A checkpoint that records no ``step`` goes too. That is not a judgement call
+    about size: ``_schedule_arrays_from_checkpoint`` refuses such an artifact
+    outright, because without the step it cannot show the checkpoint is the run's
+    last rather than wherever a dead job happened to stop.
+    """
+    newest = _newest_checkpoint(artifacts)
+    keep = newest[0].name if newest is not None else None
+    return [a for a in artifacts if "checkpoint-" not in a.name or a.name == keep]
+
+
 def _dump_run_to_dir(run: Any, api: Any, entity: str, project: str, run_dir: Path) -> dict:
-    """Download a run's manifest + every artifact it touches under ``run_dir``.
+    """Download a run's manifest + every artifact a reader can use, under ``run_dir``.
 
     Returns the manifest, augmented with an ``artifacts`` index recording each
-    downloaded artifact's name, on-disk subdir, and kind (``logged`` for the
-    sigmas/clips tables, ``referenced`` for the baseline pulled by run id).
+    downloaded artifact's name, on-disk subdir, kind (``logged`` for the
+    sigmas/clips tables and the newest checkpoint, ``referenced`` for the
+    baseline pulled by run id) and metadata.
+
+    Superseded checkpoints are skipped — see ``_artifacts_worth_archiving``.
     """
     manifest = build_run_manifest(run)
     artifacts_root = run_dir / _ARTIFACTS_SUBDIR
     index: list[dict] = []
 
-    for art in run.logged_artifacts():
+    for art in _artifacts_worth_archiving(list(run.logged_artifacts())):
         sub = _safe_dir_name(art.name)
         art.download(root=str(artifacts_root / sub))
-        index.append({"name": art.name, "dir": sub, "kind": "logged"})
+        index.append(
+            {
+                "name": art.name,
+                "dir": sub,
+                "kind": "logged",
+                # The checkpoint fallback selects on the recorded step, so the
+                # replay needs it as much as the live fetch does.
+                "metadata": _jsonable(getattr(art, "metadata", None) or {}),
+            }
+        )
 
     baseline_name = f"baseline-v2-{run.id}:latest"
     baseline = api.artifact(f"{entity}/{project}/{baseline_name}")
@@ -644,6 +742,19 @@ def write_full_archive(
                 manifest_path = staging_dir / _MANIFESTS_SUBDIR / f"{run_id}.json"
                 manifest_path.parent.mkdir(parents=True, exist_ok=True)
                 manifest_path.write_text(json.dumps(manifest))
+
+        # Reading a run's artifacts leaves ~500 never-closed requests.Sessions
+        # behind — roughly six per Artifact, most of them from the InternalApi
+        # that WandbStoragePolicy.from_config builds for every artifact and again
+        # for every manifest. Each owns a connection pool holding a keep-alive
+        # socket, and they are reachable only through reference cycles, so
+        # shutting the pool down does not release them: refcounting cannot break
+        # a cycle. The descriptors therefore survive into the zip below, whose
+        # very first os.scandir then dies with EMFILE — which is why this failed
+        # hours in, at the amalgamation, having downloaded everything happily.
+        # Collecting here, where those sessions are finally unreachable, returns
+        # the descriptors before anything else asks for one.
+        gc.collect()
 
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for path in sorted(staging_dir.rglob("*")):
@@ -739,7 +850,7 @@ def _baseline_means(api: wandb.Api, entity: str, project: str, run_id: str) -> p
     return df
 
 
-def _latest_checkpoint_artifact(run: Any) -> tuple[Any, int] | None:
+def _newest_checkpoint(artifacts: list[Any]) -> tuple[Any, int] | None:
     """The newest ``checkpoint-<run_id>`` artifact and the step it holds, or None.
 
     Ordered by the ``step`` that ``save_checkpoint`` records in the artifact
@@ -749,7 +860,7 @@ def _latest_checkpoint_artifact(run: Any) -> tuple[Any, int] | None:
     that cannot supply it cannot be recovered from either.
     """
     best: tuple[Any, int] | None = None
-    for art in run.logged_artifacts():
+    for art in artifacts:
         if "checkpoint-" not in art.name:
             continue
         step = (getattr(art, "metadata", None) or {}).get("step")
@@ -758,6 +869,11 @@ def _latest_checkpoint_artifact(run: Any) -> tuple[Any, int] | None:
         if best is None or int(step) > best[1]:
             best = (art, int(step))
     return best
+
+
+def _latest_checkpoint_artifact(run: Any) -> tuple[Any, int] | None:
+    """``_newest_checkpoint`` over everything a run logged."""
+    return _newest_checkpoint(list(run.logged_artifacts()))
 
 
 def _schedule_arrays_from_checkpoint(run: Any) -> tuple[list[float], list[float]]:
@@ -990,6 +1106,7 @@ class FetchConfig:
 
 
 def main(conf: FetchConfig) -> None:
+    raise_descriptor_limit()
     out_dir = Path(conf.out_dir) if conf.out_dir else CACHE_ROOT / f"{conf.entity}__{conf.project}"
     out_dir.mkdir(parents=True, exist_ok=True)
 

@@ -303,6 +303,262 @@ class TestFetchOneRunInjectedApi:
         assert len(histories) == 2
 
 
+class _FakeSummarySubDict:
+    """Duck-types wandb's SummarySubDict: mapping-ish, but not a dict subclass.
+
+    ``run.summary`` hands nested keys back as these and ``json`` refuses them
+    ("Object of type SummarySubDict is not JSON serializable"), so one run with a
+    nested summary key used to abort the whole archive.
+    """
+
+    def __init__(self, data):
+        self._data = dict(data)
+
+    def keys(self):
+        return self._data.keys()
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+
+class TestManifestIsJsonSerializable:
+    def test_nested_summary_values_survive_json_dumps(self):
+        run = FakeRun()
+        run.summary = {"test-accuracy": 0.9, "gradients": _FakeSummarySubDict({"norm": 1.5})}
+
+        m = build_run_manifest(run)
+
+        assert json.loads(json.dumps(m))["summary"] == {
+            "test-accuracy": 0.9,
+            "gradients": {"norm": 1.5},
+        }
+
+    def test_numpy_scalars_and_arrays_survive_json_dumps(self):
+        run = FakeRun()
+        run.summary = {"acc": np.float32(0.5), "sigmas": np.array([1.0, 2.0])}
+
+        m = build_run_manifest(run)
+
+        assert json.loads(json.dumps(m))["summary"] == {"acc": 0.5, "sigmas": [1.0, 2.0]}
+
+    def test_an_unconvertible_value_degrades_instead_of_sinking_the_run(self):
+        class Exotic:
+            def __repr__(self):
+                return "<exotic>"
+
+        run = FakeRun()
+        run.summary = {"weird": Exotic()}
+
+        assert json.loads(json.dumps(build_run_manifest(run)))["summary"] == {"weird": "<exotic>"}
+
+    def test_archive_survives_a_run_with_a_nested_summary(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        run = FakeRunWithArtifacts()
+        run.summary = {"test-accuracy": 0.9, "grads": _FakeSummarySubDict({"norm": 1.5})}
+        api = FakeApi(run, _baseline_df())
+
+        missing = crf.write_full_archive(["abc123"], api, "e", "p", tmp_path / "a.zip")
+
+        assert missing == []
+        local_api = crf.open_full_archive(tmp_path / "a.zip")
+        assert local_api.run("e/p/abc123").summary["grads"] == {"norm": 1.5}
+
+
+class TestReleasesDescriptorsBeforeZipping:
+    """Downloading a run's artifacts leaves ~500 never-closed requests.Sessions
+    behind (about six per Artifact, from WandbStoragePolicy.from_config). They
+    are reachable only through reference cycles, so their sockets outlive the
+    download pool and the zip loop's first os.scandir dies with EMFILE."""
+
+    def test_collects_after_the_downloads_and_before_the_zip(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        events = []
+        monkeypatch.setattr(crf.gc, "collect", lambda: events.append("collect"))
+
+        real_rglob = Path.rglob
+        monkeypatch.setattr(
+            Path,
+            "rglob",
+            lambda self, pat: (events.append("rglob"), real_rglob(self, pat))[1],
+        )
+
+        run_ids = ["r1", "r2"]
+        api = MultiRunFakeApi([FakeRunWithArtifacts(rid) for rid in run_ids], _baseline_df())
+        crf.write_full_archive(run_ids, api, "e", "p", tmp_path / "a.zip")
+
+        assert events.index("collect") < events.index("rglob")
+
+    def test_collects_even_when_every_run_failed(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        collected = []
+        monkeypatch.setattr(crf.gc, "collect", lambda: collected.append(1))
+        api = MultiRunFakeApi([], _baseline_df(), failing_ids=["bad"])
+
+        crf.write_full_archive(["bad"], api, "e", "p", tmp_path / "a.zip")
+
+        assert collected == [1]
+
+
+class TestRaiseDescriptorLimit:
+    def test_raises_the_soft_limit_to_the_hard_limit(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(crf.resource, "getrlimit", lambda _: (1024, 1048576))
+        monkeypatch.setattr(crf.resource, "setrlimit", lambda _, lim: calls.append(lim))
+
+        crf.raise_descriptor_limit()
+
+        assert calls == [(1048576, 1048576)]
+
+    def test_leaves_an_already_high_soft_limit_alone(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(crf.resource, "getrlimit", lambda _: (1048576, 1048576))
+        monkeypatch.setattr(crf.resource, "setrlimit", lambda _, lim: calls.append(lim))
+
+        crf.raise_descriptor_limit()
+
+        assert calls == []
+
+    def test_a_refused_raise_is_not_fatal(self, monkeypatch):
+        monkeypatch.setattr(crf.resource, "getrlimit", lambda _: (1024, 4096))
+
+        def refuse(_, lim):
+            raise ValueError("not permitted")
+
+        monkeypatch.setattr(crf.resource, "setrlimit", refuse)
+
+        crf.raise_descriptor_limit()  # must not raise
+
+
+class _RunWithChosenArtifacts(FakeRunWithArtifacts):
+    def __init__(self, artifacts, run_id="abc123"):
+        super().__init__(run_id)
+        self._chosen = artifacts
+
+    def logged_artifacts(self):
+        return list(self._chosen)
+
+
+def _tables():
+    return [
+        FakeLoggedArtifact("run-abc123-sigmas:v1", "sigmas", ["step", "0", "1"], [[0, 0.4, 0.5]]),
+        FakeLoggedArtifact("run-abc123-clips:v1", "clips", ["step", "0", "1"], [[0, 1.0, 1.1]]),
+    ]
+
+
+def _checkpoints():
+    return [
+        FakeCheckpointArtifact("checkpoint-abc123:v1", [0.1, 0.2], [1.1, 1.2], step=0),
+        FakeCheckpointArtifact("checkpoint-abc123:v2", [0.2, 0.3], [1.2, 1.3], step=49),
+        FakeCheckpointArtifact("checkpoint-abc123:v3", [0.3, 0.4], [1.3, 1.4], step=999),
+    ]
+
+
+class TestArchiveSkipsSupersededCheckpoints:
+    """A run logs a checkpoint per outer step — 40 of the 55 artifacts on a
+    FirSweep run. Only the newest is ever read back (and only as the fallback
+    when the sigmas/clips tables are missing), so downloading the rest costs
+    hours and gigabytes for bytes nothing reads."""
+
+    def test_keeps_only_the_newest_checkpoint(self, tmp_path):
+        run = _RunWithChosenArtifacts(_tables() + _checkpoints())
+
+        manifest = crf._dump_run_to_dir(
+            run, FakeApi(run, _baseline_df()), "e", "p", tmp_path / "abc123"
+        )
+
+        logged = [a["name"] for a in manifest["artifacts"] if a["kind"] == "logged"]
+        assert "checkpoint-abc123:v3" in logged
+        assert "checkpoint-abc123:v1" not in logged
+        assert "checkpoint-abc123:v2" not in logged
+
+    def test_keeps_every_non_checkpoint_artifact(self, tmp_path):
+        run = _RunWithChosenArtifacts(_tables() + _checkpoints())
+
+        manifest = crf._dump_run_to_dir(
+            run, FakeApi(run, _baseline_df()), "e", "p", tmp_path / "abc123"
+        )
+
+        logged = [a["name"] for a in manifest["artifacts"] if a["kind"] == "logged"]
+        assert "run-abc123-sigmas:v1" in logged
+        assert "run-abc123-clips:v1" in logged
+
+    def test_superseded_checkpoints_are_never_downloaded(self, tmp_path):
+        downloaded = []
+
+        class Watched(FakeCheckpointArtifact):
+            def download(self, root=None):
+                downloaded.append(self.name)
+                return super().download(root)
+
+        arts = [
+            Watched("checkpoint-abc123:v1", [0.1, 0.2], [1.1, 1.2], step=0),
+            Watched("checkpoint-abc123:v3", [0.3, 0.4], [1.3, 1.4], step=999),
+        ]
+        run = _RunWithChosenArtifacts(_tables() + arts)
+
+        crf._dump_run_to_dir(run, FakeApi(run, _baseline_df()), "e", "p", tmp_path / "abc123")
+
+        assert downloaded == ["checkpoint-abc123:v3"]
+
+    def test_a_run_with_no_checkpoints_is_unaffected(self, tmp_path):
+        run = _RunWithChosenArtifacts(_tables())
+
+        manifest = crf._dump_run_to_dir(
+            run, FakeApi(run, _baseline_df()), "e", "p", tmp_path / "abc123"
+        )
+
+        logged = [a["name"] for a in manifest["artifacts"] if a["kind"] == "logged"]
+        assert logged == ["run-abc123-sigmas:v1", "run-abc123-clips:v1"]
+
+    def test_checkpoints_without_a_recorded_step_are_dropped(self, tmp_path):
+        # _schedule_arrays_from_checkpoint refuses these anyway — it cannot show
+        # they are the run's last — so keeping them archives unreadable bytes.
+        run = _RunWithChosenArtifacts(
+            [
+                *_tables(),
+                FakeCheckpointArtifact("checkpoint-abc123:v1", [0.1], [1.1], with_metadata=False),
+            ]
+        )
+
+        manifest = crf._dump_run_to_dir(
+            run, FakeApi(run, _baseline_df()), "e", "p", tmp_path / "abc123"
+        )
+
+        logged = [a["name"] for a in manifest["artifacts"] if a["kind"] == "logged"]
+        assert not any("checkpoint" in name for name in logged)
+
+
+class TestArchivedCheckpointStaysReadable:
+    """Keeping the newest checkpoint is only worth anything if the replay can
+    still use it, and the fallback is driven off the artifact's ``step``
+    metadata — which LocalArtifact did not carry."""
+
+    def test_the_kept_checkpoint_keeps_its_step_metadata(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        run = _RunWithChosenArtifacts(_tables() + _checkpoints())
+        api = FakeApi(run, _baseline_df())
+
+        crf.write_full_archive(["abc123"], api, "e", "p", tmp_path / "a.zip")
+        local = crf.open_full_archive(tmp_path / "a.zip")
+
+        (art,) = [a for a in local.run("e/p/abc123").logged_artifacts() if "checkpoint" in a.name]
+        assert art.metadata == {"step": 999, "run_id": "abc123"}
+
+    def test_a_tableless_run_still_replays_from_its_checkpoint(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(crf, "ARTIFACT_ROOT", tmp_path / "artifacts")
+        run = _RunWithChosenArtifacts(_checkpoints())
+        api = FakeApi(run, _baseline_df())
+        live = crf._fetch_one_run("e", "p", "abc123", api=api)
+
+        crf.write_full_archive(["abc123"], api, "e", "p", tmp_path / "a.zip")
+        replay = crf._fetch_one_run(
+            "e", "p", "abc123", api=crf.open_full_archive(tmp_path / "a.zip")
+        )
+
+        assert replay == live
+        assert live[1][0]["schedule_source"] == "checkpoint"
+
+
 class TestFullArchiveRoundTrip:
     """Deletion is lossless iff a fetch from the archive == a fetch from W&B."""
 
