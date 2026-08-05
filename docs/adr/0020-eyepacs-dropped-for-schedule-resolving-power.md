@@ -254,6 +254,16 @@ off.
   point. The retained negative control is the *control* evidence — `check2_control` and
   `arch_control` JSON under `results/diagnostics/2026-08-05-target-floors/` — which is what
   the headroom half of the criterion is read from anyway.
+- **The ImageNet-32 gate is a judgement call, not a pre-registered threshold**, and the
+  two halves of the criterion differ in kind here. EyePACS failed **headroom**, which needs
+  no threshold — it returned the majority rate *exactly*, at every learning rate, with the
+  mechanism on and off, at 1.9× capacity. ImageNet-32 will be judged on **separation**,
+  where no numeric bar was fixed in advance; a candidate rule (max−min reference gap ≥ 3×
+  pooled per-seed sd, plus p < 0.01, which CheXpert clears at 3.07σ and p = 1.4e-4) was
+  considered and deliberately not adopted. What limits the latitude is the direction of the
+  incentive: dropping ImageNet-32 collapses the matrix to a single dataset, so the pressure
+  runs toward *admitting* it. A judgement call biased toward inclusion is the safe
+  orientation for this particular decision, but it should be reported as a judgement.
 - **ImageNet-32's curve stage is gated on its reference separation.** Its nine reference
   sweeps run first and must show separation before its 744 curve cells are committed. The
   compute argument is nearly neutral — the references are ~10 GPU-h against ~42 for the
