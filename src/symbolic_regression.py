@@ -2,6 +2,7 @@ import json
 import os
 import pickle
 import subprocess
+import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -244,6 +245,12 @@ def run_regression(
     runtime_kwargs = {
         "timeout_in_seconds": conf.timeout_in_seconds,
         "niterations": conf.niterations,
+        # PySR's live Hall-of-Fame display redraws via ANSI cursor codes, which a
+        # terminal overwrites in place but a redirected stream appends forever. Under
+        # SLURM that wrote 860 MB in 3 hours (~844 lines/s) per job, and on 2026-08-04
+        # two syntheses filled the filesystem and were killed mid-search at the same
+        # instant, losing both fronts. Keep the display when someone is watching.
+        "progress": sys.stdout.isatty(),
     }
 
     if procs > 0:

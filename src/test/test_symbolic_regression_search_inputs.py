@@ -233,3 +233,51 @@ def test_launcher_and_script_agree_on_every_identity_field(sr_starter):
             f"{name} default differs: launcher {launcher[name].default!r} "
             f"vs script {script[name].default!r}"
         )
+
+
+class _Stream:
+    """A stdout stand-in with a settable tty-ness."""
+
+    def __init__(self, tty: bool):
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+    def write(self, text: str) -> int:
+        return len(text)
+
+    def flush(self) -> None:
+        pass
+
+
+class TestProgressFollowsTheOutputStream:
+    """PySR's Hall-of-Fame display redraws itself with ANSI cursor codes. A terminal
+    overwrites in place; a redirected stream appends every frame forever. On
+    2026-08-04 that put 860 MB into a single 3-hour SLURM log, filled the
+    filesystem, and killed two syntheses mid-search — both fronts lost, with no
+    resumption available in template mode (ADR 0017). The display is worth keeping
+    when a human is actually watching it, and only then.
+    """
+
+    def test_a_redirected_run_writes_no_progress_frames(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sys, "stdout", _Stream(tty=False))
+
+        kwargs = _search_space(monkeypatch, tmp_path)
+
+        assert kwargs["progress"] is False
+
+    def test_an_interactive_run_keeps_the_display(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sys, "stdout", _Stream(tty=True))
+
+        kwargs = _search_space(monkeypatch, tmp_path)
+
+        assert kwargs["progress"] is True
+
+    def test_progress_is_not_a_synthesis_identity_field(self):
+        """Whether anyone was watching must not change the slug — otherwise an
+        interactive rerun would warm-start from a different directory than the
+        batch job it was meant to continue (ADR 0005)."""
+        from sr_identity import IDENTITY_FIELDS
+
+        assert "progress" not in IDENTITY_FIELDS

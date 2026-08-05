@@ -811,3 +811,65 @@ class TestPreflightCommand:
         after = tokens[tokens.index("--datasets") + 1 :]
         named = list(itertools.takewhile(lambda t: not t.startswith("--"), after))
         assert named == ["chexpert", "eyepacs"]
+
+
+class TestCurveCostIsKeyedByTargetDataset:
+    """The dry-run estimate must price a curve task by the target it runs against.
+
+    The 2026-08-04 probe measured one curve cell per target at eps=10, T=5000: eyepacs
+    1:14:11, imagenet 3:18, chexpert 1:38 — a 46x spread driven by input resolution.
+    A single scalar for the stage is therefore not a rounding error but a wrong answer
+    for two of the three targets, and it is the estimate going unchecked against the
+    wall clock that hid an unfinishable stage the first time.
+    """
+
+    def _module(self):
+        return _load_launcher(_LAUNCHERS["slurm"])
+
+    def test_each_target_is_priced_from_its_own_measurement(self):
+        module = self._module()
+
+        priced = {
+            dataset: module._job_gpu_hours(
+                "curve", Job(stage="curve", args=f"--target {dataset} --target_eps 10", cells=())
+            )
+            for dataset in ("eyepacs", "imagenet", "chexpert")
+        }
+
+        assert priced == module._CURVE_GPU_HOURS
+
+    def test_an_unmeasured_target_falls_back_to_the_dearest_one(self):
+        # Over-estimating a new target is recoverable; under-estimating it reproduces
+        # exactly the failure this table exists to prevent.
+        module = self._module()
+
+        cost = module._job_gpu_hours(
+            "curve", Job(stage="curve", args="--target cifar-10 --target_eps 10", cells=())
+        )
+
+        assert cost == max(module._CURVE_GPU_HOURS.values())
+
+    def test_a_curve_task_with_no_target_flag_still_prices(self):
+        module = self._module()
+
+        cost = module._job_gpu_hours("curve", Job(stage="curve", args="--source_id abc", cells=()))
+
+        assert cost == module._GPU_HOURS["curve"]
+
+    def test_other_stages_stay_flat_per_task(self):
+        module = self._module()
+
+        for stage in ("equation", "reference"):
+            job = Job(stage=stage, args="--target eyepacs", cells=())
+
+            assert module._job_gpu_hours(stage, job) == module._GPU_HOURS[stage]
+
+    def test_no_curve_estimate_exceeds_the_curve_wall_clock(self):
+        # An estimate above the wall means the stage cannot finish; a curve task has
+        # no resumption, so it would write nothing at all.
+        module = self._module()
+        clock = module._WALLTIMES["curve"].split("-")[1]
+        hours, minutes, seconds = (int(part) for part in clock.split(":"))
+        wall_hours = hours + minutes / 60 + seconds / 3600
+
+        assert max(module._CURVE_GPU_HOURS.values()) < wall_hours
