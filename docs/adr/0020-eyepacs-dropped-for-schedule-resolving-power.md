@@ -254,6 +254,16 @@ off.
   point. The retained negative control is the *control* evidence — `check2_control` and
   `arch_control` JSON under `results/diagnostics/2026-08-05-target-floors/` — which is what
   the headroom half of the criterion is read from anyway.
+- **The relaunch ships the curve and reference producers only.** The equation producer is
+  blocked on arm-scoped syntheses: the FirSweep SR outputs carry 32 conditions keyed
+  `(dataset, eps, T, arch_label)` with no `arm`, so they cannot yield the per-regime-arm
+  predictions ADR 0018/0019's schema needs, and both of their `hall_of_fame.csv` files were
+  truncated to 0 bytes by an interrupted PySR rotation (the equations survive in the
+  adjacent `.bak`, and no `equations.csv` was ever persisted — see `36be7e6`). Replacement
+  arm-scoped syntheses are running; equation cells are added when they land. The core
+  transfer claim rests on curve-vs-reference and does not wait for them. Note the chosen
+  budget points are all on the source condition grid, so nothing about this deferral
+  forecloses the equation stage later.
 - **The ImageNet-32 gate is a judgement call, not a pre-registered threshold**, and the
   two halves of the criterion differ in kind here. EyePACS failed **headroom**, which needs
   no threshold — it returned the majority rate *exactly*, at every learning rate, with the

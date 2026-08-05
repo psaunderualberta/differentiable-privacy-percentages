@@ -117,7 +117,13 @@ _WALLTIMES = {
 # eyepacs is retained here although ADR 0020 dropped it as a column: it is real
 # measured data and it is the fallback, so an unknown dataset over-estimates rather
 # than under-.
-# The other three stages remain analytic (±3×) until they are measured the same way.
+# The other three stages remain analytic and are now badly stale, because they were
+# sized while eyepacs dominated. Priced off the measured per-inner-training cost
+# (a curve cell is num_reps=3 trainings, so chexpert is ~0.01/training), a
+# reference-candidate at SWEEP_SCORING_ITERATIONS=3 should cost ~0.03-0.06 GPU-h, not
+# 1.3 — roughly 25x over. Left as-is deliberately: these are dry-run estimates only,
+# over-estimating is the safe direction, and the honest fix is a probe wave, not a
+# smaller guess. Do not trust the reference/equation lines of a --dry-run total.
 _MEASURED_T = 5000
 _CURVE_GPU_HOURS = {"eyepacs": 1.24, "imagenet": 0.06, "chexpert": 0.03}
 _GPU_HOURS = {
