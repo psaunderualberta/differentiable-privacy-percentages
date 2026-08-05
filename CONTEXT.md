@@ -302,11 +302,19 @@ criterion is judged without touching the transfer claim. A target that fails it 
 the same accuracy whatever schedule it is given, and every cell in its column is
 measuring nothing (ADR 0007).
 
+It has two parts, and they are not interchangeable. **Headroom** — does any schedule beat
+the target's majority-class floor? — is *necessary*, and one native schedule measures it.
+**Separation** — do differently-shaped schedules give different answers? — is *sufficient*,
+and needs the full reference set. A target with no headroom cannot have separation, so
+failing the first part settles the question on its own; passing it settles nothing.
+
 It is a property of the **target regime**, not the dataset: the surrogate architecture
-is part of the regime, so "no resolving power" always means "under this surrogate", never
+is part of the regime, so "no resolving power" always means "under this regime", never
 "this dataset is unlearnable". Do **not** measure it as the gap between a non-private
 control and a DP run — those two differ in hyperparameter tuning as well as in privacy,
-so the difference confounds the mechanism with the search.
+so the difference confounds the mechanism with the search. Do not measure it with a
+**transferred curve** either: that is the very thing the target is being qualified to
+judge (ADR 0020).
 _Avoid_: resolving power (unqualified), signal, sensitivity, dynamic range.
 
 ### Adaptive clipping

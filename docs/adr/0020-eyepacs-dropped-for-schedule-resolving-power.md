@@ -45,12 +45,38 @@ Two things about how it is measured matter enough to state:
 Constant vs Dynamic-DPSGD: **−1.093 pp, p = 1.4e-4, Cohen's d = −2.65**. Schedule shape
 moves CheXpert by roughly 1 pp against a seed sd of ~0.35 pp. It resolves schedules.
 
-**ImageNet-32**, against 1.0% uniform chance / 1.125% majority: a correctly seated
-transferred curve reaches 16.0% and a constant DP schedule 14.5% — ~15 pp of range.
-ADR 0007's 64×64 escalation trigger is therefore **not** fired; it appeared to fire only
-on cells corrupted by the `seat_on_budget` units bug (fixed in `f44d39a`).
+**ImageNet-32**, against 1.0% uniform chance / 1.125% majority: a **native constant DP
+schedule reaches 14.5%**, i.e. ~13 pp clear of the floor. ADR 0007's 64×64 escalation
+trigger is therefore **not** fired; it appeared to fire only on cells corrupted by the
+`seat_on_budget` units bug (fixed in `f44d39a`).
 
-**EyePACS** scores zero range by construction: every arm returns 73.982%.
+**EyePACS** scores zero range: every arm returns 73.982%, which *is* the floor.
+
+### The criterion has two parts, and only one of them is settled for ImageNet-32
+
+Being scrupulous about this matters, because the temptation is to admit ImageNet-32 on
+evidence of the wrong kind:
+
+1. **Headroom above the floor** (necessary). Can *any* schedule beat the majority rate?
+   This is measurable from a single native schedule. CheXpert clears it (69.6% vs 60.07%),
+   ImageNet-32 clears it decisively (14.5% vs 1.125%), and **EyePACS fails it outright** —
+   its best result at any learning rate, with or without the privacy mechanism, at 1.9×
+   capacity, is exactly the floor.
+2. **References actually separate** (sufficient). Do differently-shaped schedules give
+   *different* answers? This needs the full reference set. **CheXpert has it** (1.09 pp at
+   p = 1.4e-4). **ImageNet-32 does not yet** — only its Constant reference has been run;
+   the Dynamic-DPSGD and Median cells are outstanding.
+
+**The EyePACS decision turns only on part 1**, which is measured, unambiguous, and
+independent of anything ImageNet-32 does. A target with zero headroom cannot have
+separation, so no further measurement could rescue it.
+
+ImageNet-32's admission is therefore **provisional on part 2**. This is a live risk worth
+naming: if its references come back flat, the matrix collapses to a single target column
+and the generalisation claim would need rethinking — not a rescue of EyePACS, which has
+already failed the weaker test. Earlier drafts of this ADR cited a *transferred curve*
+(16.0%) as ImageNet-32 evidence; that is exactly the contamination the criterion forbids,
+and it has been removed.
 
 ## The evidence for EyePACS
 
