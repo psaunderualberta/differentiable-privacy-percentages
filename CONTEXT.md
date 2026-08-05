@@ -219,6 +219,10 @@ evaluated under. The two are independent: transferring a source policy onto a ta
 whose (ε, T) differs from its own is the cross-regime question the matrix exists to
 answer. **Condition** is the symbolic-regression name for the same tuple (the key the
 template's constants are indexed by), not a separate concept.
+
+The **arm** is part of a source regime's identity even though `_REGIME_COLUMNS` omits
+it: the two arms' schedule shapes differ enough that pooling them turns generalization
+consistency into a measure of arm separation instead.
 _Avoid_: using "regime" for the three Constant / DynamicDPSGD / StatefulMedianGradient
 schedules — those are **transfer references**.
 
@@ -227,10 +231,17 @@ The full descriptive source-policy × target-dataset grid of matched-privacy
 downstream accuracies. Read off, not selected from; no per-target winner is picked
 by target accuracy. **Every** source policy is transferred — there is no best-of-regime
 selection step (selecting on a source accuracy number would bias toward source-overfit
-shapes that transfer worst). Rows are grouped by regime; the spread of transfer
-accuracies *within* a regime is itself a reported signal — the **generalization
-consistency** of that regime's learned shape.
+shapes that transfer worst). Rows are grouped by regime, and each regime reports its
+**generalization consistency**.
 _Avoid_: transfer grid, results table.
+
+**Generalization consistency**:
+The spread of transfer accuracies across the *source policies* of one regime at one
+target — how reproducibly that regime's learned shape transfers. Distinct from
+**evaluation noise**, the spread across the evaluation reps of a *single* policy,
+which measures only DP-SGD's own run-to-run variance. Both are standard deviations
+over accuracy, so always name which one a bar or ± figure shows.
+_Avoid_: spread (unqualified), variance, error bar.
 
 **Source policy**:
 The row unit of the transfer matrix: one learned run's final length-T σ/clip

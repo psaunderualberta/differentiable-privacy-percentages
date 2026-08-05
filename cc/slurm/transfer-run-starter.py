@@ -77,7 +77,12 @@ _WALLTIMES = {
 }
 
 # Rough per-task GPU-hours, used only for the --dry-run estimate (analytic, ±3×).
-_GPU_HOURS = {"curve": 0.6, "equation": 1.2, "reference": 1.7}
+# Per *task*, which is not per cell for every stage: a curve task is one source
+# policy (one cell), but an equation task walks every condition at its target and a
+# reference task sweeps before it evaluates, so those two scale with what the task
+# bundles. Keep these honest against the wall clocks in _WALLTIMES — an estimate
+# below the clock is what hides a stage whose tasks cannot finish in time.
+_GPU_HOURS = {"curve": 0.8, "equation": 1.2, "reference": 1.7}
 
 
 @dataclass

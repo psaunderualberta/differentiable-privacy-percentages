@@ -255,11 +255,22 @@ def _cells(producer: str, source_ids, target: Target) -> tuple[str, ...]:
 
 
 def curve_jobs(regimes: list[SourceRegime], targets: list[Target], args: ProducerArgs) -> list[Job]:
-    """One curve job per source regime × target.
+    """One curve job per source *policy* × target.
 
-    The regime is passed as a *filter* rather than a run-id list: the producer
-    re-reads ``schedules.parquet`` and transfers every policy matching the regime,
-    so the job's identity survives the parquet gaining more seeds.
+    The regime stays the unit of *analysis* — ADR 0008 transfers every policy in it
+    and the assembler reports their spread as the regime's generalization
+    consistency — but it is not the unit of *scheduling*. ``transfer_curve`` walks
+    its selected policies serially, so a regime-sized job costs (seeds × one
+    evaluation) and blows a fixed wall clock as soon as a regime has more seeds than
+    the clock has room for. Per-policy tasks bound a task's cost at one evaluation
+    and, since a task then owns exactly one cell, let :func:`drop_finished` resume a
+    partial run at cell granularity instead of recomputing a regime's finished
+    seeds.
+
+    The cost is that the run ids are resolved at launch time: a policy added to
+    ``schedules.parquet`` after submission needs a relaunch to be picked up, where a
+    regime filter would have swept it in. Cells are keyed on the run id either way,
+    so what lands on disk is unchanged.
     """
     return [
         Job(
@@ -267,16 +278,14 @@ def curve_jobs(regimes: list[SourceRegime], targets: list[Target], args: Produce
             args=(
                 "uv run --no-sync transfer_curve.py"
                 f" --schedules_parquet {shlex.quote(args.schedules_parquet)}"
-                f" --source_dataset {shlex.quote(regime.dataset)}"
-                f" --source_eps {regime.eps:g}"
-                f" --source_T {regime.T}"
-                f" --source_arch {shlex.quote(regime.arch)}"
+                f" --source_run_id {shlex.quote(run_id)}"
                 f" {_target_flags(target)}"
                 f" {args.shared_flags()}"
             ),
-            cells=_cells("curve", regime.run_ids, target),
+            cells=_cells("curve", [run_id], target),
         )
         for regime in regimes
+        for run_id in regime.run_ids
         for target in targets
     ]
 
@@ -463,9 +472,14 @@ if [ -z "$CMD" ]; then
 fi
 echo "cmd: $CMD"
 
+# Exit with the producer's status, not the trailing echo's. The DAG is wired with
+# `afterok`, so a task that swallowed a non-zero status would report success and let
+# the assembler run over cells that were never written.
 time eval "$CMD"
+status=$?
 
-echo "Job finished with exit code $? at: `date`"
+echo "Job finished with exit code $status at: `date`"
+exit $status
 """.strip()
 
 
@@ -500,9 +514,12 @@ def serial_sbatch(
 echo "Current working directory: `pwd`"
 echo "Starting transfer '{name}' at: `date`"
 
+# Exit with the command's status — see array_sbatch.
 time {command}
+status=$?
 
-echo "Job finished with exit code $? at: `date`"
+echo "Job finished with exit code $status at: `date`"
+exit $status
 """.strip()
 
 

@@ -209,11 +209,14 @@ def _parse(config_cls, job):
 
 
 class TestCurveJobs:
-    """A curve job is one source regime × one target (settled launch design). Its
-    command must select exactly that regime, and it owns one cell per seed-policy
-    in the regime."""
+    """A curve job is one source *policy* × one target. The regime remains the unit
+    of analysis — the assembler still reports the spread across a regime's seeds —
+    but it is not the unit of scheduling: a regime's policies are evaluated serially
+    within a task, so a regime-sized job scales its runtime with the seed count and
+    overruns the wall clock. One policy per task keeps a task's cost bounded by a
+    single evaluation and lets the skip filter resume at cell granularity."""
 
-    def test_one_job_per_regime_target_selecting_that_regime(self):
+    def test_one_job_per_policy_target_selecting_that_policy(self):
         from transfer_curve import CurveCellConfig
 
         regimes = [
@@ -226,28 +229,39 @@ class TestCurveJobs:
             regimes, targets, ProducerArgs(cache_root="/c", schedules_parquet="/s.pq")
         )
 
-        assert len(jobs) == 4
+        # 3 policies x 2 targets, not 2 regimes x 2 targets.
+        assert len(jobs) == 6
         conf = _parse(CurveCellConfig, jobs[0])
-        assert (conf.source_dataset, conf.source_eps, conf.source_T, conf.source_arch) == (
-            "mnist",
-            1.0,
-            200,
-            "cnn",
-        )
+        assert conf.source_run_id == "runA"
         assert (conf.target, conf.target_eps, conf.target_T) == ("eyepacs", 4.0, 5000)
         assert conf.schedules_parquet == "/s.pq"
         assert conf.cache_root == "/c"
 
-    def test_a_job_owns_one_cell_per_seed_policy_in_its_regime(self):
+    def test_a_job_owns_exactly_the_cell_its_policy_writes(self):
         regimes = [SourceRegime("mnist", 1.0, 200, "cnn", ("runA", "runB"))]
         targets = [Target("eyepacs", eps=4.0, T=5000)]
 
-        (job,) = curve_jobs(regimes, targets, ProducerArgs(cache_root="/c"))
+        jobs = curve_jobs(regimes, targets, ProducerArgs(cache_root="/c"))
 
-        assert job.cells == (
-            "transfer/curve/runA__eyepacs__eps4_T5000.parquet",
-            "transfer/curve/runB__eyepacs__eps4_T5000.parquet",
-        )
+        assert [job.cells for job in jobs] == [
+            ("transfer/curve/runA__eyepacs__eps4_T5000.parquet",),
+            ("transfer/curve/runB__eyepacs__eps4_T5000.parquet",),
+        ]
+
+    def test_a_finished_policy_is_skipped_without_holding_back_its_regime(self, tmp_path):
+        # The point of per-policy jobs: one seed timing out no longer forces its
+        # regime-mates to be recomputed on the relaunch.
+        regimes = [SourceRegime("mnist", 1.0, 200, "cnn", ("runA", "runB"))]
+        targets = [Target("eyepacs", eps=4.0, T=5000)]
+        done = tmp_path / "transfer" / "curve"
+        done.mkdir(parents=True)
+        (done / "runA__eyepacs__eps4_T5000.parquet").touch()
+
+        jobs = curve_jobs(regimes, targets, ProducerArgs(cache_root=str(tmp_path)))
+
+        assert [job.cells for job in drop_finished(jobs, tmp_path)] == [
+            ("transfer/curve/runB__eyepacs__eps4_T5000.parquet",)
+        ]
 
 
 _CONDITIONS = [
@@ -398,6 +412,15 @@ class TestArraySbatch:
         assert "#SBATCH --dependency=afterok:12345" in script
         assert "singleton" not in script
 
+    def test_the_task_exits_with_its_command_status(self):
+        # The whole DAG is wired with `afterok`, which reads the task's exit status.
+        # A trailing `echo` would make every task exit 0 and a failed producer would
+        # report success, so the status must be captured and re-raised.
+        script = self._script()
+
+        assert script.rstrip().endswith("exit $status")
+        assert "status=$?" in script
+
 
 class TestSerialSbatch:
     """The preflight and the plot assembler are single CPU jobs, not arrays. The
@@ -433,6 +456,14 @@ class TestSerialSbatch:
         script = self._script(name="plot", prerequisites=("11", "22", "33"))
 
         assert "#SBATCH --dependency=afterok:11,22,33" in script
+
+    def test_the_job_exits_with_its_command_status(self):
+        # Same contract as the array script: `afterok` is only meaningful if a
+        # failing command actually fails the job.
+        script = self._script()
+
+        assert script.rstrip().endswith("exit $status")
+        assert "status=$?" in script
 
 
 _LAUNCHERS = {
