@@ -293,6 +293,21 @@ position. Scoring and final evaluation use disjoint keys, so a winner's reported
 number is never the draw that selected it.
 _Avoid_: trial, sweep run, sample (reserve "sample" for minibatch sampling).
 
+**Target regime**:
+One **column** of the transfer matrix, and the unit `expand_targets` yields: the triple
+(target dataset, ε, T). `plot_matrix` states it directly — "rows are source regime-arms,
+columns are target regimes". Six of them is *not* six targets: the three budget points
+inside a dataset share its data, surrogate architecture and accuracy floor, so they are
+one dataset's worth of generalisation evidence at three budgets.
+_Avoid_: "column" as a count of anything but target regimes — it collides with
+**budget point**.
+
+**Budget point**:
+An (ε, T) pair, independent of dataset. The current grid is three of them: ε=10 with
+T ∈ {2000, 5000, 7000}. Distinct from a **target regime**, which pairs a budget point
+with a dataset. "Three columns" is the error this pair of terms exists to prevent —
+three budget points across two datasets is *six* columns.
+
 **Schedule-resolving power**:
 Whether a target regime can measure a schedule at all: do differently-shaped schedules
 run natively on it, at its own budget, separate by more than **evaluation noise**? It

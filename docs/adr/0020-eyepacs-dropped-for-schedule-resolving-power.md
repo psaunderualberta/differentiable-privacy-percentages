@@ -5,7 +5,8 @@ majority-class rate under *every* schedule it has been given — including with 
 Gaussian mechanism switched off entirely — so no cell in its column can measure a
 difference between schedules. The remaining targets are **CheXpert** and
 **ImageNet-32**, and the compute this frees is spent widening the budget axis rather
-than banked — so the matrix stays 6 columns, now 2 datasets × 3 values of T.
+than banked — so the matrix stays 6 **target regimes**, now 2 datasets × 3 budget points
+(ε=10, T ∈ {2000, 5000, 7000}) rather than 3 datasets × 2.
 
 This supersedes the EyePACS bullet of ADR 0007 ("used as-is ... the one target that is
 natively a from-scratch small-CNN task") and its Consequences prescription to validate
@@ -72,7 +73,7 @@ independent of anything ImageNet-32 does. A target with zero headroom cannot hav
 separation, so no further measurement could rescue it.
 
 ImageNet-32's admission is therefore **provisional on part 2**. This is a live risk worth
-naming: if its references come back flat, the matrix collapses to a single target column
+naming: if its references come back flat, the matrix collapses to a single target dataset
 and the generalisation claim would need rethinking — not a rescue of EyePACS, which has
 already failed the weaker test. Earlier drafts of this ADR cited a *transferred curve*
 (16.0%) as ImageNet-32 evidence; that is exactly the contamination the criterion forbids,
@@ -205,13 +206,15 @@ off.
   clip only — **not** learning rate — and under DP-PSAC the update is ∝ C·lr while the
   noise std is ∝ C, so clip and lr are the same axis. The control already swept a decade
   of it. This buys a wider search on an axis already covered, for a predictable answer.
-- **Keeping EyePACS as a documented floored target.** Rejected as a *column*: 248 policies
-  × 1 column of cells that cannot differ is a third of the curve stage spent measuring
-  nothing. But see Consequences — the already-computed reference cells are kept.
+- **Keeping EyePACS as a documented floored target.** Rejected as a *target regime*: 248
+  policies × its regimes, all of them cells that cannot differ, is 93% of the curve stage
+  spent measuring nothing. But see Consequences — the already-computed reference cells
+  are kept.
 - **Replacing EyePACS with a fourth target.** Rejected for now: it re-opens the
   surrogate-regime design work ADR 0007 settled, and CheXpert + ImageNet-32 span
   medical/natural, binary/100-class, and 5.2×/3.9× MNIST input scale. Revisit only if
-  the two-column matrix proves too thin to support the generalisation claim.
+  the two-*dataset* matrix proves too thin to support the generalisation claim. Note the
+  six target regimes do not make it a six-target matrix.
 
 ## Consequences
 
@@ -256,5 +259,7 @@ off.
   `expand_targets` in `src/transfer_launch.py`), so the drop is a launch-flag change.
   Remaining `eyepacs` mentions in `src/transfer_*.py` are docstring examples and test
   fixtures using it as an arbitrary name; neither needs changing.
-- The generalisation claim now rests on two target columns. This is thin, and is the
+- The generalisation claim now rests on two target **datasets** (six target regimes,
+  but a regime is not an independent target — the three budget points within a dataset
+  share its data, surrogate and floor). This is thin, and is the
   first thing to revisit if the matrix under-delivers.
