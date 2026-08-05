@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Self
 
 import jax.numpy as jnp
+import numpy as np
 import optimistix as optx
 import pandas as pd
 from jaxtyping import Array
@@ -273,15 +274,28 @@ def build_target_config(target: "TargetSpec", batch_size: int):
 
 
 def seat_on_budget(sigmas: Array, privacy_params: GDPPrivacyParameters) -> Array:
-    """Scale a sigma curve onto the target DP-PSAC budget, then project.
+    """Scale a **noise-multiplier** curve onto the target DP-PSAC budget, then project.
+
+    ``sigmas`` here is the per-step *multiplier* ``s = sigma_noise / clip``, the same
+    unit ``project_inverse_sigmas`` takes — **not** the raw noise scale. The GDP
+    budget is ``sum_i exp((C_i/sigma_i)^2) = sum_i exp(1/s_i^2)``, so callers holding
+    raw sigmas must divide by their clips first and multiply the result back
+    (see ``transfer_curve.build_curve_schedule``). Passing raw sigma silently
+    substitutes ``C_i := 1`` and over-noises the curve by ~10x.
 
     ``project_inverse_sigmas`` enforces only the *inequality*
-    ``sum_i exp(1/sigma_i^2) <= (mu/p)^2 + T`` — a feasible-but-slack (over-noised)
+    ``sum_i exp(1/s_i^2) <= (mu/p)^2 + T`` — a feasible-but-slack (over-noised)
     source curve passes through untouched, under-spending the target budget. So we
     first bind the boundary by a single monotonic scale factor ``c`` solving
-    ``sum_i exp(1/(c*sigma_i)^2) = (mu/p)^2 + T`` (the sum is strictly decreasing in
+    ``sum_i exp(1/(c*s_i)^2) = (mu/p)^2 + T`` (the sum is strictly decreasing in
     ``c``), which preserves the curve's shape, then apply ``project_inverse_sigmas``
     to land exactly on the feasible boundary.
+
+    Raises:
+        ValueError: if the seated curve does not actually bind the budget. The
+            bisection is bracketed and runs with ``throw=False``, so an unreachable
+            root would otherwise be returned as the bracket ceiling and ship a
+            silently over-noised schedule.
     """
     sigmas = jnp.asarray(sigmas)
     bound = (privacy_params.mu / privacy_params.p) ** 2 + privacy_params.T
@@ -305,7 +319,19 @@ def seat_on_budget(sigmas: Array, privacy_params: GDPPrivacyParameters) -> Array
     # exact no-op. Without this the scaled sum can sit ~1e-7 *over* bound, tripping
     # project_inverse_sigmas' exact feasibility test and its fragile over-correction.
     c = c * (1.0 + 1e-6)
-    return privacy_params.project_inverse_sigmas(c * sigmas)
+    seated = privacy_params.project_inverse_sigmas(c * sigmas)
+
+    # The bisection cannot signal failure (throw=False), so verify the postcondition
+    # the whole function exists to establish: the budget is actually spent.
+    used = float(jnp.sum(jnp.exp(1.0 / jnp.asarray(seated) ** 2)))
+    if not np.isfinite(used) or used < 0.99 * float(bound):
+        raise ValueError(
+            f"seat_on_budget did not bind the budget: spent {used:.6g} of "
+            f"{float(bound):.6g} ({100 * used / float(bound):.4f}%). The bracketed "
+            f"bisection returned c={float(c):.6g}, likely its ceiling. Check that "
+            f"`sigmas` is the multiplier sigma/clip and not the raw noise scale."
+        )
+    return seated
 
 
 class RawArraySchedule(AbstractNoiseAndClipSchedule):

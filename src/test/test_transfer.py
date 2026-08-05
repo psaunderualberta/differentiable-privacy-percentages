@@ -1,6 +1,7 @@
 import jax.numpy as jnp
 import numpy as np
 import pandas as pd
+import pytest
 
 from policy.schedules.abstract import AbstractNoiseAndClipSchedule
 from privacy.gdp_privacy import GDPPrivacyParameters
@@ -97,6 +98,23 @@ class TestSeatOnBudget:
         seated = seat_on_budget(sigmas, pp)
         seated_scaled = seat_on_budget(10.0 * sigmas, pp)
         np.testing.assert_allclose(seated, seated_scaled, rtol=1e-4)
+
+    def test_raises_rather_than_silently_returning_an_unbound_seating(self):
+        """The bisection is bracketed; an unreachable root must not pass silently.
+
+        ``optx.root_find(..., throw=False)`` returns its bracket ceiling when it
+        cannot bracket a sign change, which is exactly how the units bug shipped a
+        10x over-noised curve with nothing complaining. Seating must verify that the
+        budget it claims to bind actually binds.
+        """
+        pp = GDPPrivacyParameters(eps=10.0, delta=1e-7, p=0.001953, T=64)
+        # Even at the bracket ceiling c=10 these still spend far more than the bound
+        # (exp(1/(10*0.01)^2) = e^100 per step), so the root lies outside [1e-6, 10]
+        # and the bisection has nothing to return but its ceiling.
+        degenerate = jnp.full((pp.T,), 0.01)
+
+        with pytest.raises(ValueError, match="did not bind"):
+            seat_on_budget(degenerate, pp)
 
 
 class TestSchemaAdapter:
