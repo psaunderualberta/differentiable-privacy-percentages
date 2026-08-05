@@ -200,7 +200,29 @@ implementation to 0.01pp (16.025% vs 16.017%).
 if the Constant reference fails to clear ≈2× chance") must not be evaluated against
 the old cells: they were produced by the buggy seating. At ε=10 with a correctly
 seated curve the target reaches 16% (16× chance) and with a constant schedule 14.5%.
-The target has ample resolving power.
+The target has ample resolving power. Confirmed on reference cells below.
+
+### Reference separation (added 2026-08-05)
+
+The headroom numbers above come from diagnostics, not from `producer="reference"` cells.
+Once the full reference stage landed for both surviving targets at (ε=10, T=5000), the
+*separation* half of ADR 0020's criterion could be measured directly — 3 native
+references × 8 seeds each:
+
+| target | Constant | Median | Dynamic-DPSGD | gap | pooled σ_eval | gap/σ | ANOVA |
+|---|---|---|---|---|---|---|---|
+| CheXpert | 69.620 ± 0.355 | 70.615 ± 0.201 | 70.713 ± 0.462 | 1.093 pp | 0.356 | 3.07 | F=23.1, p=4.9e-06 |
+| ImageNet-32 | 6.538 ± 1.011 | 13.575 ± 1.122 | 14.675 ± 0.632 | 8.138 pp | 0.945 | **8.61** | F=174.5, p=8.3e-14 |
+
+Both separate; ImageNet-32 far more strongly, and it is the only target where all three
+pairwise contrasts reach significance (CheXpert's Median-vs-Dynamic is d=0.28, p=0.59).
+Read that structurally: on both targets the separation is dominated by **Constant vs the
+adaptive family**, and it is the *within-adaptive* contrast (ImageNet d=1.21 vs CheXpert
+d=0.28) that bears on ranking transferred curves against each other.
+
+Note also that on CheXpert the val-loss ordering **inverts** relative to accuracy —
+Constant has the lowest loss (0.9309) and the lowest accuracy — whereas on ImageNet-32
+loss and accuracy agree. CheXpert's ~1 pp gap is not loss-driven.
 
 **EyePACS — drop as a measurement instrument.** This is the handoff's first branch and
 it does not depend on the bug: EyePACS floors at 73.982% with **no DP at all**, at
@@ -230,4 +252,5 @@ $V arch_control.py --arch deep3 --lrs 0.3 0.1 0.03 \
 $V probe_gradnorm.py imagenet chexpert                    # per-sample gradient norms
 $V verify_seat_bug.py                                     # bug mechanism, standalone
 $V curve_ab.py imagenet                                   # buggy-vs-fixed A/B
+$V reference_separation.py [<cache>/transfer/reference]   # ADR 0020 separation table
 ```

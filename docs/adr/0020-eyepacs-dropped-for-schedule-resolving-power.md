@@ -46,40 +46,77 @@ Two things about how it is measured matter enough to state:
 Constant vs Dynamic-DPSGD: **−1.093 pp, p = 1.4e-4, Cohen's d = −2.65**. Schedule shape
 moves CheXpert by roughly 1 pp against a seed sd of ~0.35 pp. It resolves schedules.
 
-**ImageNet-32**, against 1.0% uniform chance / 1.125% majority: a **native constant DP
-schedule reaches 14.5%**, i.e. ~13 pp clear of the floor. ADR 0007's 64×64 escalation
-trigger is therefore **not** fired; it appeared to fire only on cells corrupted by the
-`seat_on_budget` units bug (fixed in `f44d39a`).
+**ImageNet-32**, against 1.0% uniform chance / 1.125% majority, same protocol
+(ε=10, T=5000, 8 seeds):
+
+| reference | mean | sd |
+|---|---|---|
+| Constant | 6.538 | 1.011 |
+| StatefulMedianGradient | 13.575 | 1.122 |
+| Dynamic-DPSGD | 14.675 | 0.632 |
+
+Constant vs Dynamic-DPSGD: **+8.138 pp, p = 2.9e-10, Cohen's d = 9.65**. Every schedule
+is far clear of the floor, so ADR 0007's 64×64 escalation trigger is **not** fired; it
+appeared to fire only on cells corrupted by the `seat_on_budget` units bug (fixed in
+`f44d39a`).
 
 **EyePACS** scores zero range: every arm returns 73.982%, which *is* the floor.
 
-### The criterion has two parts, and only one of them is settled for ImageNet-32
+### The criterion has two parts, and both targets now satisfy both
 
-Being scrupulous about this matters, because the temptation is to admit ImageNet-32 on
+Being scrupulous about this matters, because the temptation is to admit a target on
 evidence of the wrong kind:
 
 1. **Headroom above the floor** (necessary). Can *any* schedule beat the majority rate?
    This is measurable from a single native schedule. CheXpert clears it (69.6% vs 60.07%),
-   ImageNet-32 clears it decisively (14.5% vs 1.125%), and **EyePACS fails it outright** —
-   its best result at any learning rate, with or without the privacy mechanism, at 1.9×
-   capacity, is exactly the floor.
+   ImageNet-32 clears it decisively (6.5–14.7% vs 1.125%), and **EyePACS fails it
+   outright** — its best result at any learning rate, with or without the privacy
+   mechanism, at 1.9× capacity, is exactly the floor.
 2. **References actually separate** (sufficient). Do differently-shaped schedules give
-   *different* answers? This needs the full reference set. **CheXpert has it** (1.09 pp at
-   p = 1.4e-4). **ImageNet-32 does not yet** — its 14.5% comes from a native constant
-   schedule run as a *diagnostic* (`curve_ab.py`), which is criterion-pure for headroom
-   but is not a reference-producer cell. No `producer="reference"` cell exists for
-   ImageNet-32 at any budget point; all three of its references are outstanding.
+   *different* answers? This needs the full reference set, and both surviving targets now
+   have one at (ε=10, T=5000):
+
+   | target | gap | pooled σ_eval | gap / σ_eval | ANOVA |
+   |---|---|---|---|---|
+   | CheXpert | 1.093 pp | 0.356 pp | 3.07 | F = 23.1, p = 4.9e-06 |
+   | ImageNet-32 | 8.138 pp | 0.945 pp | **8.61** | F = 174.5, p = 8.3e-14 |
 
 **The EyePACS decision turns only on part 1**, which is measured, unambiguous, and
-independent of anything ImageNet-32 does. A target with zero headroom cannot have
+independent of anything the other two do. A target with zero headroom cannot have
 separation, so no further measurement could rescue it.
 
-ImageNet-32's admission is therefore **provisional on part 2**. This is a live risk worth
-naming: if its references come back flat, the matrix collapses to a single target dataset
-and the generalisation claim would need rethinking — not a rescue of EyePACS, which has
-already failed the weaker test. Earlier drafts of this ADR cited a *transferred curve*
-(16.0%) as ImageNet-32 evidence; that is exactly the contamination the criterion forbids,
-and it has been removed.
+Earlier drafts of this ADR cited a *transferred curve* (16.0%) as ImageNet-32 evidence;
+that is exactly the contamination the criterion forbids, and it has been removed. The
+14.5% figure those drafts used came from the `curve_ab.py` diagnostic — criterion-pure
+for headroom, but not a reference cell. It is superseded above by
+`producer="reference"` cells.
+
+### ImageNet-32 is the better instrument, but read the separation structurally
+
+ImageNet-32 dominates CheXpert on every summary statistic, and it is the only target that
+resolves *all three* reference pairs. But the two targets have the same qualitative
+structure, and the aggregate gap hides it — the separation is almost entirely
+**Constant vs the adaptive family**, not *within* that family:
+
+| pair | CheXpert | ImageNet-32 |
+|---|---|---|
+| Constant vs Median | d = 3.45, p = 2.5e-05 | d = 6.59, p = 3.2e-09 |
+| Constant vs Dynamic-DPSGD | d = 2.65, p = 1.4e-04 | d = 9.65, p = 2.9e-10 |
+| Median vs Dynamic-DPSGD | d = 0.28, **ns** (p = 0.59) | d = 1.21, p = 0.034 |
+
+This matters because a transferred curve is far more likely to resemble an adaptive
+schedule than a constant one, so the resolving power that actually bears on *ranking
+transferred policies against each other* is the last row, not the first. On that row
+ImageNet-32 still wins — d = 1.21 versus 0.28, and it is the only one that reaches
+significance — but the margin is ~4×, not the ~8.6× the aggregate suggests. Cells that
+differ only in curve shape should be expected to separate weakly on CheXpert.
+
+One asymmetry worth recording: on ImageNet-32 the val-loss ordering agrees with accuracy
+(Constant 4.311 > Median 3.941 > Dynamic 3.769, against ln 100 = 4.605). On CheXpert it
+**inverts** — Constant has the *lowest* loss (0.9309 vs 0.9390 / 0.9403) while having the
+lowest accuracy. CheXpert's ~1 pp accuracy gap is therefore not loss-driven, which is
+consistent with a threshold/calibration effect on an imbalanced near-binary task and is a
+second reason to treat its separation as the weaker of the two.
 
 ## The evidence for EyePACS
 
@@ -264,31 +301,39 @@ off.
   transfer claim rests on curve-vs-reference and does not wait for them. Note the chosen
   budget points are all on the source condition grid, so nothing about this deferral
   forecloses the equation stage later.
-- **The ImageNet-32 gate is a judgement call, not a pre-registered threshold**, and the
+- **The ImageNet-32 gate was a judgement call, not a pre-registered threshold**, and the
   two halves of the criterion differ in kind here. EyePACS failed **headroom**, which needs
   no threshold — it returned the majority rate *exactly*, at every learning rate, with the
-  mechanism on and off, at 1.9× capacity. ImageNet-32 will be judged on **separation**,
-  where no numeric bar was fixed in advance; a candidate rule (max−min reference gap ≥ 3×
-  pooled per-seed sd, plus p < 0.01, which CheXpert clears at 3.07σ and p = 1.4e-4) was
-  considered and deliberately not adopted. What limits the latitude is the direction of the
-  incentive: dropping ImageNet-32 collapses the matrix to a single dataset, so the pressure
-  runs toward *admitting* it. A judgement call biased toward inclusion is the safe
-  orientation for this particular decision, but it should be reported as a judgement.
-- **ImageNet-32's curve stage is gated on its reference separation.** Its nine reference
-  sweeps run first and must show separation before its 744 curve cells are committed. The
-  compute argument is nearly neutral — the references are ~10 GPU-h against ~42 for the
-  curve cells — so the gate is bought for a queue round-trip, and what it buys is the
-  integrity of the criterion: launching in parallel would mean ruling on ImageNet-32's
-  admissibility with its transfer results already in hand. The instrument would still
-  technically be uncontaminated, but the sequence would no longer *demonstrate* that, and
-  demonstrability is the entire point of the forking-paths section above.
+  mechanism on and off, at 1.9× capacity. ImageNet-32 was judged on **separation**, where
+  no numeric bar was fixed in advance; a candidate rule (max−min reference gap ≥ 3× pooled
+  per-seed sd, plus p < 0.01, which CheXpert clears at 3.07σ and p = 1.4e-4) was considered
+  and deliberately not adopted. What limited the latitude is the direction of the
+  incentive: dropping ImageNet-32 would collapse the matrix to a single dataset, so the
+  pressure ran toward *admitting* it, and a judgement call biased toward inclusion is the
+  safe orientation for this particular decision.
+
+  **In the event the latitude was not needed.** ImageNet-32 came in at 8.61σ with
+  p = 8.3e-14 — it would have cleared the unadopted rule by a factor of ~3 on the gap term
+  and ~12 orders of magnitude on the p term, so admitting it required no discretion at the
+  margin. The gate is recorded as **passed** rather than waived.
+- **ImageNet-32's curve stage was gated on its reference separation, and the gate has now
+  been cleared.** Its reference sweeps ran first and had to show separation before its
+  curve cells were committed. The compute argument was nearly neutral — the references are
+  ~10 GPU-h against ~42 for the curve cells — so the gate cost a queue round-trip, and what
+  it bought is the integrity of the criterion: launching in parallel would have meant ruling
+  on ImageNet-32's admissibility with its transfer results already in hand. The instrument
+  would still have been technically uncontaminated, but the sequence would no longer
+  *demonstrate* that, and demonstrability is the entire point of the forking-paths section
+  above. Both targets' curve cells are now unblocked.
 - **ADR 0007's validation order is reversed and reassigned**: validate the pipeline
-  end-to-end on **CheXpert first, then ImageNet-32**. CheXpert already has a complete
-  post-fix reference stage on disk, it is the cheapest target per step (4,096 input
-  values), and it has demonstrated schedule separation, so a null result on it during
-  future validation is informative. ImageNet-32 stays later as the target ADR 0007 calls
-  riskiest for a floor effect. The original ordering put EyePACS first while EyePACS was
-  by a wide margin the *most* expensive target to run — 196,608 input values per example.
+  end-to-end on **CheXpert first, then ImageNet-32**. Both now have a complete post-fix
+  reference stage at (ε=10, T=5000) and both demonstrate separation, so the tie-break is
+  cost: CheXpert measures at 0.03 GPU-h per curve task against ImageNet-32's 0.06. A null
+  result on either during future validation is informative. ImageNet-32 stays later as the
+  target ADR 0007 calls riskiest for a floor effect — a ranking the reference stage has
+  since inverted, since it is ImageNet-32 that separates more strongly. The original
+  ordering put EyePACS first while EyePACS was by a wide margin the *most* expensive target
+  to run — 196,608 input values per example.
 - Targets are CLI arguments (`--target`, `--target_eps`, `--target_T`, fanned out by
   `expand_targets` in `src/transfer_launch.py`), so the drop is a launch-flag change.
   Remaining `eyepacs` mentions in `src/transfer_*.py` are docstring examples and test
