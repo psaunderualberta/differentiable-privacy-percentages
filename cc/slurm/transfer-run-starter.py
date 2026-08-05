@@ -35,6 +35,7 @@ Examples:
 """
 
 import os
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -55,6 +56,7 @@ os.environ["PROJECT_SOURCE_ROOT"] = os.path.abspath(
 # compute cell filenames and manifests off-cluster. Same trick as sr_identity.py.
 sys.path.insert(0, os.environ["PROJECT_SOURCE_ROOT"])
 from transfer_launch import (
+    Job,
     ProducerArgs,
     absolute_path,
     array_sbatch,
@@ -68,6 +70,9 @@ from transfer_launch import (
 
 # Per-stage wall clocks. Reference is the long pole: it sweeps a reference's
 # hyperparameters and then evaluates, where the two shape producers only evaluate.
+# The curve clock is measured, not guessed: the slowest probe task (eyepacs, the
+# largest input) took 1:14:11, so 2:55 leaves 2.4x for node-to-node jitter. Keep
+# that headroom — a curve task has no resumption, so an overrun writes nothing.
 _WALLTIMES = {
     "preflight": "00-02:55:00",
     "curve": "00-02:55:00",
@@ -76,13 +81,37 @@ _WALLTIMES = {
     "plot": "00-02:55:00",
 }
 
-# Rough per-task GPU-hours, used only for the --dry-run estimate (analytic, ±3×).
+# Per-task GPU-hours, used only for the --dry-run estimate.
 # Per *task*, which is not per cell for every stage: a curve task is one source
 # policy (one cell), but an equation task walks every condition at its target and a
 # reference task sweeps before it evaluates, so those two scale with what the task
 # bundles. Keep these honest against the wall clocks in _WALLTIMES — an estimate
 # below the clock is what hides a stage whose tasks cannot finish in time.
-_GPU_HOURS = {"curve": 0.8, "equation": 1.2, "reference": 1.7}
+#
+# The curve figures are measured (probe wave 2026-08-04, jobs 345104-345106: one
+# cell each at eps=10, T=5000, num_reps=3). A single scalar cannot stand in for the
+# stage: cost tracks the target's input resolution, and eyepacs (256x256) is 46x
+# chexpert (64x64) at identical eps and T. eps and T are held out of the key because
+# every planned target shares T=5000 and cost is flat in eps. Unknown datasets fall
+# back to the eyepacs figure, so a new target over-estimates rather than under-.
+_CURVE_GPU_HOURS = {"eyepacs": 1.24, "imagenet": 0.06, "chexpert": 0.03}
+_GPU_HOURS = {"curve": max(_CURVE_GPU_HOURS.values()), "equation": 1.2, "reference": 1.7}
+
+
+def _job_gpu_hours(stage: str, job: Job) -> float:
+    """Estimated GPU-hours for one array task.
+
+    Curve tasks are keyed by target dataset (see ``_CURVE_GPU_HOURS``); every other
+    stage is flat per task. The dataset is read back off the manifest line rather
+    than threaded through ``Job``, which stays a stdlib-only record of what to run.
+    """
+    if stage != "curve":
+        return _GPU_HOURS.get(stage, 1.0)
+    args = shlex.split(job.args)
+    if "--target" in args:
+        dataset = args[args.index("--target") + 1]
+        return _CURVE_GPU_HOURS.get(dataset, _GPU_HOURS["curve"])
+    return _GPU_HOURS["curve"]
 
 
 @dataclass
@@ -117,7 +146,11 @@ class TransferSlurmConfig:
     account: str = "aip-nidhih"
     cpus_per_task: int = 2
     gpus: int = 1
-    mem_per_gpu: str = "12G"
+    mem_per_gpu: str = "20G"
+    """Host RAM per GPU. The 2026-08-04 probe measured eyepacs at 11.33 GiB peak RSS,
+    94% of the 12G this used to default to — close enough that a slightly heavier
+    policy or a different node would OOM, and an OOM loses a cell exactly like a
+    timeout does. 20G restores headroom on the one target that needs it."""
     project_dir: str = os.environ["PROJECT_SOURCE_ROOT"]
     manifest_dir: str = os.path.join(os.environ["PROJECT_ROOT"], "cc", "manifests")
     logdir: str = os.path.join(os.environ["PROJECT_ROOT"], "cc", "logs", "transfer")
@@ -207,8 +240,8 @@ def main(conf: TransferSlurmConfig) -> None:
     if not jobs:
         raise SystemExit("nothing to do: every requested cell already exists")
 
-    estimate = sum(_GPU_HOURS.get(stage, 1.0) * len(js) for stage, js in jobs.items())
-    print(f"  estimated {estimate:.0f} GPU-hours total (analytic, +/-3x)")
+    estimate = sum(_job_gpu_hours(stage, j) for stage, js in jobs.items() for j in js)
+    print(f"  estimated {estimate:.0f} GPU-hours total (curve measured, rest analytic)")
     if conf.dry_run:
         # The DAG edges are `-d afterok:<job id>`, and no ids exist on a dry run, so
         # the printed scripts carry no #SBATCH --dependency line. Say so rather than
