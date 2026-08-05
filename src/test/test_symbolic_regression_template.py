@@ -381,7 +381,7 @@ def test_main_template_mode_writes_category_map_and_constants(tmp_path):
     conf = PySRConfig(
         cache_dir=str(cache),
         targets=("sigma",),
-        datapoint_frequency=2,
+        points_per_run=10,  # T=20 per run ⇒ stride 2
         out_dir=str(out_dir),
         niterations=8,
         maxsize=10,

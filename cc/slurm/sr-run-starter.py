@@ -27,6 +27,7 @@ Examples:
 """
 
 import os
+import shlex
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
@@ -66,10 +67,15 @@ class SRSlurmConfig:
     arch_labels: tuple[str, ...] = ()
     optimizers: tuple[str, ...] = ()
     run_ids: tuple[str, ...] = ()
-    datapoint_frequency: int = 100
+    points_per_run: int = 50
+    """Mirror of PySRConfig.points_per_run (ADR 0016); identity field, so it must match."""
     keep_features: tuple[str, ...] = ()
     include_nonfinite_schedules: bool = False
     include_diverged_training: bool = False
+    binary_operators: tuple[str, ...] = ("+", "-", "*", "/")
+    """Mirror of PySRConfig.binary_operators (ADR 0016); identity field, so it must match."""
+    unary_operators: tuple[str, ...] = ("sqrt", "exp")
+    """Mirror of PySRConfig.unary_operators; identity field, so it must match."""
     template_mode: bool = True
     """Mirror of PySRConfig.template_mode (ADR 0006); identity field, so it must match."""
     n_template_params: int = 3
@@ -80,7 +86,8 @@ class SRSlurmConfig:
     chain_depth: int = 0
     """Depth of the job being submitted; set by resubmission, not by hand."""
     max_chain_jobs: int = 16
-    """Hard cap on chain depth, forwarded to symbolic_regression.py."""
+    """Hard cap on the number of jobs in the chain, forwarded to symbolic_regression.py.
+    Pass 1 for the single long job a template synthesis needs (ADR 0017)."""
     niterations: int = 100_000
     maxsize: int = 25
     timeout_in_seconds: int = 9900  # 2h45m, below the 2h55m wall time
@@ -108,7 +115,9 @@ class SRSlurmConfig:
         jobname = self.jobname_for(target)
         # Identity flags (datasets, maxsize, the include flags, ...) are forwarded so the
         # script reconstructs the same slug; orchestration flags are passed alongside.
-        identity = " ".join(identity_flags(asdict(self)))
+        # Shell-quoted: operator names like `*` are globs, and the job runs with
+        # --chdir=src/, so an unquoted one would expand to that directory's files.
+        identity = " ".join(shlex.quote(flag) for flag in identity_flags(asdict(self)))
         main_args = (
             f"--cache_dir '{self.cache_dir}'"
             f" --targets {target}"

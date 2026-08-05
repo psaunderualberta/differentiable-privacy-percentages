@@ -56,21 +56,33 @@ class TestShouldResubmit:
             max_chain_jobs=16,
         )
 
-    def test_depth_cap_stops_chain(self):
-        # Hit the timeout but the chain has reached its depth cap -> stop.
+    def test_cap_of_one_job_never_resubmits(self):
+        """``max_chain_jobs`` counts JOBS, not depth: a cap of 1 is the single long
+        job a template synthesis must run as (ADR 0017), so it has no successor."""
         assert not should_resubmit(
             elapsed_seconds=_TIMEOUT,
             timeout_seconds=_TIMEOUT,
             pad_seconds=_PAD,
-            chain_depth=16,
-            max_chain_jobs=16,
+            chain_depth=0,
+            max_chain_jobs=1,
         )
 
-    def test_last_allowed_depth_resubmits(self):
-        assert should_resubmit(
+    def test_final_allowed_job_stops_chain(self):
+        # depth 15 is the 16th job of a 16-job chain -> no successor.
+        assert not should_resubmit(
             elapsed_seconds=_TIMEOUT,
             timeout_seconds=_TIMEOUT,
             pad_seconds=_PAD,
             chain_depth=15,
+            max_chain_jobs=16,
+        )
+
+    def test_penultimate_job_resubmits(self):
+        # depth 14 is the 15th job -> one more is allowed.
+        assert should_resubmit(
+            elapsed_seconds=_TIMEOUT,
+            timeout_seconds=_TIMEOUT,
+            pad_seconds=_PAD,
+            chain_depth=14,
             max_chain_jobs=16,
         )

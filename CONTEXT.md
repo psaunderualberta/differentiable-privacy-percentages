@@ -83,6 +83,24 @@ carries several. Downstream tooling discovers ladder membership generically from
 `ladder:` prefix.
 _Avoid_: axis tag (reserved for the coarser T-sweep / arch distinction), label.
 
+**Truncated run**:
+A run whose outer loop stopped before the requested budget — it reached a smaller
+**read-off step** than asked for, but everything it did reach is valid. Truncation is a
+wall-clock property, not an outcome: it is systematic per rung (the expensive rungs
+truncate, every seed of them together), so excluding truncated runs deletes whole rungs
+rather than removing noise. Because the outer loop converges early, a truncated run's
+schedule is normally a converged learned schedule and is safe to analyse.
+_Avoid_: incomplete run, failed run, diverged run.
+
+**Diverged run**:
+A run whose outer loop lost its footing — the schedule blows up and downstream accuracy
+lands at or near chance. An *outcome* property, and the one that makes a run unfit to
+analyse. Independent of truncation: a run can diverge having reached the full budget, and
+a truncated run is usually fine. Detected by chance-level accuracy; **not** by a
+non-finite check (a diverged run's σ and accuracy are finite) nor by a σ-magnitude
+outlier test (which also flags healthy runs with a boundary spike).
+_Avoid_: crashed run, NaN run, truncated run, unstable run.
+
 ### Result plots
 
 **Per-ladder plot**:
@@ -118,6 +136,40 @@ statement is "Learned beats Constant at every architecture", never "deeper/wider
 benefit more" — the latter would need a parameter-controlled ladder to separate the knob
 from the parameter count it moves, and none is run.
 _Avoid_: combined plot, lumped plot, arch-sweep plot, param-count overlay.
+
+### Symbolic regression
+
+**Synthesis**:
+One symbolic-regression fit, identified by the problem it solves — which runs, which
+filters, which search space — paired with a single target (σ or clip). Two invocations
+describing the same problem are the same synthesis and may continue each other's search;
+different problems must never share one. A synthesis is scoped to a single **arm**, since
+a **condition** does not name one and the arms' schedules differ by roughly an order of
+magnitude in scale.
+_Avoid_: run (reserved for the W&B object), fit, job, regression.
+
+**Universal schedule shape**:
+The single form over training progress `t/T` that a synthesis fits across every run it
+covers — the transferable part of the result. Everything a condition does differently is
+carried by its **per-condition constants**, not by a different shape.
+_Avoid_: curve, law, equation (reserve for the concrete fitted expression), template.
+
+**Per-condition constant**:
+One of the K free values fitted per **condition** that modulate the universal schedule
+shape. They are a property of the condition, so the several seeds of a condition are
+pooled into one constant vector rather than getting their own. They have no value for an
+unseen condition, which is what confines **equation transfer** to a target `(ε, T)` that
+exactly matches a trained one.
+_Avoid_: parameter (overloaded with network parameters), coefficient, knob.
+
+**Compression claim / Generalization claim**:
+The two distinct things a synthesis can be said to establish, validated by different
+evidence and not interchangeable. The **compression claim** — every learned schedule in
+this sweep is the universal shape with K knobs — is descriptive and is settled by fit
+quality on the runs fitted. The **generalization claim** — the distilled equation is a
+useful schedule on data it was not fitted to — is settled only by downstream **policy
+transfer** accuracy. A synthesis can satisfy either without the other.
+_Avoid_: calling in-sample fit quality "generalisation", accuracy, validation.
 
 ### Policy transfer
 

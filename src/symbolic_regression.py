@@ -42,9 +42,9 @@ class PySRConfig:
     cache_dir: str
     """Path to the <entity>__<project> directory produced by compile_results_fetch.py."""
     targets: tuple[Literal["sigma", "clip", "mu"], ...] = ("sigma",)
-    datapoint_frequency: int = (
-        100  # Frequency to use inner step datapoints in regression (i.e. every 100 steps)
-    )
+    points_per_run: int = 50
+    """Inner-step samples drawn from each run, evenly spaced over its step span. Fixed
+    per run (not a fixed stride) so every run weighs equally over step_norm; see ADR 0016."""
     datasets: tuple[str, ...] = ()
     arch_labels: tuple[str, ...] = ()
     optimizers: tuple[str, ...] = ()
@@ -59,6 +59,11 @@ class PySRConfig:
     """PySR search iterations. Lower (e.g. 5) for quick smoke tests."""
     maxsize: int = 25
     """Max equation complexity PySR will consider."""
+    binary_operators: tuple[str, ...] = ("+", "-", "*", "/")
+    """Binary operators the search may compose. Without `+`/`-` a per-condition constant
+    can only rescale the shape, never shift its peak (ADR 0016)."""
+    unary_operators: tuple[str, ...] = ("sqrt", "exp")
+    """Unary operators the search may compose."""
 
     # --- Template mode (per-condition free constants; see docs/adr/0006) ---
     template_mode: bool = True
@@ -75,7 +80,8 @@ class PySRConfig:
     pad_seconds: int = 600
     """Slack (10m) below timeout: fit() finishing earlier counts as natural completion."""
     max_chain_jobs: int = 16
-    """Hard cap on chain depth; the chain stops resubmitting once reached."""
+    """Hard cap on the NUMBER OF JOBS in this synthesis's chain; the chain stops
+    resubmitting once reached. 1 ⇒ a single job with no successor (ADR 0017)."""
 
 
 def build_template_spec(n_conditions: int, n_template_params: int) -> TemplateExpressionSpec:
@@ -149,6 +155,22 @@ def _runs_with_finite_learned(scalars: pd.DataFrame) -> set[str]:
     return set(learned.loc[finite_mask, "run_id"].unique())
 
 
+def sample_points_per_run(schedules: pd.DataFrame, points_per_run: int) -> pd.DataFrame:
+    """Thin each run down to ~``points_per_run`` evenly spaced inner steps.
+
+    The fit is over ``step_norm`` ∈ [0,1], so a fixed inner-step stride would let a
+    long run dominate the shared shape purely by having more steps (T=7000 supplied
+    ~42 % of FirSweep's rows against T=2000's ~12–15 %). Striding per run instead
+    weights every run equally over the interval. See docs/adr/0016.
+    """
+
+    # Stride off each run's OWN step span, not the configured T, so a truncated run
+    # still contributes its full share of points.
+    span = schedules.groupby("run_id")["inner_step"].transform("max") + 1
+    stride = (span // points_per_run).clip(lower=1)
+    return schedules[schedules["inner_step"] % stride == 0].reset_index(drop=True)
+
+
 def _filter_features(df: pd.DataFrame, conf: PySRConfig, target: str) -> pd.DataFrame:
     df = df[~(df[target].isna() | np.isinf(df[target]))]
     df = df.dropna(axis=1)
@@ -173,13 +195,18 @@ def should_resubmit(
     """Decide whether a finished job should resubmit a chain successor.
 
     Resubmit only when the job hit its PySR timeout (i.e. did NOT naturally
-    complete: ``elapsed >= timeout - pad``) AND the chain has not reached its
-    depth cap. A naturally completed synthesis never resubmits.
+    complete: ``elapsed >= timeout - pad``) AND the chain has room for another
+    job. A naturally completed synthesis never resubmits.
+
+    ``max_chain_jobs`` counts JOBS, not depth — a cap of 1 is a single job with no
+    successor (the template-mode case of ADR 0017), and the default 16 is ADR 0002's
+    16-job bound. ``chain_depth`` is 0-based, so the successor would be job
+    ``chain_depth + 2``.
     """
     naturally_completed = elapsed_seconds < timeout_seconds - pad_seconds
     if naturally_completed:
         return False
-    return chain_depth < max_chain_jobs
+    return chain_depth + 1 < max_chain_jobs
 
 
 def _resolve_procs(conf: PySRConfig) -> int:
@@ -262,9 +289,11 @@ def run_regression(
             "batching": True,
             "parsimony": 1e-3,
             "maxsize": conf.maxsize,
-            "binary_operators": ["*", "/"],
-            "unary_operators": ["sqrt", "exp"],
-            "denoise": True,
+            "binary_operators": list(conf.binary_operators),
+            "unary_operators": list(conf.unary_operators),
+            # Off deliberately: pysr.denoising fits a GP over every column of X, which
+            # in template mode includes the arbitrary `category` index. See ADR 0016.
+            "denoise": False,
         }
         if expression_spec is not None:
             builder_kwargs["expression_spec"] = expression_spec
@@ -371,7 +400,7 @@ def _write_manifest(
     manifest = {
         "config": asdict(conf),
         "targets": list(conf.targets),
-        "datapoint_frequency": conf.datapoint_frequency,
+        "points_per_run": conf.points_per_run,
         "n_runs": len(keep_runs),
         "n_rows_full": len(full_df),
         "run_ids": sorted(keep_runs),
@@ -422,7 +451,7 @@ def main(conf: PySRConfig):
     schedules.to_parquet(out_dir / "features_full.parquet", index=False)
     _write_manifest(out_dir, conf, keep_runs, schedules)
 
-    sampled = schedules[schedules["inner_step"] % conf.datapoint_frequency == 0].copy()
+    sampled = sample_points_per_run(schedules, conf.points_per_run).copy()
 
     # Template mode indexes per-condition constants by a 1-indexed `category`. Build
     # and persist that map (so the evaluator rebuilds the same column) BEFORE dropping

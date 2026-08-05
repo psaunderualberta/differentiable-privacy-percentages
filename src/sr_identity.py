@@ -37,18 +37,28 @@ IDENTITY_FIELDS: tuple[str, ...] = (
     "arch_labels",
     "optimizers",
     "run_ids",
-    "datapoint_frequency",
+    "points_per_run",
     "keep_features",
     "include_nonfinite_schedules",
     "include_diverged_training",
     "maxsize",
+    "binary_operators",  # the search space itself — ADR 0016
+    "unary_operators",
     "template_mode",  # template vs pooled-scalar fit — changes the problem (ADR 0006)
     "n_template_params",  # number of per-condition constants K
 )
 
 # Tuple-valued identity fields are order-insensitive: sorted before hashing/emitting.
 _TUPLE_FIELDS: frozenset[str] = frozenset(
-    {"datasets", "arch_labels", "optimizers", "run_ids", "keep_features"}
+    {
+        "datasets",
+        "arch_labels",
+        "optimizers",
+        "run_ids",
+        "keep_features",
+        "binary_operators",
+        "unary_operators",
+    }
 )
 
 # Identity fields rendered into the human-readable slug prefix, in order. Cosmetic only —
@@ -63,11 +73,13 @@ IDENTITY_FLAG_DEFAULTS: dict[str, object] = {
     "arch_labels": (),
     "optimizers": (),
     "run_ids": (),
-    "datapoint_frequency": 100,
+    "points_per_run": 50,
     "keep_features": (),
     "include_nonfinite_schedules": False,
     "include_diverged_training": False,
     "maxsize": 25,
+    "binary_operators": ("+", "-", "*", "/"),
+    "unary_operators": ("sqrt", "exp"),
     "template_mode": True,
     "n_template_params": 3,
 }
