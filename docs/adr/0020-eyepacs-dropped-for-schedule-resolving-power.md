@@ -247,9 +247,13 @@ off.
   curve and reference on all 12. The defaults now encode the grid above, and the
   dry-run pricing model — which had assumed "every planned target shares T=5000" —
   now scales curve cost linearly in T.
-- **The completed EyePACS reference cells are retained** as a documented negative control,
-  not deleted. They are the cheapest available evidence that the criterion was applied to
-  a real measurement.
+- **No EyePACS reference cells were ever produced, and none are needed.** An earlier draft
+  of this ADR said completed EyePACS reference cells would be retained as a negative
+  control; that was wrong — the reference sweep for EyePACS was considered and rejected
+  (above), so it never ran, and no `producer="reference"` cell exists for it at any budget
+  point. The retained negative control is the *control* evidence — `check2_control` and
+  `arch_control` JSON under `results/diagnostics/2026-08-05-target-floors/` — which is what
+  the headroom half of the criterion is read from anyway.
 - **ADR 0007's validation order is reversed and reassigned**: validate the pipeline
   end-to-end on **CheXpert first, then ImageNet-32**. CheXpert already has a complete
   post-fix reference stage on disk, it is the cheapest target per step (4,096 input
