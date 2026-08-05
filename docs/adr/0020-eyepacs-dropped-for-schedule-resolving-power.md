@@ -254,6 +254,14 @@ off.
   point. The retained negative control is the *control* evidence — `check2_control` and
   `arch_control` JSON under `results/diagnostics/2026-08-05-target-floors/` — which is what
   the headroom half of the criterion is read from anyway.
+- **ImageNet-32's curve stage is gated on its reference separation.** Its nine reference
+  sweeps run first and must show separation before its 744 curve cells are committed. The
+  compute argument is nearly neutral — the references are ~10 GPU-h against ~42 for the
+  curve cells — so the gate is bought for a queue round-trip, and what it buys is the
+  integrity of the criterion: launching in parallel would mean ruling on ImageNet-32's
+  admissibility with its transfer results already in hand. The instrument would still
+  technically be uncontaminated, but the sequence would no longer *demonstrate* that, and
+  demonstrability is the entire point of the forking-paths section above.
 - **ADR 0007's validation order is reversed and reassigned**: validate the pipeline
   end-to-end on **CheXpert first, then ImageNet-32**. CheXpert already has a complete
   post-fix reference stage on disk, it is the cheapest target per step (4,096 input
