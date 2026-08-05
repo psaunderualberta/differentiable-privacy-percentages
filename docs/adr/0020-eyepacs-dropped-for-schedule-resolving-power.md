@@ -71,7 +71,40 @@ distribution. Removing DP entirely changes nothing.
 Full method, numbers and reproduction commands:
 `results/diagnostics/2026-08-05-target-floors/FINDINGS.md`.
 
-<!-- PENDING: architecture control result -->
+### The floor is not an artifact of the surrogate's capacity
+
+The obvious rescue for EyePACS is that the MNIST-derived conv block is simply too small,
+so a second non-private control was run on a deliberately larger architecture — `deep3`,
+three stride-2 blocks, **466,661 parameters against the surrogate's 241,909 (1.9×)** —
+chosen so the 256×256 input is downsampled properly rather than crushed by a single
+8×8/stride-2 stem.
+
+| arch | params | lr | val | test | train loss |
+|---|---|---|---|---|---|
+| `cnn-16x32-head32` (surrogate) | 241,909 | 0.3 / 0.1 / 0.03 | 73.982% | 75.360% | 1.659 → 0.75–0.78 |
+| `deep3` | 466,661 | 0.3 | 73.982% | 75.360% | 1.611 → 1.21 |
+
+The larger network returns **the identical majority rate, to three decimals, on both
+splits**. Capacity is not the binding constraint.
+
+One honest caveat: `deep3`'s train loss (1.21) is still *above* the 0.873 class-prior
+entropy at 5,000 steps, so on its own it could be dismissed as undertrained. The
+surrogate is what closes that gap — it reaches 0.75–0.78, i.e. it fits the training set
+*beyond* the marginal label distribution, and still returns exactly the majority rate on
+held-out data. Between them: the small net learns something on train that generalises to
+nothing, and the large net does not even get that far within the step budget. Neither
+produces a target on which schedules can be distinguished.
+
+### What is and is not being claimed
+
+The verdict is scoped to the regime, and the regime is the one ADR 0007 fixed: **from-scratch
+small-CNN DP-SGD**. EyePACS has no schedule-resolving power *there*. It is emphatically
+**not** a claim that EyePACS is unlearnable — it is a real benchmark on which pretrained
+backbones do substantially better than chance, and nothing here contradicts that. The two
+controls widen the scope from "under one surrogate architecture" to "across a 1.9× capacity
+range and a decade of learning rate, with and without the privacy mechanism", which is
+enough to stop treating the architecture as the suspect, and not enough to say anything
+about EyePACS under a paradigm this project never runs.
 
 ### Why the same surrogate architecture does not floor CheXpert
 

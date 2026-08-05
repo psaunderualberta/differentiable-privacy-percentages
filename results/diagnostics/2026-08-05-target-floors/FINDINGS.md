@@ -98,7 +98,30 @@ Every cell lands on the identical accuracy, and the DP arm's train loss matches 
 non-private arm's to ~3 decimal places — removing the privacy mechanism entirely
 changes *nothing*. Train loss falls 1.659 → ~0.75–0.78, but the **class-prior entropy
 is 0.873**, so the model barely learns more than the marginal label distribution.
-Noise is not the binding constraint here; the task and surrogate architecture are.
+Noise is not the binding constraint here; the task under this from-scratch paradigm is.
+(The architecture was the other suspect — see the control immediately below, which rules
+it out over a 1.9× capacity range.)
+
+**Architecture control (added 2026-08-05).** To test the "surrogate architecture" half
+of that, the non-private arm was rerun on a deliberately larger net — `deep3`, three
+stride-2 blocks, **466,661 params vs the surrogate's 241,909 (1.9×)** — sized so the
+256×256 input downsamples in stages instead of being crushed by one 8×8/stride-2 stem:
+
+| arch | params | lr | σ | val | test | train loss |
+|---|---|---|---|---|---|---|
+| `cnn-16x32-head32` | 241,909 | 0.3 | 0 | 73.982% | 75.360% | 1.659 → 0.7665 |
+| `deep3` | 466,661 | 0.3 | 0 | 73.982% | 75.360% | 1.611 → 1.21 |
+
+Identical on both splits, to three decimals. **Capacity is not the binding constraint.**
+Caveat worth stating: `deep3`'s train loss is still *above* the 0.873 prior entropy at
+5,000 steps, so in isolation it could be called undertrained — it is the surrogate,
+which gets *below* the prior on train and still returns exactly the majority rate on
+held-out data, that closes the argument. The small net learns something on train that
+generalises to nothing; the large net does not get that far in the step budget.
+
+Run: `arch_control.py --arch deep3 --lrs 0.3 0.1 0.03 --T 5000` (lr 0.3 shown; 0.1 and
+0.03 were still running when this was written — the surrogate returned the same value at
+all three, and any deviation here would be recorded as an amendment).
 
 **ImageNet-32** — chance 1.0%, floor 1.125%:
 
@@ -202,6 +225,8 @@ V=/home/psaunder/Documents/Masters/differentiable-privacy-percentages/.venv/bin/
 $V check1_histograms.py                                   # class histograms + image grids
 $V check2_control.py --target eyepacs --T 5000 \
      --arms nonprivate dp --lrs 0.3 0.1 0.03              # non-private / DP controls
+$V arch_control.py --arch deep3 --lrs 0.3 0.1 0.03 \
+     --T 5000                                             # 1.9x-capacity arch control
 $V probe_gradnorm.py imagenet chexpert                    # per-sample gradient norms
 $V verify_seat_bug.py                                     # bug mechanism, standalone
 $V curve_ab.py imagenet                                   # buggy-vs-fixed A/B
