@@ -62,6 +62,7 @@ os.environ["PROJECT_SOURCE_ROOT"] = os.path.abspath(
 sys.path.insert(0, os.environ["PROJECT_SOURCE_ROOT"])
 from transfer_launch import (
     STAGE_PREREQUISITE_STAGE,
+    TARGET_ARMS,
     Job,
     ProducerArgs,
     SourceScope,
@@ -172,6 +173,14 @@ class TransferSlurmConfig:
     be ON the source condition grid (eps in {3,5,8,10}, T in {2000,3000,5000,7000}) —
     ``check_on_grid`` makes an off-grid target fatal for the equation stage."""
     target_delta: float = 1e-7
+    target_arms: tuple[str, ...] = TARGET_ARMS
+    """Target inner-momentum arms the *reference* stage is replicated across (ADR 0021).
+
+    A reference is native to its target, so it must be tuned and evaluated at the
+    momentum it is a baseline for — hence 3 mechanisms × 6 target regimes × 2 arms = 36
+    reference cells. Curve and equation jobs ignore this: their target inherits the arm
+    of the source policy or synthesis being transferred. Narrow it only to run one arm's
+    references in isolation."""
 
     schedules_parquet: str = ""
     """Source schedules.parquet from compile_results_fetch. Required for the curve stage."""
@@ -276,6 +285,7 @@ def build_stage_jobs(conf: TransferSlurmConfig) -> dict[str, list]:
             min_seeds=conf.source_min_seeds,
             max_seeds=conf.source_max_seeds,
         ),
+        conf.target_arms,
     )
 
 

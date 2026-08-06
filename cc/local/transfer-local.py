@@ -54,6 +54,7 @@ os.environ["PROJECT_SOURCE_ROOT"] = os.path.abspath(
 sys.path.insert(0, os.environ["PROJECT_SOURCE_ROOT"])
 from transfer_launch import (
     STAGE_PREREQUISITE_STAGE,
+    TARGET_ARMS,
     Job,
     ProducerArgs,
     SourceScope,
@@ -75,6 +76,8 @@ class TransferLocalConfig:
     target_datasets: tuple[str, ...] = ("eyepacs", "imagenet", "chexpert")
     target_eps: tuple[float, ...] = (1.0, 8.0)
     target_T: tuple[int, ...] = (200, 5000)
+    target_arms: tuple[str, ...] = TARGET_ARMS
+    """Target momentum arms the reference stage is replicated across (ADR 0021)."""
     target_delta: float = 1e-7
 
     schedules_parquet: str = ""
@@ -231,6 +234,7 @@ def main(conf: TransferLocalConfig) -> None:
             min_seeds=conf.source_min_seeds,
             max_seeds=conf.source_max_seeds,
         ),
+        conf.target_arms,
     )
 
     # Stages are *not* barriered against each other: the producers are independent
