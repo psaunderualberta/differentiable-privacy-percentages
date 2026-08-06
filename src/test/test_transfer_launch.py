@@ -80,6 +80,37 @@ class TestCellFilenameMatchesTheProducers:
         predicted = cell_filename("abc123", Target(dataset="eyepacs", eps=8.0, T=5000))
         assert written.name == predicted
 
+    def test_reference_cells_of_the_two_arms_do_not_collide(self, tmp_path):
+        """ADR 0021 runs each reference once per target momentum. A reference's
+        ``source_id`` is a bare mechanism name shared by both arms, so without the
+        arm in the name the second arm overwrites the first — and the skip filter,
+        finding the file, silently never runs it."""
+        from util.transfer import SourcePolicy, TargetSpec, transfer_rows, write_transfer_cell
+
+        target = TargetSpec(name="chexpert", eps=10.0, delta=1e-7, T=2000, arch="cnn")
+        written = set()
+        for arm in ("sgd-m0.0", "sgd-m0.9"):
+            source = SourcePolicy(
+                run_id="Constant",
+                dataset="chexpert",
+                eps=10.0,
+                delta=1e-7,
+                T=2000,
+                p=float("nan"),
+                arch="cnn",
+                arm=arm,
+            )
+            rows = transfer_rows("reference", source, target, [(0, 0.5, 1.0)])
+            written.add(write_transfer_cell(rows, tmp_path).name)
+
+        assert len(written) == 2
+        # ...and the launcher predicts exactly those two names.
+        launch_target = Target(dataset="chexpert", eps=10.0, T=2000)
+        assert written == {
+            cell_filename("Constant", launch_target, arm="sgd-m0.0"),
+            cell_filename("Constant", launch_target, arm="sgd-m0.9"),
+        }
+
 
 def _run(run_id, dataset="mnist", eps=1.0, T=200, arch="cnn", optimizer="sgd-m0.9", seed=0):
     """One run's regime-arm identity, as schedules.parquet records it."""
@@ -466,7 +497,10 @@ class TestReferenceJobs:
 
         targets = [Target("eyepacs", eps=1.0, T=200), Target("chexpert", eps=1.0, T=200)]
 
-        jobs = reference_jobs(("Constant", "Median"), targets, ProducerArgs(cache_root="/c"))
+        # One arm: the fan-out over target momenta is tested separately.
+        jobs = reference_jobs(
+            ("Constant", "Median"), targets, ProducerArgs(cache_root="/c"), ("sgd-m0.9",)
+        )
 
         assert len(jobs) == 4
         conf = _parse(ReferenceCellConfig, jobs[0])
@@ -474,7 +508,9 @@ class TestReferenceJobs:
         assert (conf.target, conf.target_eps, conf.target_T) == ("eyepacs", 1.0, 200)
         # The selector phase: no --candidate, so the producer selects and evaluates.
         assert conf.candidate == -1
-        assert jobs[0].cells == ("transfer/reference/Constant__eyepacs__eps1_T200.parquet",)
+        assert jobs[0].cells == (
+            "transfer/reference/Constant__eyepacs__eps1_T200__sgd-m0.9.parquet",
+        )
 
     def test_one_candidate_job_per_reference_target_and_candidate(self):
         from transfer_reference import ReferenceCellConfig
@@ -482,7 +518,11 @@ class TestReferenceJobs:
         targets = [Target("eyepacs", eps=1.0, T=200)]
 
         jobs = candidate_jobs(
-            ("Constant", "Median"), targets, ProducerArgs(cache_root="/c"), num_candidates=20
+            ("Constant", "Median"),
+            targets,
+            ProducerArgs(cache_root="/c"),
+            num_candidates=20,
+            arms=("sgd-m0.9",),
         )
 
         assert len(jobs) == 40
@@ -494,11 +534,13 @@ class TestReferenceJobs:
         # under transfer/ would be globbed by the assembler as a producer.
         targets = [Target("eyepacs", eps=1.0, T=200)]
 
-        jobs = candidate_jobs(("Constant",), targets, ProducerArgs(cache_root="/c"), 2)
+        jobs = candidate_jobs(
+            ("Constant",), targets, ProducerArgs(cache_root="/c"), 2, ("sgd-m0.9",)
+        )
 
         assert [job.cells for job in jobs] == [
-            ("transfer_candidates/Constant__eyepacs__eps1_T200__cand00.json",),
-            ("transfer_candidates/Constant__eyepacs__eps1_T200__cand01.json",),
+            ("transfer_candidates/Constant__eyepacs__eps1_T200__sgd-m0.9__cand00.json",),
+            ("transfer_candidates/Constant__eyepacs__eps1_T200__sgd-m0.9__cand01.json",),
         ]
 
     def test_a_finished_candidate_is_skipped_independently_of_its_selector(self, tmp_path):
@@ -508,9 +550,9 @@ class TestReferenceJobs:
         args = ProducerArgs(cache_root=str(tmp_path))
         done = tmp_path / "transfer_candidates"
         done.mkdir(parents=True)
-        (done / "Constant__eyepacs__eps1_T200__cand00.json").touch()
+        (done / "Constant__eyepacs__eps1_T200__sgd-m0.9__cand00.json").touch()
 
-        jobs = candidate_jobs(("Constant",), targets, args, 3)
+        jobs = candidate_jobs(("Constant",), targets, args, 3, ("sgd-m0.9",))
         surviving = drop_finished(jobs, tmp_path)
 
         assert [job.cells[0].rsplit("__", 1)[-1] for job in surviving] == [
@@ -518,7 +560,29 @@ class TestReferenceJobs:
             "cand02.json",
         ]
         # The selector is still outstanding: its cell does not exist.
-        assert drop_finished(reference_jobs(("Constant",), targets, args), tmp_path)
+        assert drop_finished(reference_jobs(("Constant",), targets, args, ("sgd-m0.9",)), tmp_path)
+
+    def test_each_reference_runs_once_per_target_momentum(self):
+        """ADR 0021: a reference is native to its target, so an m=0.9-tuned one is not
+        a baseline for an m=0.0 target. Both phases fan out over the arms, and both
+        must own distinct outputs — sharing a filename would make the skip filter drop
+        the second arm silently."""
+        from transfer_reference import ReferenceCellConfig
+
+        targets = [Target("chexpert", eps=10.0, T=2000)]
+        arms = ("sgd-m0.0", "sgd-m0.9")
+        args = ProducerArgs(cache_root="/c")
+
+        selectors = reference_jobs(("Constant",), targets, args, arms)
+        candidates = candidate_jobs(("Constant",), targets, args, 2, arms)
+
+        assert len(selectors) == 2
+        assert len(candidates) == 4
+        assert {_parse(ReferenceCellConfig, job).arm for job in selectors} == set(arms)
+        for jobs in (selectors, candidates):
+            cells = [job.cells[0] for job in jobs]
+            assert len(set(cells)) == len(cells)
+            assert all(any(arm in cell for arm in arms) for cell in cells)
 
     def test_the_selector_waits_on_the_candidate_stage(self):
         # The stage's DAG edge. Without it the selector would run against an empty

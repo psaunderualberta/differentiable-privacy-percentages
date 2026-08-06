@@ -168,7 +168,9 @@ def run_equation_cell(
         )
 
     arm = synthesis_arm(eval_dir)
-    config = build_target_config(target, batch_size)
+    # The synthesis is scoped to one arm (ADR 0016), so the closed form it distilled is
+    # that arm's shape and its target runs at that arm's momentum (ADR 0021).
+    config = build_target_config(target, batch_size, arm)
     target_T = int(target.T)
     paths: list[Path] = []
     # The inner DP-SGD path also reads the singleton / RunContext, so the whole eval

@@ -59,15 +59,19 @@ def _reference_for_slug(slug: str) -> str:
     raise SystemExit(f"unknown reference {slug!r}; expected one of {reference_slugs()}")
 
 
-def reference_source(reference_slug: str, target: TargetSpec) -> SourcePolicy:
-    """The SourcePolicy for a native reference evaluated on ``target``.
+def reference_source(reference_slug: str, target: TargetSpec, arm: str) -> SourcePolicy:
+    """The SourcePolicy for a native reference evaluated on ``target`` under ``arm``.
 
     A reference is not transferred from a learned run, so its source provenance IS the
     target regime (dataset/eps/delta/T/arch), tagged by the reference slug. ``p`` is NaN:
-    there is no source run to read a sampling rate from. ``arm`` is ``""`` — the arm is
-    an outer-loop condition (ADR 0011) and a reference was never learned in one. It is
-    the empty string rather than NaN because ``source_arm`` is a grouping and
-    overlay-join key, and NaN never compares equal to itself.
+    there is no source run to read a sampling rate from.
+
+    ``arm`` is the *target's* momentum, not a learned condition (ADR 0021 widened the
+    arm from a source property to a property of the whole transfer). It is required
+    because a reference is swept and evaluated at one momentum, and an ``m=0.9``-tuned
+    reference is not a baseline for an ``m=0.0`` target. It stays a string rather than
+    NaN because ``source_arm`` is a grouping and overlay-join key, and NaN never
+    compares equal to itself.
     """
     return SourcePolicy(
         run_id=reference_slug,
@@ -77,7 +81,7 @@ def reference_source(reference_slug: str, target: TargetSpec) -> SourcePolicy:
         T=target.T,
         p=float("nan"),
         arch=target.arch,
-        arm="",
+        arm=arm,
     )
 
 
@@ -122,13 +126,17 @@ def baseline_data_to_results(df: pd.DataFrame) -> dict[str, list[tuple[int, floa
 
 
 @contextlib.contextmanager
-def _baseline_on_target(target: TargetSpec, batch_size: int, num_reps: int, seed: int):
-    """A ``Baseline`` bound to the target regime, inside both config scopes.
+def _baseline_on_target(target: TargetSpec, batch_size: int, num_reps: int, seed: int, arm: str):
+    """A ``Baseline`` bound to the target regime and its arm, inside both config scopes.
 
     The inner DP-SGD path also reads the singleton / RunContext, so everything the
     caller does with the Baseline (not just param construction) has to stay inside
     both — otherwise a training-time singleton read finds it reset and re-parses
     ``sys.argv``.
+
+    ``arm`` sets the target's inner SGD momentum (ADR 0021): the reference is both
+    *swept* and *evaluated* under it, so the winning hyperparameters are tuned for the
+    momentum the transferred policies it is compared against will also run at.
     """
     from conf.scope import RunContext, using
     from conf.singleton_conf import SingletonConfig
@@ -137,7 +145,7 @@ def _baseline_on_target(target: TargetSpec, batch_size: int, num_reps: int, seed
     from util.baselines import Baseline
     from util.dataloaders import get_dataset_shapes
 
-    config = build_target_config(target, batch_size)
+    config = build_target_config(target, batch_size, arm)
     with SingletonConfig.override(config), using(RunContext(config)):
         X_shape, *_ = get_dataset_shapes()
         gdp_params = get_privacy_params(X_shape[0])
@@ -161,6 +169,7 @@ def run_candidate_cell(
     num_reps: int = 3,
     seed: int = 0,
     iterations: int = 0,
+    arm: str = "",
 ) -> Path:
     """Score one sweep candidate on the target and write its record (ADR 0019).
 
@@ -175,7 +184,7 @@ def run_candidate_cell(
 
     iterations = iterations or SWEEP_SCORING_ITERATIONS
     name = _reference_for_slug(reference)
-    with _baseline_on_target(target, batch_size, num_reps, seed) as baseline:
+    with _baseline_on_target(target, batch_size, num_reps, seed, arm) as baseline:
         schedules = baseline.candidate_schedules(name, _sweep_key(reference, seed))
         if not 0 <= candidate < len(schedules):
             raise SystemExit(
@@ -183,7 +192,7 @@ def run_candidate_cell(
             )
         score = baseline.score_candidate(schedules[candidate], name, iterations)
 
-    return write_candidate_record(reference, target, candidate, score, iterations, cache_root)
+    return write_candidate_record(reference, target, candidate, score, iterations, cache_root, arm)
 
 
 def run_selector_cell(
@@ -193,6 +202,7 @@ def run_selector_cell(
     batch_size: int = 250,
     num_reps: int = 3,
     seed: int = 0,
+    arm: str = "",
 ) -> Path:
     """Pick the sweep winner off the candidate records and write the reference cell.
 
@@ -204,16 +214,16 @@ def run_selector_cell(
     """
     from util.transfer import read_candidate_records
 
-    winner = select_candidate(read_candidate_records(reference, target, cache_root))
+    winner = select_candidate(read_candidate_records(reference, target, cache_root, arm))
     name = _reference_for_slug(reference)
     print(f"{reference}: candidate {winner} won the sweep; running the final evaluation")
 
-    with _baseline_on_target(target, batch_size, num_reps, seed) as baseline:
+    with _baseline_on_target(target, batch_size, num_reps, seed, arm) as baseline:
         schedules = baseline.candidate_schedules(name, _sweep_key(reference, seed))
         df = baseline.evaluate_candidate(schedules[winner], name, with_progress_bar=False)
 
     results = baseline_data_to_results(df)[reference]
-    rows = transfer_rows("reference", reference_source(reference, target), target, results)
+    rows = transfer_rows("reference", reference_source(reference, target, arm), target, results)
     return write_transfer_cell(rows, cache_root)
 
 
@@ -242,6 +252,14 @@ class ReferenceCellConfig:
     """Score this sweep candidate instead of selecting; -1 runs the selector phase."""
     iterations: int = 0
     """Inner trainings per scored candidate; 0 uses baselines.SWEEP_SCORING_ITERATIONS."""
+    arm: str = "sgd-m0.9"
+    """Target inner-SGD momentum arm (ADR 0011 label) this reference is a baseline for.
+
+    Required in practice: the reference stage runs once per target momentum (ADR 0021),
+    and the arm both sets the evaluation's momentum and separates the two sweeps' score
+    records on disk. The default is the momentum the whole batch ran at before ADR 0021,
+    so an invocation that omits it reproduces the old behaviour rather than a new one.
+    """
 
 
 def main(conf: ReferenceCellConfig) -> None:
@@ -257,6 +275,7 @@ def main(conf: ReferenceCellConfig) -> None:
         "batch_size": conf.batch_size,
         "num_reps": conf.num_reps,
         "seed": conf.seed,
+        "arm": conf.arm,
     }
     if conf.candidate >= 0:
         out = run_candidate_cell(

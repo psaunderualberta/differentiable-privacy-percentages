@@ -176,7 +176,11 @@ def run_curve_cell(
     from util.baselines import Baseline
     from util.dataloaders import get_dataset_shapes
 
-    config = build_target_config(target, batch_size)
+    # The target inherits the source policy's arm (ADR 0021): a schedule learned under
+    # sgd-m0.0 is transferred onto a target that also runs at momentum 0.0. Read off the
+    # source rather than passed in, so a curve job's manifest line is unchanged and the
+    # already-matched sgd-m0.9 cells are still skipped by filename on relaunch.
+    config = build_target_config(target, batch_size, source.arm)
     # The inner DP-SGD path also reads the singleton / RunContext, so the whole
     # eval (not just param construction) must stay inside both scopes — otherwise
     # a training-time singleton read finds it reset and re-parses sys.argv.

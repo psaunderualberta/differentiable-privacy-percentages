@@ -222,7 +222,10 @@ template's constants are indexed by), not a separate concept.
 
 The **arm** is part of a source regime's identity even though `_REGIME_COLUMNS` omits
 it: the two arms' schedule shapes differ enough that pooling them turns generalization
-consistency into a measure of arm separation instead.
+consistency into a measure of arm separation instead. Since ADR 0021 the **target regime
+inherits the source's arm**, so the arm is a property of the whole transfer rather than of
+its source end alone, and the two arms' accuracies are not on a common scale — they are
+measured on differently-configured targets. Each arm has its own **transfer references**.
 _Avoid_: using "regime" for the three Constant / DynamicDPSGD / StatefulMedianGradient
 schedules — those are **transfer references**.
 
@@ -242,7 +245,13 @@ row unit is the reference itself; `source_label` carries whichever applies.
 Which policies are *in scope* is ADR 0018: the T-sweep arch axis, both arms, regime-arms
 carrying ≥4 seeds, capped at the four lowest seed indices. The cap is a subsample —
 independent of every accuracy number — not the selection ADR 0008 prohibits.
-_Avoid_: transfer grid, results table.
+
+The transfer matrix is the *set of cells*, not a figure. It is no longer **rendered** as a
+source × target heatmap: source dataset turns out to explain 0–1% of transfer accuracy and
+source T 80–91%, so the reported figure plots accuracy against source T and the full grid
+ships as an appendix CSV (ADR 0022). Nothing about what is computed, or about read-off-not-
+selected, changes.
+_Avoid_: transfer grid, results table, using "transfer matrix" for the reported figure.
 
 **Generalization consistency**:
 The spread of transfer accuracies across the *source policies* of one regime-arm at one
@@ -251,6 +260,23 @@ target — how reproducibly that regime's learned shape transfers. Distinct from
 which measures only DP-SGD's own run-to-run variance. Both are standard deviations
 over accuracy, so always name which one a bar or ± figure shows.
 _Avoid_: spread (unqualified), variance, error bar.
+
+**Source-regime spread**:
+The third and largest of the accuracy spreads: the sd across the source *regimes* that
+share one source T at one target, i.e. across source dataset and source ε. Computed over
+the regime **means** — the regime's policies are averaged first, for the reason
+`_collapse` already gives for pooling policies before taking a consistency figure, so it
+is not inflated by **generalization consistency** or **evaluation noise** sitting
+underneath it. It answers a question neither of the other two can: *does it matter where
+the policy came from, holding source T fixed?*
+
+It is the band on the source-T transfer plot, and it is not decoration — it grows with
+distance from the source-T = target-T diagonal, so near the diagonal a transfer is both
+most accurate and most provenance-independent. Measured on the matched arm it runs
+0.04–0.90pp against ~0.1pp generalization consistency and ~0.35pp evaluation noise, so
+the three are not interchangeable at any point.
+_Avoid_: provenance spread, spread (unqualified), calling it generalization consistency
+(that name is reserved for the within-regime, across-policy quantity).
 
 **Source policy**:
 The row unit of the transfer matrix: one learned run's final length-T σ/clip

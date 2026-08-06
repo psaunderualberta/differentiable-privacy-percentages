@@ -40,7 +40,10 @@ def warm(dataset: str, batch_size: int) -> tuple:
     from util.dataloaders import get_dataset_shapes
 
     target = TargetSpec(name=dataset, eps=1.0, delta=1e-7, T=1, arch="")
-    config = build_target_config(target, batch_size)
+    # Nothing here trains, so the arm is inert — but ADR 0021 makes it required rather
+    # than defaulted, and a warm-up that silently picked a momentum is exactly the
+    # habit that caused the bug. Named explicitly, and it reaches no optimizer.
+    config = build_target_config(target, batch_size, arm="sgd-m0.9")
     # Both scopes, exactly as the three producers do it: net_factory reads the
     # SingletonConfig, dataloaders reads the conf.scope RunContext.
     with SingletonConfig.override(config), using(RunContext(config)):

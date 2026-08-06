@@ -57,15 +57,40 @@ def expand_targets(
     )
 
 
-def cell_filename(source_id: str, target: Target) -> str:
+# Producers whose ``source_id`` does NOT determine the arm, so their cell names must
+# carry it (ADR 0021). A curve cell's source_id is a W&B run id and an equation cell's
+# is a condition slug; each was learned in exactly one arm, so the arm is redundant in
+# their names — and adding it would rename every finished cell for no information.
+# A reference's source_id is a bare mechanism name (`Constant`/`Dynamic-DPSGD`/`Median`)
+# that both target momenta share, so without the arm the two collide on one file.
+#
+# Read by BOTH the launcher's skip filter and ``util.transfer.write_transfer_cell``,
+# so the two cannot disagree about which producers get an arm segment.
+ARM_IN_CELL_NAME = frozenset({"reference"})
+
+TARGET_ARMS = ("sgd-m0.0", "sgd-m0.9")
+"""The target inner-momentum arms the reference stage is replicated across (ADR 0021).
+
+Curve and equation jobs do *not* consult this: their arm is a property of the source
+they transfer (its ``optimizer`` column / its synthesis) and the target inherits it, so
+their manifest lines are unchanged and their finished cells still skip by filename.
+Only the references, having no source to inherit from, have to be told.
+"""
+
+
+def cell_filename(source_id: str, target: Target, arm: str = "") -> str:
     """The parquet filename one source×target cell is written to.
 
     The single definition of a cell's on-disk name, shared with
     ``util.transfer.write_transfer_cell``. The launcher's skip filter tests for
     exactly this file, so a divergence here would silently re-run finished cells
     (or, worse, skip unfinished ones).
+
+    ``arm`` is appended when non-empty. Callers pass it iff the producer is in
+    :data:`ARM_IN_CELL_NAME`; see that constant for why the default is to omit it.
     """
-    return f"{source_id}__{target.dataset}__eps{target.eps:g}_T{int(target.T)}.parquet"
+    suffix = f"__{arm}" if arm else ""
+    return f"{source_id}__{target.dataset}__eps{target.eps:g}_T{int(target.T)}{suffix}.parquet"
 
 
 # Where a reference sweep's per-candidate scores live. Deliberately a *sibling* of
@@ -85,15 +110,22 @@ docstring); the producer validates the index it is handed against the real sweep
 STAGE_PREREQUISITE_STAGE = {"reference": "reference-candidate"}
 
 
-def candidate_filename(reference: str, target: Target, candidate: int) -> str:
-    """The file one (reference × target × candidate) score is written to.
+def candidate_filename(reference: str, target: Target, candidate: int, arm: str = "") -> str:
+    """The file one (reference × target × arm × candidate) score is written to.
 
     The launcher's skip filter tests for exactly this path, which is what gives the
     reference stage its second resumption granularity: a finished candidate is
     skipped independently of its selector.
+
+    The arm segment sits *before* ``__cand`` so that stripping the candidate index
+    still leaves a prefix identifying one arm's sweep — which is how
+    ``util.transfer.read_candidate_records`` collects the pool the selector chooses
+    from. Put it after, and the selector would pool both arms' scores into one sweep
+    (ADR 0021).
     """
+    suffix = f"__{arm}" if arm else ""
     return (
-        f"{reference}__{target.dataset}__eps{target.eps:g}_T{int(target.T)}"
+        f"{reference}__{target.dataset}__eps{target.eps:g}_T{int(target.T)}{suffix}"
         f"__cand{int(candidate):02d}.json"
     )
 
@@ -357,8 +389,9 @@ def _target_flags(target: Target) -> str:
     )
 
 
-def _cells(producer: str, source_ids, target: Target) -> tuple[str, ...]:
-    return tuple(f"transfer/{producer}/{cell_filename(s, target)}" for s in source_ids)
+def _cells(producer: str, source_ids, target: Target, arm: str = "") -> tuple[str, ...]:
+    named = arm if producer in ARM_IN_CELL_NAME else ""
+    return tuple(f"transfer/{producer}/{cell_filename(s, target, named)}" for s in source_ids)
 
 
 def curve_jobs(regimes: list[SourceRegime], targets: list[Target], args: ProducerArgs) -> list[Job]:
@@ -434,8 +467,9 @@ def candidate_jobs(
     targets: list[Target],
     args: ProducerArgs,
     num_candidates: int = NUM_SWEEP_CANDIDATES,
+    arms: tuple[str, ...] = TARGET_ARMS,
 ) -> list[Job]:
-    """One scoring job per native reference × target × sweep candidate (ADR 0019).
+    """One scoring job per native reference × target × arm × sweep candidate (ADR 0019).
 
     The reference stage's first phase. A reference's search is 20 candidates and, run
     as one blocking sweep, ~87 GPU-hours per target — against an 11:55 wall, and with
@@ -445,6 +479,10 @@ def candidate_jobs(
 
     A candidate task owns its score record, not a transfer cell, so :func:`drop_finished`
     resumes a partial reference stage at candidate granularity.
+
+    The sweep is repeated per ``arm`` (ADR 0021): the candidates are scored at the
+    target momentum they will be a baseline for, so an m=0.9-tuned reference is never
+    reused as the m=0.0 target's bar.
     """
     return [
         Job(
@@ -453,28 +491,34 @@ def candidate_jobs(
                 "uv run --no-sync transfer_reference.py"
                 f" --reference {shlex.quote(reference)}"
                 f" --candidate {candidate}"
+                f" --arm {shlex.quote(arm)}"
                 f" {_target_flags(target)}"
                 f" {args.shared_flags()}"
             ),
-            cells=(f"{CANDIDATE_DIR}/{candidate_filename(reference, target, candidate)}",),
+            cells=(f"{CANDIDATE_DIR}/{candidate_filename(reference, target, candidate, arm)}",),
         )
         for reference in references
         for target in targets
+        for arm in arms
         for candidate in range(num_candidates)
     ]
 
 
 def reference_jobs(
-    references: tuple[str, ...], targets: list[Target], args: ProducerArgs
+    references: tuple[str, ...],
+    targets: list[Target],
+    args: ProducerArgs,
+    arms: tuple[str, ...] = TARGET_ARMS,
 ) -> list[Job]:
-    """One selector job per native reference × target — the stage's second phase.
+    """One selector job per native reference × target × arm — the stage's second phase.
 
     Reads every candidate's score, picks the winner and runs the final evaluation.
     This is the only reference job that writes a ``producer="reference"`` cell; the
     candidate records it consumes are intermediate and must never reach the assembler.
 
     The three references are selected independently rather than in one invocation so
-    they fan out across the cluster.
+    they fan out across the cluster. Each arm selects from its own score pool, which is
+    what makes 3 mechanisms × 6 target regimes × 2 arms = 36 reference cells.
     """
     return [
         Job(
@@ -482,13 +526,15 @@ def reference_jobs(
             args=(
                 "uv run --no-sync transfer_reference.py"
                 f" --reference {shlex.quote(reference)}"
+                f" --arm {shlex.quote(arm)}"
                 f" {_target_flags(target)}"
                 f" {args.shared_flags()}"
             ),
-            cells=_cells("reference", [reference], target),
+            cells=_cells("reference", [reference], target, arm),
         )
         for reference in references
         for target in targets
+        for arm in arms
     ]
 
 
@@ -514,6 +560,7 @@ def plan_jobs(
     args: ProducerArgs,
     grid: set = frozenset(),
     scope: SourceScope | None = None,
+    target_arms: tuple[str, ...] = TARGET_ARMS,
 ) -> dict[str, list[Job]]:
     """The surviving jobs for each requested stage, after validation and skipping.
 
@@ -521,6 +568,9 @@ def plan_jobs(
     about what a stage's task list is. Off-grid targets are fatal for the equation
     stage and a warning for the others (curve off-grid is the experiment), and the
     skip filter is applied last, so the printed counts are what will actually run.
+
+    ``target_arms`` replicates the *reference* stage per target momentum (ADR 0021).
+    Curve and equation ignore it — their arm comes from the source they transfer.
     """
     jobs: dict[str, list[Job]] = {}
     for stage in stages:
@@ -530,8 +580,11 @@ def plan_jobs(
             # array and its selector array, inserted in dependency order so a launcher
             # that iterates the result submits the candidates first.
             for phase, built_phase in (
-                ("reference-candidate", candidate_jobs(REFERENCES, targets, args)),
-                ("reference", reference_jobs(REFERENCES, targets, args)),
+                (
+                    "reference-candidate",
+                    candidate_jobs(REFERENCES, targets, args, arms=target_arms),
+                ),
+                ("reference", reference_jobs(REFERENCES, targets, args, target_arms)),
             ):
                 surviving_phase = drop_finished(built_phase, args.cache_root)
                 skipped_phase = len(built_phase) - len(surviving_phase)

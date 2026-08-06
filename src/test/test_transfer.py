@@ -10,6 +10,7 @@ from util.transfer import (
     SourcePolicy,
     TargetSpec,
     assemble_transfer,
+    build_target_config,
     seat_on_budget,
     transfer_rows,
     write_transfer_cell,
@@ -142,6 +143,21 @@ class TestSchemaAdapter:
         df = transfer_rows("curve", _source(), _target(), [(0, 0.81, 0.42)])
 
         assert df["source_arm"].tolist() == ["sgd-m0.9"]
+
+
+class TestTargetInheritsTheArm:
+    """ADR 0021: the target regime runs at the source's inner momentum.
+
+    Before this, ``build_target_config`` left ``optimizer`` to ``SGDConfig``'s
+    default, so every target trained at momentum 0.9 whatever arm its source came
+    from — perfectly confounding the arm with source/target optimizer match.
+    """
+
+    def test_target_runs_at_the_arms_momentum(self):
+        for arm, expected in (("sgd-m0.0", 0.0), ("sgd-m0.9", 0.9)):
+            config = build_target_config(_target(), 250, arm=arm)
+
+            assert config.sweep.env.optimizer.momentum.value == pytest.approx(expected)
 
 
 class TestCellWriteAndAssemble:

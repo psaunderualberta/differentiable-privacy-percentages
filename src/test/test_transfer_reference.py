@@ -64,7 +64,7 @@ class TestReferenceSource:
     def test_source_policy_mirrors_the_target_regime(self):
         target = TargetSpec(name="eyepacs", eps=1.0, delta=1e-7, T=200, arch="cnn-32x64-head256")
 
-        source = reference_source("Constant", target)
+        source = reference_source("Constant", target, arm="sgd-m0.9")
 
         assert isinstance(source, SourcePolicy)
         assert source.run_id == "Constant"
@@ -76,15 +76,14 @@ class TestReferenceSource:
         # No source run to borrow a sampling rate from.
         assert math.isnan(source.p)
 
-    def test_a_reference_has_no_arm_at_all(self):
-        # The arm is an *outer-loop* condition (ADR 0011): a native reference is swept
-        # directly on the target and was never learned in one. The sentinel is the
-        # empty string, not NaN, because source_arm is a grouping and overlay-join key
-        # and NaN never compares equal to itself — a NaN-armed reference row would
-        # silently fall out of every groupby that keeps it.
+    def test_a_reference_carries_the_target_momentum_it_was_tuned_at(self):
+        # ADR 0021 widens the arm from "which arm the source was learned in" to a
+        # property of the whole transfer. A reference is swept and evaluated natively
+        # on the target, so its arm is the target's momentum — and it must be recorded,
+        # because an m=0.9-tuned reference is not a baseline for an m=0.0 target.
         target = TargetSpec(name="eyepacs", eps=1.0, delta=1e-7, T=200, arch="cnn")
 
-        assert reference_source("Constant", target).arm == ""
+        assert reference_source("Constant", target, arm="sgd-m0.0").arm == "sgd-m0.0"
 
 
 @contextlib.contextmanager
@@ -103,7 +102,9 @@ def _baseline(T=8):
     from util.baselines import Baseline
     from util.transfer import TargetSpec, build_target_config
 
-    config = build_target_config(TargetSpec(name="mnist", eps=1.0, delta=1e-5, T=T, arch=""), 250)
+    config = build_target_config(
+        TargetSpec(name="mnist", eps=1.0, delta=1e-5, T=T, arch=""), 250, arm="sgd-m0.9"
+    )
     privacy_params = GDPPrivacyParameters(eps=1.0, delta=1e-5, p=0.01, T=T)
     with SingletonConfig.override(config), using(RunContext(config)):
         yield Baseline(None, privacy_params, jr.PRNGKey(0), num_reps=3)
@@ -185,6 +186,22 @@ class TestCandidateRecords:
         records = read_candidate_records("Constant", target, tmp_path)
 
         assert [(r["candidate"], r["mean_accuracy"]) for r in records] == [(3, 0.61), (7, 0.55)]
+
+    def test_the_two_arms_sweeps_stay_separate(self, tmp_path):
+        """ADR 0021 re-runs each reference's sweep at the new target momentum, so a
+        record belongs to one arm. Sharing a filename would both lose one arm's score
+        and hand the selector a pool it thinks is a single sweep."""
+        from util.transfer import read_candidate_records, write_candidate_record
+
+        target = self._target()
+        write_candidate_record("Constant", target, 3, 0.61, 3, tmp_path, arm="sgd-m0.9")
+        write_candidate_record("Constant", target, 3, 0.42, 3, tmp_path, arm="sgd-m0.0")
+
+        m09 = read_candidate_records("Constant", target, tmp_path, arm="sgd-m0.9")
+        m00 = read_candidate_records("Constant", target, tmp_path, arm="sgd-m0.0")
+
+        assert [r["mean_accuracy"] for r in m09] == [0.61]
+        assert [r["mean_accuracy"] for r in m00] == [0.42]
 
     def test_candidate_records_are_invisible_to_the_assembler(self, tmp_path):
         from transfer_plot import load_producers
