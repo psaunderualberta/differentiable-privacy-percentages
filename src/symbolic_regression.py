@@ -4,6 +4,8 @@ import pickle
 import subprocess
 import sys
 import time
+import uuid
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
@@ -401,12 +403,83 @@ def _persist_target(model: PySRRegressor, feature_names: list[str], target_dir: 
     print(f"  → persisted {target_dir}")
 
 
+def _atomic_write(path: Path, write: Callable[[Path], None]) -> None:
+    """Materialise ``path`` via a same-directory temp file plus ``os.replace``.
+
+    The slug directory is written concurrently by an arm's per-target jobs (see
+    ``write_features_full``), and none of pandas' writers are atomic — a reader arriving
+    mid-write sees a truncated file. Renaming into place makes every observable state a
+    complete file. The temp is a *sibling*, not a ``$TMPDIR`` entry, because ``os.replace``
+    is only atomic within one filesystem.
+
+    The temp name carries a random token rather than the pid: the concurrent writers here
+    are SLURM array tasks on *different nodes* over a shared filesystem, where pids collide
+    freely, and two writers sharing a temp path would interleave into it and rename the
+    result into place — the very tear this exists to prevent.
+    """
+    tmp = path.with_name(f".{path.name}.tmp{uuid.uuid4().hex[:8]}")
+    try:
+        write(tmp)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _parquet_is_readable(path: Path) -> bool:
+    """Whether ``path`` is a complete parquet — footer read only, so this stays cheap on
+    the ~1M-row feature table."""
+    try:
+        import pyarrow.parquet as pq
+
+        pq.ParquetFile(path).metadata  # noqa: B018 — raises on a truncated footer
+    except Exception:
+        return False
+    return True
+
+
+def write_features_full(out_dir: Path, schedules: pd.DataFrame) -> bool:
+    """Write the full-resolution feature table into the slug dir, at most once.
+
+    ``sr-run-starter.py`` submits one job per target and ``sr_identity`` excludes
+    ``targets`` from the identity, so an arm's jobs share this ``out_dir`` and would
+    otherwise each write their own full-size copy of the same deterministic frame — two
+    ~1.08M-row parquets landing seconds apart, which is the likeliest cause of the
+    disk-full event preserved as ``pysr_eval/<slug>.enospc-2026-08-04``.
+
+    Skipping is safe because the content is a pure function of the synthesis identity, and
+    an existing file is complete by construction of the atomic write. A file left
+    truncated by a pre-fix crash is detected and rewritten. Returns whether it wrote.
+    """
+    path = out_dir / "features_full.parquet"
+    if path.exists() and _parquet_is_readable(path):
+        print(f"  → features_full.parquet already present ({path}); not rewriting")
+        return False
+    _atomic_write(path, lambda p: schedules.to_parquet(p, index=False))
+    return True
+
+
+def _existing_manifest_targets(out_dir: Path) -> list[str]:
+    path = out_dir / "manifest.json"
+    if not path.is_file():
+        return []
+    try:
+        return list(json.loads(path.read_text()).get("targets", []))
+    except (OSError, ValueError):
+        return []
+
+
 def _write_manifest(
     out_dir: Path, conf: PySRConfig, keep_runs: set[str], full_df: pd.DataFrame
 ) -> None:
+    # Top-level `targets` describes the *directory*, not this job: it unions in whatever an
+    # earlier sibling job recorded, so the file stops reporting only the last writer.
+    # `config` stays a faithful dump of the invoking job (transfer_equation.synthesis_arm
+    # reads config.optimizers off it). The read-modify-write is itself racy, but its worst
+    # case is the pre-fix behaviour — under-reporting — so enumerate the target
+    # subdirectories if you need certainty about what a slug dir holds.
     manifest = {
         "config": asdict(conf),
-        "targets": list(conf.targets),
+        "targets": sorted({*conf.targets, *_existing_manifest_targets(out_dir)}),
         "points_per_run": conf.points_per_run,
         "n_runs": len(keep_runs),
         "n_rows_full": len(full_df),
@@ -417,7 +490,7 @@ def _write_manifest(
         "eps": sorted(full_df["eps"].dropna().unique().tolist()),
         "T": sorted(int(t) for t in full_df["T"].dropna().unique()),
     }
-    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    _atomic_write(out_dir / "manifest.json", lambda p: p.write_text(json.dumps(manifest, indent=2)))
 
 
 def main(conf: PySRConfig):
@@ -454,8 +527,11 @@ def main(conf: PySRConfig):
     # a self-contained synthesis-group artifact: point the evaluator's --eval-dir here.
     out_base = Path(conf.out_dir) if conf.out_dir else cache_dir / "pysr_eval"
     out_dir = out_base / slug
+    # These three slug-level files are shared with this arm's *other* per-target jobs,
+    # which run concurrently against the same directory — all writes go through
+    # _atomic_write, and the parquet is written once. See write_features_full.
     out_dir.mkdir(parents=True, exist_ok=True)
-    schedules.to_parquet(out_dir / "features_full.parquet", index=False)
+    write_features_full(out_dir, schedules)
     _write_manifest(out_dir, conf, keep_runs, schedules)
 
     sampled = sample_points_per_run(schedules, conf.points_per_run).copy()
@@ -466,7 +542,7 @@ def main(conf: PySRConfig):
     category_map = None
     if conf.template_mode:
         category_map = build_category_map(sampled)
-        save_category_map(category_map, out_dir / "category_map.json")
+        _atomic_write(out_dir / "category_map.json", lambda p: save_category_map(category_map, p))
         sampled["category"] = category_series(sampled, category_map)
         print(f"Template mode: {len(category_map)} conditions, {conf.n_template_params} constants")
 
