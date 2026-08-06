@@ -145,7 +145,10 @@ filters, which search space — paired with a single target (σ or clip). Two in
 describing the same problem are the same synthesis and may continue each other's search;
 different problems must never share one. A synthesis is scoped to a single **arm**, since
 a **condition** does not name one and the arms' schedules differ by roughly an order of
-magnitude in scale.
+magnitude in scale — so a pooled fit would serve both arms one constant vector. The
+scoping is a consequence of that keying and of fit cost, not of the arms needing different
+shapes: they share a **universal schedule shape** family about one degree of freedom apart
+(ADR 0023).
 _Avoid_: run (reserved for the W&B object), fit, job, regression.
 
 **Universal schedule shape**:
