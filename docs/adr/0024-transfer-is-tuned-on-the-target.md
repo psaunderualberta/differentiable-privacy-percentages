@@ -100,6 +100,28 @@ source. `transfer_launch.SOURCE_SCOPED_SWEEPS` is the one place that decides it,
 cannot widen or narrow a pool by accident. Stage B is per-condition, because a template
 constant's winner means nothing for another condition.
 
+Sharing is only sound if the sources it is shared across sit at comparable clip levels,
+since the scale is relative to each. Measured on FirSweep's `cnn-16x32-head32` runs, in
+octaves of `log2(mean clip)`:
+
+| | sgd-m0.0 | sgd-m0.9 |
+|---|---|---|
+| within a regime (the seeds a cell pools) | 0.01 sd | 0.02 sd |
+| across regimes within an arm | 0.39 sd (1.40 range) | 0.54 sd (1.97 range) |
+
+The seed-policies of a regime are effectively identical in level, so pooling them under one
+scale is free. Across regimes the spread is **0.4-0.55 octaves sd against a grid step of 1
+octave** — at or inside the grid's own resolution — so one shared scale costs the extreme
+sources about one grid step and typical sources much less. That is an acceptable price for a
+grid deliberately kept coarse by evaluation noise.
+
+The spread is not random: clip level falls monotonically with source `T` (e.g. `mnist`,
+eps=10: 7.26 at T=2000 down to 4.28 at T=7000), which is ~1 octave across the T-sweep and
+is most of the across-regime variance. If the extremes turn out to be mis-tuned, the
+cheap refinement is to scope stage A per `(target x arm x source T)` rather than per
+`(target x arm)`: 40 -> 160 scoring tasks, still under 1% of the curve stage. Left out for
+now because one grid step is within the resolution the noise permits anyway.
+
 **Candidates are scored at reduced reps; the winner is re-evaluated at `num_reps`**, on the
 Baseline's own key — disjoint from the scoring draws, exactly as ADR 0019 requires, so the
 reported number is not the draw that selected it.
