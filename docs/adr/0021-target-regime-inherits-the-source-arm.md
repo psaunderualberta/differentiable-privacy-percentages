@@ -87,3 +87,24 @@ transfer when the source and target optimizers agree."
   default for a field the caller is obliged to specify. The fix belongs in
   `build_target_config`'s signature, which should require the arm rather than permit its
   omission.
+
+## Amendment (2026-08-07): equation cells carry the arm too
+
+`ARM_IN_CELL_NAME` originally held `reference` alone, on the reasoning that a curve cell's
+`source_id` (a W&B run id) and an equation cell's (a condition slug) each identify one arm
+already. That is true of the run id and **false of the condition slug**: a *condition* is
+`(dataset, eps, T, arch)` and ADR 0016 scopes the arm to the *synthesis*, not the
+condition, so the two arm-scoped fits distil the same 32 conditions under the same
+category indices. Both arms' equation cells therefore resolved to one filename — and the
+skip filter, finding it, would have reported "already done" and silently never run the
+second arm's 12 cells. Exactly the failure this ADR fixed for references, in the one
+producer whose `source_id` was assumed to be safe.
+
+`equation` joins `reference` in `ARM_IN_CELL_NAME`. The arm is *not* added to the producer
+command line: `transfer_equation` already derives it from its `--eval_dir` manifest, so
+the launcher reads the same file through the same `transfer_launch.synthesis_arm` (moved
+there from `transfer_equation` for that reason) rather than passing a second, forgeable
+copy. One equation launch therefore covers one arm; both arms means two launches, one per
+eval dir.
+
+No cells are renamed by this: the equation stage had not yet run when it was found.

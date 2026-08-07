@@ -35,6 +35,7 @@ from transfer_launch import (
     scope_regimes,
     serial_sbatch,
     source_regimes,
+    synthesis_arm,
 )
 
 
@@ -109,6 +110,37 @@ class TestCellFilenameMatchesTheProducers:
         assert written == {
             cell_filename("Constant", launch_target, arm="sgd-m0.0"),
             cell_filename("Constant", launch_target, arm="sgd-m0.9"),
+        }
+
+    def test_the_writer_names_equation_cells_the_way_the_launcher_predicts(self, tmp_path):
+        """The equation stage has the same two-arm collision as the reference stage:
+        a condition slug is shared by both arm-scoped syntheses. The writer must put
+        the arm in the name — and the same one the skip filter looked for."""
+        from util.transfer import SourcePolicy, TargetSpec, transfer_rows, write_transfer_cell
+
+        target = TargetSpec(name="chexpert", eps=10.0, delta=1e-7, T=2000, arch="cnn")
+        source_id = condition_source_id(
+            13, {"dataset": "mnist", "eps": 10.0, "T": 2000, "arch_label": "cnn"}
+        )
+        written = set()
+        for arm in ("sgd-m0.0", "sgd-m0.9"):
+            source = SourcePolicy(
+                run_id=source_id,
+                dataset="mnist",
+                eps=10.0,
+                delta=float("nan"),
+                T=2000,
+                p=float("nan"),
+                arch="cnn",
+                arm=arm,
+            )
+            rows = transfer_rows("equation", source, target, [(0, 0.5, 1.0)])
+            written.add(write_transfer_cell(rows, tmp_path).name)
+
+        launch_target = Target(dataset="chexpert", eps=10.0, T=2000)
+        assert written == {
+            cell_filename(source_id, launch_target, arm="sgd-m0.0"),
+            cell_filename(source_id, launch_target, arm="sgd-m0.9"),
         }
 
 
@@ -483,6 +515,48 @@ class TestEquationJobs:
         targets = [Target("eyepacs", eps=4.0, T=1000)]
 
         assert equation_jobs(_CONDITIONS, targets, ProducerArgs(cache_root="/c")) == []
+
+    def test_the_two_arm_scoped_syntheses_do_not_collide(self):
+        """A condition is ``(dataset, eps, T, arch)`` and carries no arm (ADR 0016
+        scopes the *synthesis* to an arm instead), so both arms' category maps hold
+        the same conditions under the same indices. Without the arm in the cell name
+        the second arm's 12 cells would look already-done to the skip filter and
+        never run — the ADR 0021 failure the reference stage already guards against."""
+        targets = [Target("eyepacs", eps=1.0, T=200)]
+        args = ProducerArgs(cache_root="/c", eval_dir="/e")
+
+        m00 = equation_jobs(_CONDITIONS, targets, args, arm="sgd-m0.0")
+        m09 = equation_jobs(_CONDITIONS, targets, args, arm="sgd-m0.9")
+
+        assert {c for job in m00 for c in job.cells}.isdisjoint(c for job in m09 for c in job.cells)
+        assert m00[0].cells == (
+            "transfer/equation/"
+            "fashion-mnist_eps1_T200_cnn_cat1__eyepacs__eps1_T200__sgd-m0.0.parquet",
+        )
+
+
+class TestSynthesisArm:
+    """Which arm a synthesis was fitted over is a property of the *fit*, recorded in
+    its run manifest — the launcher reads it there so the cell name it predicts is
+    the one ``transfer_equation`` (which reads the same file) will write."""
+
+    def _eval_dir(self, tmp_path, optimizers):
+        import json
+
+        (tmp_path / "manifest.json").write_text(json.dumps({"config": {"optimizers": optimizers}}))
+        return tmp_path
+
+    def test_a_single_optimizer_filter_is_the_arm(self, tmp_path):
+        assert synthesis_arm(self._eval_dir(tmp_path, ["sgd-m0.0"])) == "sgd-m0.0"
+
+    def test_a_pooled_or_unfiltered_synthesis_has_no_arm(self, tmp_path):
+        # Empty or several means the fit pooled the arms; labelling those cells with
+        # one arm would be a lie, and "" keeps them out of the per-arm overlay.
+        assert synthesis_arm(self._eval_dir(tmp_path, [])) == ""
+        assert synthesis_arm(self._eval_dir(tmp_path, ["sgd-m0.0", "sgd-m0.9"])) == ""
+
+    def test_a_missing_manifest_has_no_arm(self, tmp_path):
+        assert synthesis_arm(tmp_path / "nonexistent") == ""
 
 
 class TestReferenceJobs:
