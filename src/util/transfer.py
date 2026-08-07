@@ -86,7 +86,38 @@ _TRANSFER_COLUMNS = [
     "seed",
     "accuracy",
     "loss",
+    "tuned_scale",
+    "tuned_constants",
 ]
+
+
+def describe_knobs(knobs) -> tuple[float, str]:
+    """A cell's winning tuning knobs as the two columns the row schema records.
+
+    ``(tuned_scale, tuned_constants)``, where the constants render as a flat
+    ``"sigma.p2=1.5,clip.p1=3.0"`` — legible on a plot annotation and enough to
+    reconstruct the schedule, without a nested column type in the parquet. The
+    equation is named because sigma's ``p2`` and clip's ``p2`` are different numbers
+    in different closed forms.
+
+    ``None`` gives the identity knobs, so an untuned cell records ``(1.0, "")`` rather
+    than a null: direct transfer *is* tuned transfer that chose to change nothing, and
+    a column that is null for one producer and populated for another cannot be grouped
+    on (ADR 0024).
+    """
+    if knobs is None:
+        return 1.0, ""
+    overrides = [
+        # repr, not %g: the column exists so a tuned cell can be reproduced, and %g
+        # would quietly round a constant like -0.004737322 to six significant digits.
+        f"{equation}.{name}={float(value)!r}"
+        for equation, constants in (
+            ("sigma", knobs.sigma_constants),
+            ("clip", knobs.clip_constants),
+        )
+        for name, value in constants
+    ]
+    return float(knobs.scale), ",".join(overrides)
 
 
 def transfer_rows(
@@ -94,12 +125,20 @@ def transfer_rows(
     source: SourcePolicy,
     target: TargetSpec,
     results: Iterable[tuple[int, float, float]],
+    knobs=None,
 ) -> pd.DataFrame:
     """Build the per-seed transfer rows for one source×target cell.
 
     ``results`` is an iterable of ``(seed, accuracy, loss)`` — the per-seed output
     of the eval core. Source/target metadata is broadcast across the seed rows.
+
+    ``knobs`` are the tuning knobs the cell won under (ADR 0024), broadcast across the
+    seed rows like the rest of the metadata; omitting them records the untuned
+    identity. They belong on the row because the accuracy is now the accuracy of a
+    *tuned* schedule — without them the number cannot be reproduced, and "which scale
+    did each target prefer" is itself a result.
     """
+    tuned_scale, tuned_constants = describe_knobs(knobs)
     rows = [
         {
             "producer": producer,
@@ -119,6 +158,8 @@ def transfer_rows(
             "seed": seed,
             "accuracy": accuracy,
             "loss": loss,
+            "tuned_scale": tuned_scale,
+            "tuned_constants": tuned_constants,
         }
         for seed, accuracy, loss in results
     ]
@@ -179,7 +220,7 @@ def _candidate_dir(cache_root: Path | str) -> Path:
 
 
 def write_candidate_record(
-    reference: str,
+    sweep: str,
     target: "TargetSpec",
     candidate: int,
     mean_accuracy: float,
@@ -187,12 +228,17 @@ def write_candidate_record(
     cache_root: Path | str,
     arm: str = "",
 ) -> Path:
-    """Record one reference-sweep candidate's score (ADR 0019).
+    """Record one candidate's score in a tuning sweep (ADR 0019, ADR 0024).
 
     An *intermediate* artifact, not a transfer cell: it lives outside
     ``<cache_root>/transfer/`` so the assembler cannot mistake nineteen
     deliberately under-evaluated candidates for nineteen extra reference columns.
     Only :func:`write_transfer_cell` produces matrix rows.
+
+    ``sweep`` is the candidate pool this score belongs to
+    (``transfer_launch.sweep_id``). ADR 0019 built this for the reference stage's
+    random search; ADR 0024 reuses it for the tuned curve and equation stages, which
+    is why the parameter names a sweep rather than a reference mechanism.
 
     Atomic, for the same reason cell writes are: an array task killed at the wall
     clock must not leave a half-written score that the skip filter reads as done.
@@ -202,10 +248,10 @@ def write_candidate_record(
     out_dir = _candidate_dir(cache_root)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / candidate_filename(
-        reference, Target(dataset=target.name, eps=target.eps, T=target.T), candidate, arm
+        sweep, Target(dataset=target.name, eps=target.eps, T=target.T), candidate, arm
     )
     payload = {
-        "reference": reference,
+        "sweep": sweep,
         "target": target.name,
         "target_eps": float(target.eps),
         "target_T": int(target.T),
@@ -229,15 +275,17 @@ def write_candidate_record(
 
 
 def read_candidate_records(
-    reference: str, target: "TargetSpec", cache_root: Path | str, arm: str = ""
+    sweep: str, target: "TargetSpec", cache_root: Path | str, arm: str = ""
 ) -> list[dict]:
-    """Every scored candidate for one (reference × target × arm), in candidate order.
+    """Every scored candidate for one (sweep × target × arm), in candidate order.
 
     The selector's input. Ordered by candidate index so the winner is a
     deterministic function of what is on disk, whatever order the tasks finished in.
     Scoped to one ``arm``: after ADR 0021 a reference is swept once per target
     momentum, and a pool mixing the two would let one arm's tuning decide the other's
-    baseline.
+    baseline. Scoped to one ``sweep`` for the same reason across producers (ADR 0024):
+    a tuned curve's scale search and a reference's mechanism search are different
+    pools, and mixing them would have one decide the other's winner.
     """
     from transfer_launch import Target, candidate_filename
 
@@ -245,7 +293,7 @@ def read_candidate_records(
     if not out_dir.is_dir():
         return []
     launch_target = Target(dataset=target.name, eps=target.eps, T=target.T)
-    prefix = candidate_filename(reference, launch_target, 0, arm).rsplit("__cand", 1)[0]
+    prefix = candidate_filename(sweep, launch_target, 0, arm).rsplit("__cand", 1)[0]
     records = [
         json.loads(path.read_text(encoding="utf-8"))
         for path in sorted(out_dir.glob(f"{prefix}__cand*.json"))

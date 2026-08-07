@@ -19,6 +19,7 @@ from transfer_launch import (
     Target,
     absolute_path,
     array_sbatch,
+    candidate_filename,
     candidate_jobs,
     cell_filename,
     check_on_grid,
@@ -35,6 +36,7 @@ from transfer_launch import (
     scope_regimes,
     serial_sbatch,
     source_regimes,
+    sweep_id,
     synthesis_arm,
 )
 
@@ -664,6 +666,49 @@ class TestReferenceJobs:
         from transfer_launch import STAGE_PREREQUISITE_STAGE
 
         assert STAGE_PREREQUISITE_STAGE["reference"] == "reference-candidate"
+
+
+class TestSweepIdScopesACandidatePool:
+    """ADR 0019's candidate/selector split now serves three producers, not one, so the
+    pool a selector reads is keyed by a *sweep id* rather than a reference name. The id
+    is what decides how widely a tuning result is shared — and therefore what the whole
+    stage costs."""
+
+    def test_each_producer_and_stage_gets_its_own_pool(self):
+        ids = {
+            sweep_id("reference", "Constant"),
+            sweep_id("curve", "scale"),
+            sweep_id("equation", "scale"),
+            sweep_id("equation", "shape", "mnist_eps10_T5000_cnn_cat31"),
+        }
+
+        # Distinct, or one producer's candidates would decide another's winner.
+        assert len(ids) == 4
+
+    def test_a_scale_sweep_is_shared_across_every_source(self):
+        # The cost lever: stage A is tuned per (target x arm) and reused by every
+        # source, because the scale compensates for the *target's* gradient-norm
+        # regime, not for the source's shape. Without this it would cost cells x 10.
+        assert sweep_id("curve", "scale", "run-a") == sweep_id("curve", "scale", "run-b")
+
+    def test_a_shape_sweep_is_per_condition(self):
+        # Stage B moves the distilled template's per-condition constants, so its
+        # winner is only meaningful for the condition it was searched on.
+        assert sweep_id("equation", "shape", "cat31") != sweep_id("equation", "shape", "cat15")
+
+    def test_ids_are_filesystem_safe(self):
+        # A sweep id is embedded in the candidate record's filename.
+        for sweep in (sweep_id("equation", "shape", "mnist_eps10_T5000_cnn_cat31"),):
+            assert "/" not in sweep and not any(ch.isspace() for ch in sweep)
+
+    def test_the_reference_stages_pool_name_is_unchanged(self):
+        # Reference candidate records already on disk must stay readable: their
+        # filenames were built from the bare mechanism name.
+        target = Target(dataset="chexpert", eps=10.0, T=5000)
+
+        assert candidate_filename(sweep_id("reference", "Constant"), target, 0, "sgd-m0.9") == (
+            candidate_filename("Constant", target, 0, "sgd-m0.9")
+        )
 
 
 class TestSkipFilter:

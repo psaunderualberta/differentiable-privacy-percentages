@@ -34,6 +34,8 @@ _EXPECTED_COLUMNS = [
     "seed",
     "accuracy",
     "loss",
+    "tuned_scale",
+    "tuned_constants",
 ]
 
 
@@ -143,6 +145,41 @@ class TestSchemaAdapter:
         df = transfer_rows("curve", _source(), _target(), [(0, 0.81, 0.42)])
 
         assert df["source_arm"].tolist() == ["sgd-m0.9"]
+
+
+class TestWinningKnobsAreRecordedOnTheCell:
+    """ADR 0024: a cell's accuracy is now the accuracy of a *tuned* schedule, so the
+    knobs it won under are part of the result. Without them on the row the number is
+    unreproducible — and 'which scale did each target prefer?' is itself a finding."""
+
+    def test_an_untuned_cell_records_the_identity_knobs(self):
+        # Direct transfer is tuned transfer at scale 1 with nothing overridden, so the
+        # column is always populated rather than null for one producer and not another.
+        df = transfer_rows("curve", _source(), _target(), [(0, 0.81, 0.42)])
+
+        assert df["tuned_scale"].tolist() == [1.0]
+        assert df["tuned_constants"].tolist() == [""]
+
+    def test_the_winning_scale_and_constants_land_on_every_seed_row(self):
+        from transfer_tuning import Knobs
+
+        knobs = Knobs(scale=0.25, sigma_constants=(("p2", 1.5),))
+        df = transfer_rows(
+            "equation", _source(), _target(), [(0, 0.81, 0.42), (1, 0.79, 0.45)], knobs=knobs
+        )
+
+        assert df["tuned_scale"].tolist() == [0.25, 0.25]
+        # Legible enough to reconstruct the schedule, and to read off a plot.
+        assert df["tuned_constants"].tolist() == ["sigma.p2=1.5"] * 2
+
+    def test_names_which_equation_each_constant_came_from(self):
+        from transfer_tuning import Knobs
+
+        knobs = Knobs(sigma_constants=(("p1", 2.0),), clip_constants=(("p1", 3.0),))
+        df = transfer_rows("equation", _source(), _target(), [(0, 0.8, 0.4)], knobs=knobs)
+
+        # sigma's p1 and clip's p1 are different numbers in different equations.
+        assert df["tuned_constants"].tolist() == ["sigma.p1=2.0,clip.p1=3.0"]
 
 
 class TestTargetInheritsTheArm:

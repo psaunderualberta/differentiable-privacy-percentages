@@ -146,11 +146,47 @@ def transfer_matrix(assembled: pd.DataFrame) -> pd.DataFrame:
     is a different and much smaller quantity than the one the matrix claims to
     report. That view is still available as :func:`policy_matrix`.
     """
-    return _collapse(
-        assembled.assign(source_label=source_labels(assembled)),
-        _CELL_KEYS,
-        unit_key="source_id",
+    labelled = assembled.assign(source_label=source_labels(assembled))
+    matrix = _collapse(labelled, _CELL_KEYS, unit_key="source_id")
+    return matrix.merge(tuning_labels(labelled), on=_CELL_KEYS, how="left")
+
+
+def tuning_labels(labelled: pd.DataFrame) -> pd.DataFrame:
+    """One ``tuned`` label per cell: the knobs its rows were evaluated under (ADR 0024).
+
+    A cell's accuracy is now the accuracy of a *tuned* schedule, so the matrix has to
+    carry which knobs won it. Without this a heatmap silently compares schedules
+    adapted by different amounts, and "which scale did each target prefer" — a result
+    in its own right — is lost in the collapse.
+
+    A cell whose rows disagree is labelled ``"mixed"`` rather than resolved to one of
+    them. Stage A is tuned per (target × arm) and *shared* by every source in a cell,
+    so agreement is an invariant; if it ever breaks, the cell mean is a mean over
+    different schedules and the label should say so rather than quietly pick a winner.
+
+    Rows carry the pre-rendered ``tuned_constants`` string from
+    ``util.transfer.describe_knobs``, so the two cannot drift apart.
+
+    Cells written before ADR 0024 carry neither column and read as untuned. That is
+    the right default rather than a null: the reference cells already on disk are not
+    invalidated by tuned transfer (a native reference was always tuned on its target),
+    so the assembler has to keep reading them.
+    """
+    labelled = labelled.copy()
+    for column, identity in (("tuned_scale", 1.0), ("tuned_constants", "")):
+        if column not in labelled:
+            labelled[column] = identity
+    described = labelled.assign(
+        tuned=(
+            "scale="
+            + labelled["tuned_scale"].map(lambda s: f"{float(s):g}")
+            + labelled["tuned_constants"].astype(str).map(lambda c: f" {c}" if c else "")
+        )
     )
+    grouped = described.groupby(_CELL_KEYS, dropna=False)["tuned"].agg(
+        lambda values: next(iter(set(values))) if len(set(values)) == 1 else "mixed"
+    )
+    return grouped.reset_index()
 
 
 def policy_matrix(assembled: pd.DataFrame) -> pd.DataFrame:

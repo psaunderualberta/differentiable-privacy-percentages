@@ -6,17 +6,19 @@ from transfer_equation import (
     equation_source,
     evaluate_equation_shape,
     matching_conditions,
+    tuned_equation_shapes,
 )
+from transfer_tuning import Knobs
 
 
-def _predictor(expr: str, p1: list[float]) -> _TemplatePredictor:
-    """A template predictor for shape ``f`` with one per-condition constant ``p1``.
+def _predictor(expr: str, **params: list[float]) -> _TemplatePredictor:
+    """A template predictor for shape ``f`` with per-condition constants ``p1..pK``.
 
-    ``#1`` is step_norm and ``#2`` is that condition's ``p1`` value; ``p1`` carries
+    ``#1`` is step_norm and ``#(k+1)`` is that condition's ``pk``; each list carries
     the constant for every 1-indexed category. One (selected) equation row."""
-    equations = pd.DataFrame(
-        {"equation": [f"f = {expr}; p1 = [{', '.join(map(str, p1))}]"], "selected": [True]}
-    )
+    ordered = sorted(params.items(), key=lambda kv: int(kv[0][1:]))
+    tail = "; ".join(f"{name} = [{', '.join(map(str, values))}]" for name, values in ordered)
+    equations = pd.DataFrame({"equation": [f"f = {expr}; {tail}"], "selected": [True]})
     return _TemplatePredictor(equations, ["step_norm", "category"])
 
 
@@ -76,6 +78,42 @@ class TestClosedFormEvaluatedOnTargetGrid:
         # Same shape f, different per-condition constant -> cat2 is 2x cat1.
         assert not np.allclose(cat1, cat2)
         assert np.allclose(cat2, 2.0 * cat1)
+
+
+class TestTunedShapesReplaceTheBorrowedConstants:
+    """Tuned transfer (ADR 0024) evaluates the distilled shapes at constants chosen on
+    the *target*, not at the source condition's fitted vector. A candidate names only
+    the constants it moves; everything else is still inherited from the condition."""
+
+    def test_an_untuned_candidate_reproduces_the_borrowed_shape(self):
+        sigma, clip = _predictor("#1 * #2", p1=[10.0, 20.0]), _predictor("#2 - #1", p1=[3.0, 4.0])
+
+        tuned = tuned_equation_shapes(sigma, clip, category=1, target_T=32, knobs=Knobs())
+
+        assert np.allclose(tuned[0], evaluate_equation_shape(sigma, 1, 32))
+        assert np.allclose(tuned[1], evaluate_equation_shape(clip, 1, 32))
+
+    def test_an_override_replaces_only_the_constant_it_names(self):
+        sigma = _predictor("#1 * #2 + #3", p1=[10.0, 20.0], p2=[1.0, 2.0])
+        clip = _predictor("#2 - #1", p1=[3.0, 4.0])
+
+        knobs = Knobs(sigma_constants=(("p1", 5.0),))
+        sigma_shape, clip_shape = tuned_equation_shapes(sigma, clip, 1, 32, knobs)
+
+        step = np.linspace(0.0, 1.0, 32)
+        # p1 overridden to 5; p2 still the condition's own 1.0; clip untouched.
+        assert np.allclose(sigma_shape, step * 5.0 + 1.0)
+        assert np.allclose(clip_shape, 3.0 - step)
+
+    def test_the_scale_is_folded_into_both_curves(self):
+        sigma, clip = _predictor("#1 + #2", p1=[1.0]), _predictor("#2 - #1", p1=[3.0])
+
+        base = tuned_equation_shapes(sigma, clip, 1, 32, Knobs())
+        scaled = tuned_equation_shapes(sigma, clip, 1, 32, Knobs(scale=4.0))
+
+        # Scaling commutes with seating, so the screen can compare unseated shapes.
+        assert np.allclose(scaled[0], 4.0 * base[0])
+        assert np.allclose(scaled[1], 4.0 * base[1])
 
 
 class TestConditionBecomesItsOwnSourceCell:

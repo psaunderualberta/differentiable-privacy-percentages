@@ -139,8 +139,48 @@ docstring); the producer validates the index it is handed against the real sweep
 STAGE_PREREQUISITE_STAGE = {"reference": "reference-candidate"}
 
 
-def candidate_filename(reference: str, target: Target, candidate: int, arm: str = "") -> str:
-    """The file one (reference × target × arm × candidate) score is written to.
+SOURCE_SCOPED_SWEEPS = frozenset({"shape"})
+"""Tuning stages whose winner is meaningful for only one source (ADR 0024).
+
+The single place that decides how widely a tuned result is shared, so a caller cannot
+accidentally widen or narrow a pool by what it passes to :func:`sweep_id`. Only the
+template's per-condition shape constants are in here; the joint scale is deliberately
+not, and that omission is what keeps the tuned curve stage affordable.
+"""
+
+
+def sweep_id(producer: str, stage: str, source_id: str = "") -> str:
+    """The name of one candidate pool — what a selector picks its winner from.
+
+    ADR 0019 split the *reference* stage into scoring and selection tasks; ADR 0024
+    reuses that machinery for the tuned curve and equation stages, so the pool is keyed
+    by a producer-and-stage id rather than by a reference mechanism's name.
+
+    Whether ``source_id`` participates is decided by :data:`SOURCE_SCOPED_SWEEPS`, not
+    by the caller, and it is the single biggest cost lever in the stage:
+
+    * the **scale** sweep ignores it, so one pool serves every source at a given
+      target and arm. Principled as well as cheap: the joint scale compensates for
+      the *target's* gradient-norm regime, not for the source's shape. Keying it per
+      source would multiply the stage by the number of cells.
+    * the **shape** sweep uses it, because the template's constants are per-condition
+      and a winner found for one condition means nothing for another.
+
+    A reference's pool is its bare mechanism name, unchanged, so the candidate records
+    ADR 0019 already wrote stay readable.
+    """
+    if producer == "reference":
+        return stage
+    scoped = f"__{source_id}" if source_id and stage in SOURCE_SCOPED_SWEEPS else ""
+    return f"{producer}-{stage}{scoped}"
+
+
+def candidate_filename(sweep: str, target: Target, candidate: int, arm: str = "") -> str:
+    """The file one (sweep × target × arm × candidate) score is written to.
+
+    ``sweep`` names the candidate pool this score belongs to (:func:`sweep_id`) — a
+    reference mechanism before ADR 0024, and now also a tuned curve's or equation's
+    scale/shape search.
 
     The launcher's skip filter tests for exactly this path, which is what gives the
     reference stage its second resumption granularity: a finished candidate is
@@ -154,7 +194,7 @@ def candidate_filename(reference: str, target: Target, candidate: int, arm: str 
     """
     suffix = f"__{arm}" if arm else ""
     return (
-        f"{reference}__{target.dataset}__eps{target.eps:g}_T{int(target.T)}{suffix}"
+        f"{sweep}__{target.dataset}__eps{target.eps:g}_T{int(target.T)}{suffix}"
         f"__cand{int(candidate):02d}.json"
     )
 

@@ -27,6 +27,7 @@ from sr_category import CategoryMap
 # distil the same conditions, to the cell name (ADR 0021). Both live launcher-side so the
 # skip filter predicts exactly the name written here.
 from transfer_launch import condition_source_id, synthesis_arm
+from transfer_tuning import Knobs, apply_scale
 from util.transfer import SourcePolicy, TargetSpec
 
 
@@ -64,6 +65,32 @@ def evaluate_equation_shape(predictor, category: int, target_T: int) -> np.ndarr
     step_norm = np.linspace(0.0, 1.0, target_T)
     X = np.column_stack([step_norm, np.full(target_T, category)])
     return np.asarray(predictor.predict(X), dtype=float)
+
+
+def tuned_equation_shapes(
+    sigma_predictor, clip_predictor, category: int, target_T: int, knobs: Knobs
+) -> tuple[np.ndarray, np.ndarray]:
+    """The ``(f_sigma, f_clip)`` a tuning candidate evaluates to on the target grid.
+
+    Tuned transfer's replacement for :func:`evaluate_equation_shape` (ADR 0024): the
+    distilled *shape* is still the source's, but its constants are chosen on the
+    target. A candidate names only the constants it moves — everything else is
+    inherited from ``category``'s fitted vector — so an untuned candidate reproduces
+    the borrowed shape exactly and stays a member of the search.
+
+    The joint scale is folded in here too, which is legitimate because scaling
+    commutes with seating (``transfer_tuning.apply_scale``): these are the curves the
+    candidate screen compares, and the ones the producer will seat and train.
+    """
+    step_norm = np.linspace(0.0, 1.0, int(target_T))
+    shapes = []
+    for predictor, overrides in (
+        (sigma_predictor, knobs.sigma_constants),
+        (clip_predictor, knobs.clip_constants),
+    ):
+        constants = {**predictor.constants(category), **dict(overrides)}
+        shapes.append(np.asarray(predictor.predict_with_constants(step_norm, constants), float))
+    return apply_scale(shapes[0], shapes[1], knobs.scale)
 
 
 def matching_conditions(

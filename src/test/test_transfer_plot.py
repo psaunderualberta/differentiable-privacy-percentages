@@ -21,6 +21,8 @@ def _rows(
     t_eps=1.0,
     t_T=200,
     arm="sgd-m0.9",
+    tuned_scale=1.0,
+    tuned_constants="",
 ):
     """Per-seed transfer rows for one source×target cell (schema of util.transfer)."""
     return pd.DataFrame(
@@ -42,8 +44,63 @@ def _rows(
             "seed": [s for s, _ in seeds_accs],
             "accuracy": [a for _, a in seeds_accs],
             "loss": 0.5,
+            "tuned_scale": tuned_scale,
+            "tuned_constants": tuned_constants,
         }
     )
+
+
+class TestTheMatrixReportsWhatEachCellWasTunedTo:
+    """ADR 0024: a cell's accuracy is the accuracy of a *tuned* schedule, so the matrix
+    has to say which knobs won it — otherwise a heatmap silently compares schedules
+    adapted by different amounts, and 'which scale did each target prefer' is lost."""
+
+    def test_a_cell_carries_the_knobs_its_rows_won_under(self):
+        assembled = _rows("run-a", [(0, 0.80), (1, 0.82)], tuned_scale=0.25)
+
+        cell = transfer_matrix(assembled).iloc[0]
+
+        assert cell["tuned"] == "scale=0.25"
+
+    def test_an_untuned_cell_says_so_rather_than_going_blank(self):
+        assembled = _rows("run-a", [(0, 0.80)])
+
+        assert transfer_matrix(assembled).iloc[0]["tuned"] == "scale=1"
+
+    def test_shape_constants_are_named_alongside_the_scale(self):
+        assembled = _rows(
+            "cat31",
+            [(0, 0.80)],
+            producer="equation",
+            tuned_scale=4.0,
+            tuned_constants="sigma.p2=1.5",
+        )
+
+        assert transfer_matrix(assembled).iloc[0]["tuned"] == "scale=4 sigma.p2=1.5"
+
+    def test_a_cell_pooling_differently_tuned_policies_is_flagged_not_averaged(self):
+        # Stage A is tuned per (target x arm) and shared across the sources in a cell,
+        # so its policies must agree. If they ever do not, the cell mean is a mean over
+        # different schedules and the label has to admit it rather than pick one.
+        assembled = pd.concat(
+            [
+                _rows("run-a", [(0, 0.80)], tuned_scale=0.25),
+                _rows("run-b", [(0, 0.90)], tuned_scale=4.0),
+            ],
+            ignore_index=True,
+        )
+
+        assert transfer_matrix(assembled).iloc[0]["tuned"] == "mixed"
+
+    def test_a_cell_written_before_adr_0024_still_reads_as_untuned(self):
+        # The reference cells already on disk carry neither column, and ADR 0024 does
+        # not invalidate them (a native reference was always tuned on its target). The
+        # assembler must keep reading them rather than dying on a missing column.
+        legacy = _rows("Constant", [(0, 0.80)], producer="reference").drop(
+            columns=["tuned_scale", "tuned_constants"]
+        )
+
+        assert transfer_matrix(legacy).iloc[0]["tuned"] == "scale=1"
 
 
 class TestTransferMatrixIsReadOff:

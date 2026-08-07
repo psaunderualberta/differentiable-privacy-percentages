@@ -125,13 +125,79 @@ class _TemplatePredictor:
         sel = equations.index[equations["selected"]]
         self._selected = int(sel[0]) if len(sel) else int(equations.index[-1])
 
+    def constants(self, category: int, index: int | None = None) -> dict[str, float]:
+        """The fitted per-condition constants of one condition, by template-param name.
+
+        Keyed ``"p1".."pK"`` — the names ``sr_category.template_param_names`` assigns
+        and ``constants.csv`` records under, so a constant read off here and one read
+        off that table refer to the same slot.
+
+        Every slot the row *persists* is returned, including any the shape ``f`` never
+        references: PySR fits all K and writes all K, and a distilled ``f`` routinely
+        drops some. Whether a slot moves the schedule is decided numerically, by
+        ``transfer_tuning.seats_identically``, not by which names appear here.
+        """
+        return {
+            name: float(values[int(category) - 1])
+            for name, values in self.constant_table(index).items()
+        }
+
+    def constant_table(self, index: int | None = None) -> dict[str, np.ndarray]:
+        """Every condition's fitted constants, as ``{"p1": array over conditions, ...}``.
+
+        The same numbers ``constants.csv`` tabulates, but taken off the equation row
+        itself so they cannot disagree with the shape being evaluated — the CSV is
+        written once per fit, whereas the row is the authority for *this* selected
+        equation. Used to derive each constant's empirical range
+        (``transfer_tuning.constant_ranges``).
+        """
+        eq = self._eqs[self._selected if index is None else int(index)]
+        return {
+            f"p{slot}": np.asarray(values, dtype=float) for slot, values in eq.param_arrays.items()
+        }
+
     def predict(self, X: np.ndarray, index: int | None = None) -> np.ndarray:
         eq = self._eqs[self._selected if index is None else int(index)]
         step = np.asarray(X[:, 0], dtype=float)
         category = np.asarray(X[:, 1]).astype(int)  # 1-indexed condition
+        return self._evaluate(
+            eq, step, {slot: a[category - 1] for slot, a in eq.param_arrays.items()}
+        )
+
+    def predict_with_constants(
+        self, step_norm: np.ndarray, constants: dict[str, float], index: int | None = None
+    ) -> np.ndarray:
+        """Evaluate the shape at an arbitrary constant vector, off any trained condition.
+
+        :meth:`predict` can only reach the K constants PySR fitted for the conditions in
+        the map. Tuned transfer treats them as free (ADR 0024), so it needs the same
+        universal shape ``f`` evaluated at a vector no condition carries — this is that
+        entry point, and :meth:`constants` supplies the borrowed vector it starts from.
+
+        ``constants`` is keyed by template-param name (``"p1".."pK"``) and must cover
+        every slot the row persists; a partial vector would leave the missing slot's
+        name unbound and surface as an opaque ``NameError`` from inside ``eval``.
+        """
+        eq = self._eqs[self._selected if index is None else int(index)]
+        missing = {f"p{slot}" for slot in eq.param_arrays} - set(constants)
+        if missing:
+            raise KeyError(
+                f"constants vector is missing {sorted(missing)}; the template row "
+                f"persists {sorted(f'p{s}' for s in eq.param_arrays)}"
+            )
+        step = np.asarray(step_norm, dtype=float)
+        return self._evaluate(eq, step, {s: float(constants[f"p{s}"]) for s in eq.param_arrays})
+
+    @staticmethod
+    def _evaluate(eq: _TemplateEquation, step: np.ndarray, values: dict[int, object]) -> np.ndarray:
+        """Evaluate ``f`` over ``step`` with template slot ``j`` bound to ``values[j]``.
+
+        Errors are suppressed (``errstate``) rather than raised: an out-of-range
+        constant is a *candidate* to reject, not a crash, so it comes back as NaN/Inf
+        for the caller's screen to catch (``transfer_tuning.is_evaluable``).
+        """
         ns: dict[str, object] = {**_TEMPLATE_FUNCS, "a0": step}
-        for slot, arr in eq.param_arrays.items():
-            ns[f"a{slot}"] = arr[category - 1]
+        ns.update({f"a{slot}": value for slot, value in values.items()})
         with np.errstate(all="ignore"):
             out = eval(eq.code, {"__builtins__": {}}, ns)
         return np.broadcast_to(np.asarray(out, dtype=float), step.shape).astype(float)
