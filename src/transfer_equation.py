@@ -21,27 +21,13 @@ import tyro
 from jax import random as jr
 
 from sr_category import CategoryMap
-from transfer_launch import condition_source_id
+
+# A *condition* is (dataset, eps, T, arch) and carries no arm, but a synthesis is fitted
+# over one arm's runs (ADR 0016), so the arm belongs to the fit — and, since both arms
+# distil the same conditions, to the cell name (ADR 0021). Both live launcher-side so the
+# skip filter predicts exactly the name written here.
+from transfer_launch import condition_source_id, synthesis_arm
 from util.transfer import SourcePolicy, TargetSpec
-
-
-def synthesis_arm(eval_dir: Path | str) -> str:
-    """The momentum arm the synthesis behind ``eval_dir`` was scoped to (ADR 0016).
-
-    A *condition* is ``(dataset, eps, T, arch)`` and carries no arm, but a synthesis
-    is fitted over one arm's runs — so the arm belongs to the fit, and is read off
-    the run's ``manifest.json`` (``config.optimizers``, the ADR 0011 arm filter).
-    Exactly one entry means the fit is scoped to that arm; empty or several means it
-    pooled them, and ``""`` keeps those cells out of the per-arm overlay rather than
-    mislabelling them as one arm's.
-    """
-    import json
-
-    manifest_path = Path(eval_dir) / "manifest.json"
-    if not manifest_path.is_file():
-        return ""
-    optimizers = json.loads(manifest_path.read_text()).get("config", {}).get("optimizers", [])
-    return str(optimizers[0]) if len(optimizers) == 1 else ""
 
 
 def equation_source(category: int, condition: dict, arm: str = "") -> SourcePolicy:

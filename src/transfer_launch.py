@@ -58,24 +58,53 @@ def expand_targets(
 
 
 # Producers whose ``source_id`` does NOT determine the arm, so their cell names must
-# carry it (ADR 0021). A curve cell's source_id is a W&B run id and an equation cell's
-# is a condition slug; each was learned in exactly one arm, so the arm is redundant in
-# their names — and adding it would rename every finished cell for no information.
-# A reference's source_id is a bare mechanism name (`Constant`/`Dynamic-DPSGD`/`Median`)
-# that both target momenta share, so without the arm the two collide on one file.
+# carry it (ADR 0021). A curve cell's source_id is a W&B run id, learned in exactly one
+# arm, so the arm is redundant in its name — and adding it would rename every finished
+# cell for no information. The other two share a source_id across the arms:
+#   * a reference's is a bare mechanism name (`Constant`/`Dynamic-DPSGD`/`Median`) that
+#     both target momenta run;
+#   * an equation's is a condition slug, and a *condition* is (dataset, eps, T, arch) with
+#     no arm in it — ADR 0016 scopes the arm to the synthesis, not the condition, so the
+#     two arm-scoped fits distil the same conditions under the same category indices.
+# Without the arm each pair collides on one file, and the skip filter — finding it —
+# silently never runs the second arm.
 #
 # Read by BOTH the launcher's skip filter and ``util.transfer.write_transfer_cell``,
 # so the two cannot disagree about which producers get an arm segment.
-ARM_IN_CELL_NAME = frozenset({"reference"})
+ARM_IN_CELL_NAME = frozenset({"reference", "equation"})
 
 TARGET_ARMS = ("sgd-m0.0", "sgd-m0.9")
 """The target inner-momentum arms the reference stage is replicated across (ADR 0021).
 
 Curve and equation jobs do *not* consult this: their arm is a property of the source
 they transfer (its ``optimizer`` column / its synthesis) and the target inherits it, so
-their manifest lines are unchanged and their finished cells still skip by filename.
-Only the references, having no source to inherit from, have to be told.
+their manifest lines are unchanged. An equation launch covers *one* arm, the one its
+``--eval_dir`` synthesis was fitted over (:func:`synthesis_arm`); both arms means two
+launches, one per eval dir. Only the references, having no source to inherit from, have
+to be told.
 """
+
+
+def synthesis_arm(eval_dir) -> str:
+    """The momentum arm the synthesis under ``eval_dir`` was scoped to (ADR 0016).
+
+    Read off the run's ``manifest.json`` (``config.optimizers``, the ADR 0011 arm
+    filter): exactly one entry means the fit is scoped to that arm, while empty or
+    several means it pooled them and ``""`` keeps those cells out of the per-arm
+    overlay rather than mislabelling them as one arm's.
+
+    Lives here, stdlib-only, rather than in ``transfer_equation``: the launcher needs
+    it to predict the cell name its skip filter tests for, and it must be the same
+    string the producer writes — so there is one reader of the manifest, re-exported
+    by ``transfer_equation``.
+    """
+    import json
+
+    manifest_path = pathlib.Path(eval_dir) / "manifest.json"
+    if not manifest_path.is_file():
+        return ""
+    optimizers = json.loads(manifest_path.read_text()).get("config", {}).get("optimizers", [])
+    return str(optimizers[0]) if len(optimizers) == 1 else ""
 
 
 def cell_filename(source_id: str, target: Target, arm: str = "") -> str:
@@ -430,7 +459,9 @@ def curve_jobs(regimes: list[SourceRegime], targets: list[Target], args: Produce
     ]
 
 
-def equation_jobs(category_map, targets: list[Target], args: ProducerArgs) -> list[Job]:
+def equation_jobs(
+    category_map, targets: list[Target], args: ProducerArgs, arm: str = ""
+) -> list[Job]:
     """One equation job per target × distilled condition.
 
     ADR 0008 transfers every condition at the target's exact ``(eps, T)`` — read
@@ -444,6 +475,10 @@ def equation_jobs(category_map, targets: list[Target], args: ProducerArgs) -> li
     A target with no matching condition yields no job at all: off-grid is fatal at
     validation time, and an array task that provably cannot write a cell should never
     be submitted.
+
+    ``arm`` is the synthesis's arm, and it goes in the cell name rather than on the
+    command line: the producer re-derives it from the same ``--eval_dir`` manifest, so
+    passing it would be a second, forgeable copy of one fact.
     """
     return [
         Job(
@@ -455,7 +490,7 @@ def equation_jobs(category_map, targets: list[Target], args: ProducerArgs) -> li
                 f" {_target_flags(target)}"
                 f" {args.shared_flags()}"
             ),
-            cells=_cells("equation", [condition_source_id(category, condition)], target),
+            cells=_cells("equation", [condition_source_id(category, condition)], target, arm),
         )
         for target in targets
         for category, condition in conditions_at(category_map, target.eps, target.T)
@@ -612,7 +647,7 @@ def plan_jobs(
             from sr_category import load_category_map
 
             category_map = load_category_map(pathlib.Path(args.eval_dir) / "category_map.json")
-            built = equation_jobs(category_map, targets, args)
+            built = equation_jobs(category_map, targets, args, synthesis_arm(args.eval_dir))
         else:
             raise SystemExit(f"unknown stage {stage!r}")
 
