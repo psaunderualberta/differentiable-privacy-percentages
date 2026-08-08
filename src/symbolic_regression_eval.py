@@ -41,7 +41,6 @@ from __future__ import annotations
 
 import json
 import pickle
-import re
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,6 +52,7 @@ import tyro
 from matplotlib.lines import Line2D
 
 from sr_category import category_series, load_category_map
+from sr_predict import InvertingPredictor, TemplatePredictor
 
 TARGETS: tuple[str, ...] = ("sigma", "clip", "mu")
 _MAX_MU2 = 80.0  # mirror gdp_privacy._MAX_MU2 — cap (C/σ)² before exp() to avoid overflow
@@ -67,74 +67,27 @@ _EPS_POS = 1e-12  # floor for log/ratio of strictly-positive quantities
 @dataclass
 class TargetModel:
     target: str
-    model: object  # PySRRegressor (scalar mode) or _TemplatePredictor (template mode)
+    model: object  # a predictor exposing .predict(X, index=None) in NATURAL units
     feature_names: list[str]
     equations: pd.DataFrame  # the distilled front (incl. "selected" column)
 
 
-# Operators symbolic_regression.py allows the search (sr.py builder_kwargs); they map
-# 1:1 onto numpy so template equations can be re-evaluated without a Julia backend.
-_TEMPLATE_FUNCS = {"sqrt": np.sqrt, "exp": np.exp, "log": np.log}
+def load_target_transform(eval_dir: Path) -> str:
+    """Which space this synthesis was fitted in, read off its manifest (ADR 0025).
 
-
-@dataclass
-class _TemplateEquation:
-    code: object  # compiled Python expression over a0 (step_norm) and a1..aK (constants)
-    param_arrays: dict[int, np.ndarray]  # slot j (= template param pj) → per-condition array
-
-
-def _parse_template_equation(equation: str) -> _TemplateEquation:
-    """Parse one ``f = …; p1 = […]; p2 = […]`` template-equation row into a callable.
-
-    The combine is ``f(step_norm, p1[category], …)``, so in ``f`` the argument
-    refs are ``#1`` = step_norm and ``#k`` = the (k-1)-th template constant. Each
-    ``pj`` array carries that constant for every 1-indexed condition. Maps to
-    Python names ``a0`` (step_norm) and ``aj`` (= ``pj[category]``).
+    ``target_transform`` is a synthesis-identity field, so every per-target job
+    sharing a slug directory recorded the same value. Syntheses predating ADR 0025
+    have no such field — and the oldest have no manifest at all — and were fitted in
+    natural units, which is what ``"identity"`` means here.
     """
-    parts = [p.strip() for p in equation.split(";") if p.strip()]
-    expr = parts[0].split("=", 1)[1].strip()
-    param_arrays: dict[int, np.ndarray] = {}
-    for p in parts[1:]:
-        name, rhs = p.split("=", 1)
-        slot = int(name.strip().lstrip("p"))
-        param_arrays[slot] = np.array(
-            [float(x) for x in rhs.strip().strip("[]").split(",")], dtype=float
-        )
-    py_expr = re.sub(r"#(\d+)", lambda m: f"a{int(m.group(1)) - 1}", expr)
-    return _TemplateEquation(compile(py_expr, "<template-eq>", "eval"), param_arrays)
-
-
-class _TemplatePredictor:
-    """Julia-free stand-in for a template-mode ``PySRRegressor`` (predict only).
-
-    Template expressions cannot be reconstructed in a fresh process: the combine
-    is an anonymous Julia closure whose type is gone, so the pickled
-    ``julia_expression`` objects fail to deserialize ("error deserializing this
-    value") and ``from_file`` likewise needs the live ``julia_state_`` (see
-    symbolic_regression.py warm-start note + docs/adr/0006). Predictions are
-    therefore evaluated from the persisted equation strings, which embed both the
-    universal shape ``f`` and the fitted per-condition constants. The ``index``
-    argument mirrors ``PySRRegressor.predict``: row label in ``equations``.
-    """
-
-    def __init__(self, equations: pd.DataFrame, feature_names: list[str]):
-        self.feature_names = list(feature_names)
-        self._eqs = {
-            int(i): _parse_template_equation(row["equation"]) for i, row in equations.iterrows()
-        }
-        sel = equations.index[equations["selected"]]
-        self._selected = int(sel[0]) if len(sel) else int(equations.index[-1])
-
-    def predict(self, X: np.ndarray, index: int | None = None) -> np.ndarray:
-        eq = self._eqs[self._selected if index is None else int(index)]
-        step = np.asarray(X[:, 0], dtype=float)
-        category = np.asarray(X[:, 1]).astype(int)  # 1-indexed condition
-        ns: dict[str, object] = {**_TEMPLATE_FUNCS, "a0": step}
-        for slot, arr in eq.param_arrays.items():
-            ns[f"a{slot}"] = arr[category - 1]
-        with np.errstate(all="ignore"):
-            out = eval(eq.code, {"__builtins__": {}}, ns)
-        return np.broadcast_to(np.asarray(out, dtype=float), step.shape).astype(float)
+    path = eval_dir / "manifest.json"
+    if not path.is_file():
+        return "identity"
+    try:
+        config = json.loads(path.read_text()).get("config", {})
+    except (OSError, ValueError):
+        return "identity"
+    return str(config.get("target_transform", "identity"))
 
 
 def _load_target(eval_dir: Path, target: str) -> TargetModel | None:
@@ -147,12 +100,16 @@ def _load_target(eval_dir: Path, target: str) -> TargetModel | None:
     # Template runs (marked by a persisted category_map.json) can't reload the pickled
     # Julia model; evaluate their equations in pure Python instead. See docs/adr/0006.
     if (eval_dir / "category_map.json").exists():
-        model: object = _TemplatePredictor(equations, feature_names)
+        model: object = TemplatePredictor(equations, feature_names)
     else:
         if not (tdir / "model.pkl").exists():
             return None
         with (tdir / "model.pkl").open("rb") as f:
             model = pickle.load(f)
+    # Every consumer downstream — these metrics, and transfer's seating of the shape on
+    # the target budget — reads predictions as a σ or a C, so the fit space is undone
+    # here rather than at each call site.
+    model = InvertingPredictor(model, load_target_transform(eval_dir))
     return TargetModel(target, model, feature_names, equations)
 
 

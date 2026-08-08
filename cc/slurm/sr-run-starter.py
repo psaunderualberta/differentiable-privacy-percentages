@@ -67,8 +67,9 @@ class SRSlurmConfig:
     arch_labels: tuple[str, ...] = ()
     optimizers: tuple[str, ...] = ()
     run_ids: tuple[str, ...] = ()
-    points_per_run: int = 50
-    """Mirror of PySRConfig.points_per_run (ADR 0016); identity field, so it must match."""
+    points_per_run: int = 500
+    """Mirror of PySRConfig.points_per_run (ADR 0016, raised by ADR 0025); identity
+    field, so it must match."""
     keep_features: tuple[str, ...] = ()
     include_nonfinite_schedules: bool = False
     include_diverged_training: bool = False
@@ -76,6 +77,10 @@ class SRSlurmConfig:
     """Mirror of PySRConfig.binary_operators (ADR 0016); identity field, so it must match."""
     unary_operators: tuple[str, ...] = ("sqrt", "exp")
     """Mirror of PySRConfig.unary_operators; identity field, so it must match."""
+    max_denominator_complexity: int = 1
+    """Mirror of PySRConfig.max_denominator_complexity (ADR 0025); identity field."""
+    target_transform: Literal["identity", "log"] = "log"
+    """Mirror of PySRConfig.target_transform (ADR 0025); identity field."""
     template_mode: bool = True
     """Mirror of PySRConfig.template_mode (ADR 0006); identity field, so it must match."""
     n_template_params: int = 3

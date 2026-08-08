@@ -418,3 +418,46 @@ def test_main_template_mode_writes_category_map_and_constants(tmp_path):
         "step_norm",
         "category",
     ]
+
+    # ADR 0025: every front row is swept on a dense grid before the synthesis is shipped.
+    health = pd.read_csv(target_dir / "front_health.csv")
+    assert len(health) == len(equations)
+    assert bool(health.loc[health["selected"], "healthy"].iloc[0])
+
+
+@pytest.mark.slow
+def test_a_real_template_fit_cannot_divide_by_step_norm(tmp_path):
+    """The denominator cap has to bind through a TemplateExpressionSpec, not just be
+    accepted as a kwarg — PySR applies `constraints` to the *inner* expression, and
+    that is the only place a step_norm-containing divisor could be built. This is the
+    one check that exercises the real Julia search rather than a recorded kwarg dict.
+    See ADR 0025.
+    """
+    import re
+
+    from symbolic_regression import PySRConfig, main
+
+    cache = _synthetic_cache(tmp_path)
+    out_dir = tmp_path / "out"
+    conf = PySRConfig(
+        cache_dir=str(cache),
+        targets=("sigma",),
+        points_per_run=10,
+        out_dir=str(out_dir),
+        niterations=20,
+        maxsize=14,
+        n_template_params=2,
+        procs=1,
+    )
+
+    main(conf)
+
+    slug = next(p for p in out_dir.iterdir() if p.is_dir())
+    equations = pd.read_csv(slug / "sigma" / "equations.csv")
+    for equation in equations["equation"]:
+        shape = equation.split(";", 1)[0]  # just `f = ...`, not the pj constant vectors
+        # Any divisor is a single token, so a parenthesised (or #1-containing) one means
+        # the cap did not bind. `#1` is step_norm; `#2`/`#3` are per-condition constants.
+        for divisor in re.findall(r"/\s*([^\s)]+)", shape):
+            assert "#1" not in divisor, f"divided by a step_norm expression: {shape}"
+            assert not divisor.startswith("("), f"divided by a compound subtree: {shape}"

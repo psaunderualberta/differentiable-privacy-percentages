@@ -154,7 +154,9 @@ _Avoid_: run (reserved for the W&B object), fit, job, regression.
 **Universal schedule shape**:
 The single form over training progress `t/T` that a synthesis fits across every run it
 covers — the transferable part of the result. Everything a condition does differently is
-carried by its **per-condition constants**, not by a different shape.
+carried by its **per-condition constants**, not by a different shape. It is fitted in
+**log** space and read back as `exp(f)`, so a persisted equation is a shape for `log σ`
+or `log C`, not for σ or C directly (ADR 0025).
 _Avoid_: curve, law, equation (reserve for the concrete fitted expression), template.
 
 **Per-condition constant**:

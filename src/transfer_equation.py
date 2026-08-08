@@ -53,17 +53,95 @@ def equation_source(category: int, condition: dict, arm: str = "") -> SourcePoli
     )
 
 
-def evaluate_equation_shape(predictor, category: int, target_T: int) -> np.ndarray:
+def evaluate_equation_shape(
+    predictor, category: int, target_T: int, max_plausible: float | None = None
+) -> np.ndarray:
     """Evaluate the selected distilled shape on the target step grid.
 
-    ``f`` is closed-form over ``step_norm``, so the shape is *evaluated* on
-    ``linspace(0, 1, target_T)`` — one value per target step — rather than
-    resampled from a fixed-length array. ``category`` selects the condition whose
-    per-condition constants are inlined into ``f``.
+    ``f`` is closed-form over ``step_norm``, so the shape is *evaluated* — one value
+    per target step — rather than resampled from a fixed-length array. ``category``
+    selects the condition whose per-condition constants are inlined into ``f``.
+
+    The grid is ``inner_step / target_T``, the convention the equation was fitted
+    over (compile_results_fetch.py), so the last step sits at ``(T-1)/T`` and not at
+    1. Evaluating on ``linspace(0, 1, T)`` instead would stretch the shape by
+    ``T/(T-1)`` and read every fitted feature off by up to one step.
+
+    ``max_plausible`` bounds how far the shape may stray from the data it was fitted
+    on (see :func:`sr_predict.plausible_bound`); ``None`` skips that criterion.
     """
-    step_norm = np.linspace(0.0, 1.0, target_T)
+    step_norm = np.arange(target_T, dtype=float) / target_T
     X = np.column_stack([step_norm, np.full(target_T, category)])
-    return np.asarray(predictor.predict(X), dtype=float)
+    with np.errstate(all="ignore"):
+        shape = np.asarray(predictor.predict(X), dtype=float)
+    _reject_unusable_shape(shape, category, step_norm, max_plausible)
+    return shape
+
+
+def _reject_unusable_shape(
+    shape: np.ndarray, category: int, step_norm: np.ndarray, max_plausible: float | None = None
+) -> None:
+    """Refuse a shape that is not a schedule, naming the equation that produced it.
+
+    Syntheses predating ADR 0025 could distil an equation with a pole *between* the
+    points it was fitted on — f152229a's selected clip equation had one at
+    step_norm ≈ 0.9917, which the full target grid lands 2.8e-4 away from and which
+    took the shape to 1.3e15. Unchecked, that flows into ``seat_on_budget``, whose
+    bisection then saturates at its bracket ceiling and reports only that it "did not
+    bind the budget" — true, but it names neither the equation nor the category, and
+    points at the seater rather than at what it was handed.
+
+    All three criteria are needed, and the magnitude one is not optional: whether a
+    pole is *hit* depends on the target T. At T=2000 that same equation lands 2.2e-4
+    away from its pole and returns 2.9e13 — finite, positive, and ruinous.
+    """
+    bad = ~np.isfinite(shape)
+    if bad.any():
+        first = float(step_norm[np.argmax(bad)])
+        raise ValueError(
+            f"the distilled shape is non-finite at {int(bad.sum())} of {len(shape)} target "
+            f"steps for category {category} (first at step_norm={first:.6g}) — the equation "
+            "has a pole inside the step grid. Re-synthesise under ADR 0025 (log-space "
+            "target + capped denominator complexity)."
+        )
+    if (shape <= 0.0).any():
+        n = int((shape <= 0.0).sum())
+        raise ValueError(
+            f"the distilled shape is non-positive at {n} of {len(shape)} target steps for "
+            f"category {category} (min {float(shape.min()):.3g}) — a σ of 0 has no privacy "
+            "multiplier and a C of 0 kills the gradient. Re-synthesise under ADR 0025 "
+            "(log-space target makes positivity structural)."
+        )
+    if max_plausible is not None and float(np.max(np.abs(shape))) > max_plausible:
+        raise ValueError(
+            f"the distilled shape reaches {float(np.max(np.abs(shape))):.3g} for category "
+            f"{category}, more than {max_plausible:.3g} — it has left the data it was fitted "
+            "on entirely, which is what a near-miss of an interior pole looks like on a "
+            "grid that does not land on the pole. Re-synthesise under ADR 0025 (capped "
+            "denominator complexity)."
+        )
+
+
+def plausible_bound_for(eval_dir: Path | str, target: str) -> float | None:
+    """How large a transferred ``target`` shape may get, from the synthesis's own data.
+
+    Equation transfer is on-grid only, so a shape is always evaluated with the constants
+    of a condition the synthesis actually fitted — it should resemble those curves. The
+    bound is 1000× the largest fitted value (:func:`sr_predict.plausible_bound`), which no
+    sane shape approaches and which a near-missed pole clears by ten orders of magnitude.
+
+    ``None`` when the synthesis kept no feature table: better to leave the criterion off
+    than to invent a scale for it.
+    """
+    import pandas as pd
+
+    from sr_predict import plausible_bound
+
+    path = Path(eval_dir) / "features_full.parquet"
+    if not path.is_file():
+        return None
+    observed = pd.read_parquet(path, columns=[target])[target].to_numpy(dtype=float)
+    return plausible_bound(observed)
 
 
 def matching_conditions(
@@ -153,6 +231,7 @@ def run_equation_cell(
             "re-run symbolic_regression.py with --targets sigma clip"
         )
 
+    bounds = {t: plausible_bound_for(eval_dir, t) for t in ("sigma", "clip")}
     arm = synthesis_arm(eval_dir)
     # The synthesis is scoped to one arm (ADR 0016), so the closed form it distilled is
     # that arm's shape and its target runs at that arm's momentum (ADR 0021).
@@ -167,8 +246,12 @@ def run_equation_cell(
         env_params = DPTrainingParams.create_direct_from_config()
 
         for category, condition in conditions:
-            sigma_shape = evaluate_equation_shape(sigma_model.model, category, target_T)
-            clip_shape = evaluate_equation_shape(clip_model.model, category, target_T)
+            sigma_shape = evaluate_equation_shape(
+                sigma_model.model, category, target_T, max_plausible=bounds["sigma"]
+            )
+            clip_shape = evaluate_equation_shape(
+                clip_model.model, category, target_T, max_plausible=bounds["clip"]
+            )
             # seat_on_budget takes the multiplier s = sigma/clip, not the raw noise
             # scale — the GDP budget is sum_i exp((C_i/sigma_i)^2), so the clips are
             # part of the constraint. Same divide-then-multiply as build_curve_schedule.

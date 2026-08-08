@@ -44,6 +44,8 @@ IDENTITY_FIELDS: tuple[str, ...] = (
     "maxsize",
     "binary_operators",  # the search space itself — ADR 0016
     "unary_operators",
+    "max_denominator_complexity",  # restricts that space further — ADR 0025
+    "target_transform",  # which space the target is fitted in — ADR 0025
     "template_mode",  # template vs pooled-scalar fit — changes the problem (ADR 0006)
     "n_template_params",  # number of per-condition constants K
 )
@@ -73,13 +75,15 @@ IDENTITY_FLAG_DEFAULTS: dict[str, object] = {
     "arch_labels": (),
     "optimizers": (),
     "run_ids": (),
-    "points_per_run": 50,
+    "points_per_run": 500,
     "keep_features": (),
     "include_nonfinite_schedules": False,
     "include_diverged_training": False,
     "maxsize": 25,
     "binary_operators": ("+", "-", "*", "/"),
     "unary_operators": ("sqrt", "exp"),
+    "max_denominator_complexity": 1,
+    "target_transform": "log",
     "template_mode": True,
     "n_template_params": 3,
 }

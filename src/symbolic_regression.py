@@ -23,6 +23,14 @@ from sr_category import (
     template_param_names,
 )
 from sr_identity import canonical_identity, derive_slug, identity_flags
+from sr_predict import (
+    InvertingPredictor,
+    TemplatePredictor,
+    fittable_mask,
+    front_health,
+    plausible_bound,
+    to_fit_space,
+)
 
 # Fixed PySR run_id so a synthesis's run directory is reused across chained jobs.
 _RUN_ID = "pysr_run"
@@ -45,9 +53,11 @@ class PySRConfig:
     cache_dir: str
     """Path to the <entity>__<project> directory produced by compile_results_fetch.py."""
     targets: tuple[Literal["sigma", "clip", "mu"], ...] = ("sigma",)
-    points_per_run: int = 50
+    points_per_run: int = 500
     """Inner-step samples drawn from each run, evenly spaced over its step span. Fixed
-    per run (not a fixed stride) so every run weighs equally over step_norm; see ADR 0016."""
+    per run (not a fixed stride) so every run weighs equally over step_norm; see ADR 0016.
+    Raised from 50 by ADR 0025: at 50 the fit could not see between its own samples, which
+    is where the f152229a clip pole hid."""
     datasets: tuple[str, ...] = ()
     arch_labels: tuple[str, ...] = ()
     optimizers: tuple[str, ...] = ()
@@ -67,6 +77,16 @@ class PySRConfig:
     can only rescale the shape, never shift its peak (ADR 0016)."""
     unary_operators: tuple[str, ...] = ("sqrt", "exp")
     """Unary operators the search may compose."""
+    max_denominator_complexity: int = 1
+    """Largest subtree `/` may divide BY; -1 lifts the cap. At 1 a denominator can only
+    be a constant or a per-condition template parameter, never a function of step_norm —
+    which makes an interior pole structurally impossible over this operator set. See
+    ADR 0025."""
+    target_transform: Literal["identity", "log"] = "log"
+    """Space the target is fitted in. `log` makes squared error relative rather than
+    absolute (σ and C span 11–65× within one run) and makes positivity structural, since
+    the prediction is exp(f). Predictions are mapped back before any consumer reads
+    them (sr_predict.InvertingPredictor). See ADR 0025."""
 
     # --- Template mode (per-condition free constants; see docs/adr/0006) ---
     template_mode: bool = True
@@ -174,6 +194,20 @@ def sample_points_per_run(schedules: pd.DataFrame, points_per_run: int) -> pd.Da
     return schedules[schedules["inner_step"] % stride == 0].reset_index(drop=True)
 
 
+def to_fit_space_df(df: pd.DataFrame, target: str, transform: str) -> pd.DataFrame:
+    """Map ``target`` into fit space, dropping rows the transform cannot represent.
+
+    Only the target column moves; ``step_norm`` and ``category`` are the search's
+    inputs and stay as they are. Rows are dropped rather than left as NaN because
+    PySR's validity check is all-or-nothing over the array — one NaN target scores
+    every candidate equation ``Inf`` and the search returns nothing. See ADR 0025.
+    """
+    keep = fittable_mask(df[target].to_numpy(dtype=float), transform)
+    out = df[keep].copy()
+    out[target] = to_fit_space(out[target].to_numpy(dtype=float), transform)
+    return out.reset_index(drop=True)
+
+
 def _filter_features(df: pd.DataFrame, conf: PySRConfig, target: str) -> pd.DataFrame:
     df = df[~(df[target].isna() | np.isinf(df[target]))]
     df = df.dropna(axis=1)
@@ -220,6 +254,25 @@ def _resolve_procs(conf: PySRConfig) -> int:
     if ntasks:
         return int(ntasks)
     return 0
+
+
+def _operator_constraints(conf: PySRConfig) -> dict[str, tuple[int, int]]:
+    """Per-operator subtree-size limits handed to PySR.
+
+    Only one: the denominator cap. `(-1, k)` leaves the numerator unlimited and caps
+    what `/` may divide by at complexity `k`. At k=1 the divisor is a leaf — a
+    constant, or one of the template's per-condition parameters — so it cannot be a
+    function of ``step_norm`` and cannot vanish partway through a run. Combined with
+    the rest of the operator set (`+ - * sqrt exp`), that leaves only continuous,
+    bounded functions on [0,1]: interior poles stop being something to detect and
+    become something the search cannot express. See ADR 0025.
+
+    Emitted only when `/` is actually in the search space; PySR rejects a constraint
+    naming an operator it was not given.
+    """
+    if conf.max_denominator_complexity < 0 or "/" not in conf.binary_operators:
+        return {}
+    return {"/": (-1, conf.max_denominator_complexity)}
 
 
 def run_regression(
@@ -304,6 +357,9 @@ def run_regression(
             # in template mode includes the arbitrary `category` index. See ADR 0016.
             "denoise": False,
         }
+        constraints = _operator_constraints(conf)
+        if constraints:
+            builder_kwargs["constraints"] = constraints
         if expression_spec is not None:
             builder_kwargs["expression_spec"] = expression_spec
         builder_kwargs["elementwise_loss"] = "loss(prediction, target) = (prediction - target)^2"
@@ -401,6 +457,69 @@ def _persist_target(model: PySRRegressor, feature_names: list[str], target_dir: 
     _equations_table(model).to_csv(target_dir / "equations.csv", index=False)
     (target_dir / "feature_names.json").write_text(json.dumps(feature_names, indent=2))
     print(f"  → persisted {target_dir}")
+
+
+def _report_fit_space(transform: str, target: str, n_before: int, n_after: int) -> None:
+    dropped = n_before - n_after
+    note = f" ({dropped} rows dropped: not representable)" if dropped else ""
+    print(f"  fitting {target} in {transform} space, {n_after} rows{note}")
+
+
+def _check_front_health(
+    model: PySRRegressor,
+    conf: PySRConfig,
+    n_conditions: int,
+    feature_names: list[str],
+    target_dir: Path,
+    observed: np.ndarray,
+) -> None:
+    """Sweep the finished front on a dense grid and refuse to ship a broken selection.
+
+    The denominator cap and the log-space fit are what make an interior pole
+    impossible; this is the check that says so out loud. It exists because the
+    f152229a pole was invisible to everything upstream of it — the fit never
+    evaluated between its own 50 samples, and PySR's ``is_valid_array`` is a
+    sum-based NaN/Inf test that a finite 1e15 spike walks straight through. It is
+    run *after* the artefacts are persisted, so a failure leaves the whole front on
+    disk to inspect rather than throwing away hours of search. See ADR 0025.
+    """
+    try:
+        equations = _equations_table(model)
+        predictor = InvertingPredictor(
+            TemplatePredictor(equations, feature_names), conf.target_transform
+        )
+        health = front_health(
+            predictor,
+            equations,
+            n_conditions=n_conditions,
+            max_plausible=plausible_bound(observed),
+        )
+    except Exception as exc:
+        # A tripwire must never destroy the fit it checks, so this catches broadly.
+        # Re-evaluating the front in Python means re-parsing equation strings, which can
+        # fail on an operator this module has no numpy equivalent for. That is a gap in
+        # the check, not a defect in the search: say so and keep the persisted front.
+        print(f"  ! front-health sweep did not run ({exc!r}) — the front is persisted, unchecked")
+        return
+    health.to_csv(target_dir / "front_health.csv", index=False)
+
+    unhealthy = health[~health["healthy"]]
+    if not unhealthy.empty:
+        print(f"  ! {len(unhealthy)} of {len(health)} front rows are unusable on a dense grid:")
+        for _, row in unhealthy.iterrows():
+            print(
+                f"      complexity {row.get('complexity', '?')}: "
+                f"{int(row['n_nonfinite'])} non-finite, {int(row['n_nonpositive'])} ≤ 0, "
+                f"max |value| {row['max_abs']:.3g}"
+            )
+    selected = health[health["selected"]] if "selected" in health.columns else health.iloc[0:0]
+    if not selected.empty and not bool(selected["healthy"].iloc[0]):
+        raise RuntimeError(
+            f"the selected {target_dir.name} equation is unusable on the step grid it will be "
+            f"evaluated on (see {target_dir / 'front_health.csv'}). The front is persisted; "
+            "pick another row or re-run the synthesis."
+        )
+    print(f"  ✓ front_health.csv ({len(health) - len(unhealthy)}/{len(health)} rows usable)")
 
 
 def _atomic_write(path: Path, write: Callable[[Path], None]) -> None:
@@ -556,9 +675,9 @@ def main(conf: PySRConfig):
 
         if conf.template_mode:
             target_df = feature_df[[target, "step_norm", "category"]].copy()
-            target_df = target_df[
-                ~(target_df[target].isna() | np.isinf(target_df[target]))
-            ].reset_index(drop=True)
+            n_before = len(target_df)
+            target_df = to_fit_space_df(target_df, target, conf.target_transform)
+            _report_fit_space(conf.target_transform, target, n_before, len(target_df))
             feature_names = [c for c in target_df.columns if c != target]
             spec = build_template_spec(len(category_map), conf.n_template_params)
             model, elapsed = run_regression(
@@ -574,6 +693,9 @@ def main(conf: PySRConfig):
             others = {"sigma", "clip", "mu"} - {target}
             target_df = feature_df.drop(columns=[*others], errors="ignore").copy()
             target_df = _filter_features(target_df, conf, target)
+            n_before = len(target_df)
+            target_df = to_fit_space_df(target_df, target, conf.target_transform)
+            _report_fit_space(conf.target_transform, target, n_before, len(target_df))
             feature_names = [c for c in target_df.columns if c != target]
             print(f"=== Features: {feature_names} ===")
             model, elapsed = run_regression(target_df, target, conf, target_out_dir, procs)
@@ -581,6 +703,15 @@ def main(conf: PySRConfig):
         print(model)
         print(f"  fit() took {elapsed:.0f}s (timeout {conf.timeout_in_seconds}s)")
         _persist_target(model, feature_names, target_out_dir)
+        if conf.template_mode:
+            _check_front_health(
+                model,
+                conf,
+                len(category_map),
+                feature_names,
+                target_out_dir,
+                feature_df[target].to_numpy(dtype=float),  # natural units, pre-transform
+            )
 
         depth = int(os.environ.get("CHAIN_DEPTH", "0"))
         if should_resubmit(

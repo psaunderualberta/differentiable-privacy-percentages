@@ -1,7 +1,8 @@
 import numpy as np
 import pandas as pd
+import pytest
 
-from symbolic_regression_eval import _TemplatePredictor
+from sr_predict import TemplatePredictor as _TemplatePredictor
 from transfer_equation import (
     equation_source,
     evaluate_equation_shape,
@@ -57,18 +58,31 @@ class TestClosedFormEvaluatedOnTargetGrid:
     shapes at the same (eps, T)."""
 
     def test_shape_has_target_T_points_over_the_normalized_grid(self):
-        predictor = _predictor("#1 * #2", p1=[10.0, 20.0])
+        # Shapes here stay strictly positive: a σ or C of 0 is not a schedule, and the
+        # producer rejects one before it can reach the budget seater (ADR 0025).
+        predictor = _predictor("#1 * #2 + 1", p1=[10.0, 20.0])
 
         shape = evaluate_equation_shape(predictor, category=1, target_T=200)
 
-        # One value per target step, evaluated on step_norm in [0, 1].
+        # One value per target step, evaluated on step_norm in [0, 1).
         assert shape.shape == (200,)
-        # f = step_norm * p1[cat=1] = step_norm * 10, endpoints pinned.
-        assert shape[0] == 0.0
-        assert shape[-1] == np.float32(10.0) or np.isclose(shape[-1], 10.0)
+        # f = step_norm * p1[cat=1] + 1 = 10*step_norm + 1, over inner_step / T.
+        assert shape[0] == 1.0
+        assert np.isclose(shape[-1], 10.0 * 199 / 200 + 1.0)
+
+    def test_the_grid_is_the_one_the_equation_was_fitted_over(self):
+        """step_norm is inner_step / T (compile_results_fetch), so the last step of a
+        length-T run sits at (T-1)/T, not at 1. Evaluating on linspace(0, 1, T) instead
+        stretches the whole shape by T/(T-1) and reads every fitted feature off by up to
+        one step — worst at the small T the transfer grid actually uses."""
+        predictor = _predictor("#1 * #2 + #2", p1=[4.0])  # 4*step_norm + 4
+
+        shape = evaluate_equation_shape(predictor, category=1, target_T=4)
+
+        assert np.allclose(shape, [4.0, 5.0, 6.0, 7.0])  # step_norm = 0, .25, .5, .75
 
     def test_different_conditions_evaluate_to_different_shapes(self):
-        predictor = _predictor("#1 * #2", p1=[10.0, 20.0])
+        predictor = _predictor("(#1 + 1) * #2", p1=[10.0, 20.0])
 
         cat1 = evaluate_equation_shape(predictor, category=1, target_T=50)
         cat2 = evaluate_equation_shape(predictor, category=2, target_T=50)
@@ -76,6 +90,88 @@ class TestClosedFormEvaluatedOnTargetGrid:
         # Same shape f, different per-condition constant -> cat2 is 2x cat1.
         assert not np.allclose(cat1, cat2)
         assert np.allclose(cat2, 2.0 * cat1)
+
+
+class TestAnUnusableShapeIsRejectedWhereItIsProduced:
+    """Equations distilled before ADR 0025 can still hold an interior pole, and this
+    producer is where one first becomes visible. Left unchecked it flows into
+    seat_on_budget, whose bisection saturates at its bracket ceiling and reports
+    "spent 40258 of 1.11e+06 (3.6%)" — true, but it names neither the equation nor
+    the category, and points at the seater rather than at the shape it was handed.
+    """
+
+    def test_a_pole_on_the_target_grid_is_named_at_the_point_of_evaluation(self):
+        # Vanishes at step_norm = 0.5, which T=4 lands on exactly.
+        predictor = _predictor("#2 / (#1 - 0.5)", p1=[1.0])
+
+        with pytest.raises(ValueError, match="category 1"):
+            evaluate_equation_shape(predictor, category=1, target_T=4)
+
+    def test_a_non_positive_shape_is_rejected(self):
+        """σ ≤ 0 is not a noise scale and C ≤ 0 kills the gradient; either one makes
+        the multiplier σ/C meaningless before the budget is ever consulted."""
+        predictor = _predictor("#1 - #2", p1=[0.5])
+
+        with pytest.raises(ValueError, match="non-positive"):
+            evaluate_equation_shape(predictor, category=1, target_T=8)
+
+    def test_a_finite_but_implausible_spike_is_rejected(self):
+        """Whether a pole is *hit* depends on the target T, so finiteness is not enough.
+        At T=2000 the f152229a clip equation lands 2.2e-4 from its pole and returns
+        2.9e13 — finite, positive, and ruinous once seat_on_budget squares it."""
+        predictor = _predictor("exp(#1 * #2)", p1=[40.0])
+
+        with pytest.raises(ValueError, match="left the data"):
+            evaluate_equation_shape(predictor, category=1, target_T=4, max_plausible=100.0)
+
+    def test_without_a_bound_the_magnitude_criterion_is_simply_off(self):
+        """A synthesis that kept no feature table gives no scale to judge against;
+        the other two criteria still apply."""
+        predictor = _predictor("exp(#1 * #2)", p1=[40.0])
+
+        shape = evaluate_equation_shape(predictor, category=1, target_T=4)
+
+        assert np.all(np.isfinite(shape))
+
+    def test_a_healthy_shape_passes_through_untouched(self):
+        predictor = _predictor("#1 + #2", p1=[1.0])
+
+        shape = evaluate_equation_shape(predictor, category=1, target_T=4)
+
+        assert np.allclose(shape, [1.0, 1.25, 1.5, 1.75])
+
+
+class TestThePlausibilityBoundComesFromTheSynthesis:
+    """The producer has no independent idea of what a σ or a C should be worth. It reads
+    the scale off the very targets the synthesis was fitted on, which is exactly the
+    range an on-grid transferred shape should reproduce."""
+
+    def _eval_dir(self, tmp_path, sigma):
+        pd.DataFrame({"sigma": sigma, "clip": sigma}).to_parquet(
+            tmp_path / "features_full.parquet", index=False
+        )
+        return tmp_path
+
+    def test_the_bound_is_a_wide_multiple_of_the_largest_fitted_target(self, tmp_path):
+        from transfer_equation import plausible_bound_for
+
+        eval_dir = self._eval_dir(tmp_path, [0.1, 1.5, 0.8])
+
+        assert plausible_bound_for(eval_dir, "sigma") == 1e3 * 1.5
+
+    def test_a_synthesis_without_a_feature_table_yields_no_bound(self, tmp_path):
+        from transfer_equation import plausible_bound_for
+
+        assert plausible_bound_for(tmp_path, "sigma") is None
+
+    def test_non_finite_fitted_rows_do_not_set_the_scale(self, tmp_path):
+        """features_full.parquet keeps every inner step, including any the run wrote as
+        inf; one of those would push the bound to infinity and disable the criterion."""
+        from transfer_equation import plausible_bound_for
+
+        eval_dir = self._eval_dir(tmp_path, [0.1, 2.0, np.inf, np.nan])
+
+        assert plausible_bound_for(eval_dir, "sigma") == 1e3 * 2.0
 
 
 class TestConditionBecomesItsOwnSourceCell:

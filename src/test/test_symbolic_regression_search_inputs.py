@@ -147,6 +147,73 @@ def test_the_search_does_not_denoise_its_inputs(monkeypatch, tmp_path):
     assert kwargs["denoise"] is False
 
 
+class TestDivisionCannotBuildAPole:
+    """A denominator containing step_norm can vanish *inside* the domain, and the fit
+    cannot see it: at 50 points/run the nearest sample to the pole in f152229a's clip
+    equation sat 0.0117 away, where the term was a tame +0.405. Transfer evaluates the
+    same equation on the full T-point grid, landed 2.8e-4 away, and blew the clip shape
+    up to 1.3e15 — the GDP sum went inf and seat_on_budget could not bind the budget.
+
+    Capping the denominator at one node is a structural fix, not a filter: with only
+    `+ - * /const sqrt exp` over a complexity-1 divisor, every expression the search
+    can build is continuous and bounded on [0,1]. The divisors that remain are the
+    template's per-condition constants (#2..#4), which cannot vanish partway through a
+    run. See ADR 0025.
+    """
+
+    def test_denominators_are_capped_at_a_single_node(self, monkeypatch, tmp_path):
+        kwargs = _search_space(monkeypatch, tmp_path)
+
+        assert kwargs["constraints"] == {"/": (-1, 1)}
+
+    def test_the_dominant_per_condition_rescale_idiom_still_fits(self, monkeypatch, tmp_path):
+        """`expr / p3[category]` — the most common shape on the σ front — is a
+        complexity-1 denominator and must survive the cap."""
+        kwargs = _search_space(monkeypatch, tmp_path)
+
+        _numerator, denominator = kwargs["constraints"]["/"]
+        assert denominator >= 1
+
+    def test_the_cap_can_be_lifted(self, monkeypatch, tmp_path):
+        kwargs = _search_space(monkeypatch, tmp_path, max_denominator_complexity=-1)
+
+        assert "/" not in kwargs.get("constraints", {})
+
+    def test_no_constraint_is_emitted_when_division_is_not_in_the_search(
+        self, monkeypatch, tmp_path
+    ):
+        """PySR rejects a constraint naming an operator it was not given."""
+        kwargs = _search_space(monkeypatch, tmp_path, binary_operators=("+", "*"))
+
+        assert "/" not in kwargs.get("constraints", {})
+
+    def test_the_cap_changes_the_synthesis_slug(self):
+        """It restricts the search space, so it fits a different problem and must not
+        warm-start from an uncapped front (ADR 0005)."""
+        from sr_identity import slug_for
+
+        capped = {"cache_dir": "sweep", "max_denominator_complexity": 1}
+        uncapped = {"cache_dir": "sweep", "max_denominator_complexity": -1}
+
+        assert slug_for(capped) != slug_for(uncapped)
+
+    def test_the_cap_survives_a_chain_resubmit(self):
+        from dataclasses import asdict
+
+        import tyro
+
+        from sr_identity import identity_flags, slug_for
+        from symbolic_regression import PySRConfig
+
+        conf = PySRConfig(cache_dir="sweep", max_denominator_complexity=3)
+        reparsed = tyro.cli(
+            PySRConfig, args=["--cache_dir", "sweep", *identity_flags(asdict(conf))]
+        )
+
+        assert reparsed.max_denominator_complexity == 3
+        assert slug_for(asdict(reparsed)) == slug_for(asdict(conf))
+
+
 def test_operators_survive_a_chain_resubmit():
     """Operator names are also CLI-hostile tokens ("-", "+", "/"): a chained job
     re-emits them as flag values, and must land on the same search space and slug."""
